@@ -52,6 +52,14 @@ subprocess (`cmd/lotsman/e2e_test.go`), and hand-written JSON-RPC frames piped i
    $PWD/bin/lotsman serve` followed by `claude mcp list` reports `✔ Connected` (Claude Code,
    2026-09-11). This exercises registration, spawn, handshake and shutdown, but not the tool
    *presentation* questions below.
+9. **Claude Desktop app round trip confirmed** (2026-09-11): registered `lotsman-ping` in
+   `claude_desktop_config.json`, asked the agent to call `ping`. Response contained `pong: true`,
+   the correct echo, build version `5d9117d-dirty`, and server timestamp
+   `2026-09-11T17:51:12Z`. Confirms the stdio handshake and single-tool round trip work
+   end-to-end from the GUI client, not just Claude Code or the in-process test harness. The
+   table below still needs a human because its questions (name limits, schema strictness, a
+   large `tools/list`, etc.) require more than one tool and larger schemas to exercise —
+   revisit once T010/T011 publish a real catalog.
 
 ## Open — to confirm on a desktop client
 
