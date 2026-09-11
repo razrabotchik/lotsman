@@ -21,8 +21,11 @@ Checkpoints match the tracer-bullet steps; stop at any checkpoint with working s
 
 ### Step 2: Operations enumeration
 - [x] T005 specsource: file/stdin loader with byte/time limits; sha256 digest
-- [ ] T006 domain: minimal IR — OperationKey, Method, PathTemplate, Diagnostic, SupportStatus
-- [ ] T007 openapi adapter: parse via libopenapi, enumerate paths×methods sorted, param inheritance merge (name,in); emit IR
+- [x] T006 domain: minimal IR — OperationKey, Method, PathTemplate, Diagnostic, SupportStatus
+- [x] T007 openapi adapter: parse via libopenapi, enumerate paths×methods sorted, param inheritance merge (name,in); emit IR
+      → Found and fixed: libopenapi's default DocumentConfiguration logs errors to
+        *stdout* as JSON, which would corrupt the MCP JSON-RPC stream on stdio transport.
+        Parse now requires a caller logger (nil falls back to stderr, not upstream's default).
 - [ ] T008 CLI `lotsman operations SPEC`: table output. Test spec: testdata/mini/basic.yaml (5 ops, handwritten)
 - [ ] T009 [P] Golden test #1: mini spec → expected IR dump
 
