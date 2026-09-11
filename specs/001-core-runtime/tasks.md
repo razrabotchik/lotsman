@@ -20,7 +20,7 @@ Checkpoints match the tracer-bullet steps; stop at any checkpoint with working s
         client") needs more than one tool/larger schemas to exercise — revisit at the M0 gate (T022).
 
 ### Step 2: Operations enumeration
-- [ ] T005 specsource: file/stdin loader with byte/time limits; sha256 digest
+- [x] T005 specsource: file/stdin loader with byte/time limits; sha256 digest
 - [ ] T006 domain: minimal IR — OperationKey, Method, PathTemplate, Diagnostic, SupportStatus
 - [ ] T007 openapi adapter: parse via libopenapi, enumerate paths×methods sorted, param inheritance merge (name,in); emit IR
 - [ ] T008 CLI `lotsman operations SPEC`: table output. Test spec: testdata/mini/basic.yaml (5 ops, handwritten)
