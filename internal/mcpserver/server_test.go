@@ -13,6 +13,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/razrabotchik/lotsman/internal/buildinfo"
+	"github.com/razrabotchik/lotsman/internal/catalog"
 	"github.com/razrabotchik/lotsman/internal/mcpserver"
 )
 
@@ -110,6 +111,66 @@ func TestCallPingEchoesAndReportsIdentity(t *testing.T) {
 	}
 	if out != want {
 		t.Errorf("ping output = %+v, want %+v", out, want)
+	}
+}
+
+// TestListToolsPublishesCatalogGETTools covers T011's Step 3 checkpoint:
+// a parsed spec's GET operations must be visible in tools/list, while
+// non-GET operations stay unpublished until the mutation policy gate (T019).
+func TestListToolsPublishesCatalogGETTools(t *testing.T) {
+	cat := catalog.Catalog{
+		Tools: []catalog.Tool{
+			{Name: "getPet", OperationKey: "ns:GET:/pets/{petId}", Method: "GET", PathTemplate: "/pets/{petId}", Description: "Get a pet."},
+			{Name: "createPet", OperationKey: "ns:POST:/pets", Method: "POST", PathTemplate: "/pets"},
+		},
+	}
+	session := connect(t, mcpserver.Options{Catalog: &cat})
+
+	res, err := session.ListTools(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("tools/list: %v", err)
+	}
+	if len(res.Tools) != 2 { // ping + getPet, not createPet
+		t.Fatalf("got %d tools, want ping + getPet only: %+v", len(res.Tools), res.Tools)
+	}
+
+	names := map[string]*mcp.Tool{}
+	for _, tool := range res.Tools {
+		names[tool.Name] = tool
+	}
+	if _, ok := names["ping"]; !ok {
+		t.Error("ping missing from tools/list")
+	}
+	getPet, ok := names["getPet"]
+	if !ok {
+		t.Fatal("getPet missing from tools/list")
+	}
+	if getPet.Description != "Get a pet." {
+		t.Errorf("getPet description = %q, want %q", getPet.Description, "Get a pet.")
+	}
+	if getPet.Annotations == nil || !getPet.Annotations.ReadOnlyHint {
+		t.Error("getPet must carry readOnlyHint: it is a GET")
+	}
+	if _, ok := names["createPet"]; ok {
+		t.Error("createPet (POST) must not be published yet")
+	}
+}
+
+// TestCallCatalogToolReturnsNotImplemented guards the honesty contract: a
+// visible-but-unexecutable tool must say so explicitly (isError), never
+// approximate a result.
+func TestCallCatalogToolReturnsNotImplemented(t *testing.T) {
+	cat := catalog.Catalog{
+		Tools: []catalog.Tool{{Name: "getPet", OperationKey: "ns:GET:/pets/{petId}", Method: "GET", PathTemplate: "/pets/{petId}"}},
+	}
+	session := connect(t, mcpserver.Options{Catalog: &cat})
+
+	res, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "getPet"})
+	if err != nil {
+		t.Fatalf("tools/call: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("getPet call succeeded, want isError: %+v", res.StructuredContent)
 	}
 }
 

@@ -112,6 +112,8 @@ func buildOperation(namespace, method, path string, op *v3.Operation, pathParams
 		SourceOperationID: op.OperationId,
 		Method:            method,
 		PathTemplate:      path,
+		Summary:           op.Summary,
+		Description:       op.Description,
 	}
 
 	merged := mergeParameters(pathParams, op.Parameters)

@@ -10,8 +10,6 @@ import (
 	"text/tabwriter"
 
 	"github.com/razrabotchik/lotsman/internal/domain"
-	"github.com/razrabotchik/lotsman/internal/openapi"
-	"github.com/razrabotchik/lotsman/internal/specsource"
 )
 
 // operations implements `lotsman operations SPEC [--rejected]` (T008):
@@ -21,17 +19,9 @@ func operations(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	fs := flag.NewFlagSet("operations", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	rejectedOnly := fs.Bool("rejected", false, "show only rejected operations")
-	// flag.Parse stops at the first non-flag argument, but the documented
-	// usage (quickstart.md) puts SPEC before --rejected. Split flags from
-	// the positional SPEC first so either order works.
-	flagArgs, posArgs := splitFlags(args)
-	if err := fs.Parse(flagArgs); err != nil {
+	spec, err := parseWithTrailingSpec(fs, args)
+	if err != nil {
 		return exitUsage
-	}
-
-	var spec string
-	if len(posArgs) > 0 {
-		spec = posArgs[0]
 	}
 	if spec == "" {
 		fmt.Fprintf(stderr, "lotsman: operations requires SPEC\n\n%s", usage)
@@ -39,22 +29,14 @@ func operations(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	}
 
 	// A one-shot CLI command has no long-running session to tune verbosity
-	// for; only libopenapi's own error/warning logs land here.
-	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	// for; only libopenapi's own error/warning logs and spec diagnostics
+	// land here.
+	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
-	src, err := specsource.Load(ctx, spec, specsource.Options{})
+	doc, err := parseSpec(ctx, spec, logger)
 	if err != nil {
 		fmt.Fprintf(stderr, "lotsman: %v\n", err)
 		return exitError
-	}
-
-	doc, err := openapi.Parse(src.Bytes, "", logger)
-	if err != nil {
-		fmt.Fprintf(stderr, "lotsman: %v\n", err)
-		return exitError
-	}
-	for _, d := range doc.Diagnostics {
-		fmt.Fprintf(stderr, "lotsman: %s: %s\n", d.Severity, d.Message)
 	}
 
 	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)

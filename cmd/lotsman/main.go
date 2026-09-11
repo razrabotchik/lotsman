@@ -16,7 +16,11 @@ import (
 	"syscall"
 
 	"github.com/razrabotchik/lotsman/internal/buildinfo"
+	"github.com/razrabotchik/lotsman/internal/catalog"
+	"github.com/razrabotchik/lotsman/internal/domain"
 	"github.com/razrabotchik/lotsman/internal/mcpserver"
+	"github.com/razrabotchik/lotsman/internal/openapi"
+	"github.com/razrabotchik/lotsman/internal/specsource"
 )
 
 // Exit codes. Distinct codes per error class arrive with T034 (FR-77);
@@ -75,7 +79,8 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	level := fs.String("log-level", envOr("LOTSMAN_LOG_LEVEL", "info"), "debug|info|warn|error")
-	if err := fs.Parse(args); err != nil {
+	spec, err := parseWithTrailingSpec(fs, args)
+	if err != nil {
 		return exitUsage
 	}
 
@@ -85,17 +90,72 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 		return exitUsage
 	}
 
-	// The spec path is accepted now so that registrations and `make run SPEC=...`
-	// do not change shape later; loading lands in T005–T011.
-	if spec := fs.Arg(0); spec != "" {
-		logger.Warn("spec loading is not wired yet; serving the ping tool only", "spec", spec)
+	opts := mcpserver.Options{Logger: logger}
+	if spec != "" {
+		cat, err := loadCatalog(ctx, spec, logger)
+		if err != nil {
+			logger.Error("load spec failed", "error", err)
+			return exitError
+		}
+		opts.Catalog = cat
 	}
 
-	if err := mcpserver.ServeStdio(ctx, mcpserver.Options{Logger: logger}); err != nil {
+	if err := mcpserver.ServeStdio(ctx, opts); err != nil {
 		logger.Error("serve failed", "error", err)
 		return exitError
 	}
 	return exitOK
+}
+
+// loadCatalog runs pipeline stages 0-4 (specsource, openapi, catalog) for
+// `serve SPEC`.
+func loadCatalog(ctx context.Context, spec string, logger *slog.Logger) (*catalog.Catalog, error) {
+	doc, err := parseSpec(ctx, spec, logger)
+	if err != nil {
+		return nil, err
+	}
+	cat := catalog.Build(doc.digest, doc.Operations)
+	return &cat, nil
+}
+
+// specDoc pairs the parsed IR with the digest of the bytes it came from,
+// since openapi.Document itself carries no provenance.
+type specDoc struct {
+	*openapi.Document
+	digest string
+}
+
+// parseSpec runs pipeline stages 0-1 (specsource, openapi): shared by
+// `serve SPEC`, which reduces the result to a Catalog, and `operations
+// SPEC`, which prints every operation including the rejected ones a
+// Catalog would silently drop.
+func parseSpec(ctx context.Context, spec string, logger *slog.Logger) (*specDoc, error) {
+	src, err := specsource.Load(ctx, spec, specsource.Options{})
+	if err != nil {
+		return nil, err
+	}
+	doc, err := openapi.Parse(src.Bytes, "", logger)
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range doc.Diagnostics {
+		logger.LogAttrs(ctx, diagnosticLevel(d.Severity), "spec diagnostic",
+			slog.String("severity", string(d.Severity)), slog.String("message", d.Message))
+	}
+	return &specDoc{Document: doc, digest: src.Digest}, nil
+}
+
+// diagnosticLevel maps a domain.Diagnostic's severity to the matching slog
+// level so filtering by --log-level behaves as an operator expects.
+func diagnosticLevel(s domain.Severity) slog.Level {
+	switch s {
+	case domain.SeverityWarning:
+		return slog.LevelWarn
+	case domain.SeverityInfo:
+		return slog.LevelInfo
+	default:
+		return slog.LevelError
+	}
 }
 
 func version(args []string, stdout, stderr io.Writer) int {
@@ -136,18 +196,23 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
-// splitFlags separates "-"-prefixed flags from positional arguments so a
-// flag.FlagSet can parse them regardless of order. It only supports boolean
-// flags (no "--flag value" pairs): every -prefixed token is independent, so
-// this cannot tell a value-taking flag's value from the next positional
-// argument.
-func splitFlags(args []string) (flagArgs, posArgs []string) {
-	for _, a := range args {
-		if strings.HasPrefix(a, "-") {
-			flagArgs = append(flagArgs, a)
-		} else {
-			posArgs = append(posArgs, a)
-		}
+// parseWithTrailingSpec parses args against fs and returns the single
+// positional SPEC argument, if any, tolerating flags on either side of it.
+//
+// flag.FlagSet.Parse alone stops at the first non-flag token, so a flag
+// after SPEC -- the exact order quickstart.md documents ("operations
+// SPEC --rejected") -- would otherwise land in fs.Args() unparsed instead
+// of being applied. Parsing runs twice: once up to SPEC, once past it.
+func parseWithTrailingSpec(fs *flag.FlagSet, args []string) (spec string, err error) {
+	if err := fs.Parse(args); err != nil {
+		return "", err
 	}
-	return flagArgs, posArgs
+	rest := fs.Args()
+	if len(rest) == 0 {
+		return "", nil
+	}
+	if err := fs.Parse(rest[1:]); err != nil {
+		return "", err
+	}
+	return rest[0], nil
 }

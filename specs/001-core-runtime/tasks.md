@@ -33,8 +33,15 @@ Checkpoints match the tracer-bullet steps; stop at any checkpoint with working s
 - [x] T009 [P] Golden test #1: mini spec → expected IR dump
 
 ### Step 3: Static tools  ✅ CHECKPOINT: real spec's GETs visible in Claude
-- [ ] T010 catalog: toolName generation (operationId→snake→charset→64, collision hash), deterministic order, digest
-- [ ] T011 mcpserver: serve catalog GET ops as tools (no params yet); description sanitize+budget v0
+- [x] T010 catalog: toolName generation (operationId→snake→charset→64, collision hash), deterministic order, digest
+- [x] T011 mcpserver: serve catalog GET ops as tools (no params yet); description sanitize+budget v0
+      → `lotsman serve SPEC` is wired end to end: specsource → openapi → catalog → mcpserver.
+        Only GET operations are published (mutation policy gate is T019); each publishes with a
+        handler that returns an explicit "not executable yet" error rather than approximating a
+        call (T012 wires real execution). Verified against Claude Code via `claude mcp add/list`
+        (✔ Connected) in addition to the e2e test.
+      → domain.Operation gained Summary/Description (raw, untrusted) so catalog has a text
+        source for FR-18/19; golden fixture (T009) updated accordingly.
 
 ### Step 4: First real call  ✅ CHECKPOINT: agent hits a live API through lotsman
 - [ ] T012 requestbuild+response: execute parameterless GET; servers resolution v0 (+--base-url); bounded reader; {status, contentType, body} result; isError on 4xx/5xx

@@ -21,11 +21,16 @@ type Operation struct {
 	Key OperationKey `json:"key"`
 	// SourceOperationID is the operationId as authored, kept for diagnostics
 	// only -- it is never part of Key because it is unreliable in real specs.
-	SourceOperationID string        `json:"sourceOperationId,omitempty"`
-	Method            string        `json:"method"`
-	PathTemplate      string        `json:"pathTemplate"`
-	Support           SupportStatus `json:"support"`
-	Diagnostics       []Diagnostic  `json:"diagnostics,omitempty"`
+	SourceOperationID string `json:"sourceOperationId,omitempty"`
+	Method            string `json:"method"`
+	PathTemplate      string `json:"pathTemplate"`
+	// Summary and Description are copied from the source document as
+	// authored -- untrusted text (FR-18): a later stage sanitizes and
+	// budgets them before they reach a tool description.
+	Summary     string        `json:"summary,omitempty"`
+	Description string        `json:"description,omitempty"`
+	Support     SupportStatus `json:"support"`
+	Diagnostics []Diagnostic  `json:"diagnostics,omitempty"`
 }
 
 // Severity classifies a Diagnostic.

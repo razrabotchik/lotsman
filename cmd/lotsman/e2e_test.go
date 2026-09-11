@@ -102,6 +102,61 @@ func TestStdioEndToEnd(t *testing.T) {
 	}
 }
 
+// TestServeWithSpecPublishesGETTools covers Step 3's checkpoint end to end:
+// a real spec's GET operations must be visible to an agent over the same
+// stdio transport Claude Desktop uses. Calling one is not expected to work
+// yet -- that is T012.
+func TestServeWithSpecPublishesGETTools(t *testing.T) {
+	bin := buildBinary(t)
+	ctx := t.Context()
+
+	cmd := exec.Command(bin, "serve", miniSpecPath(t), "--log-level", "debug")
+	var stderr syncBuffer
+	cmd.Stderr = &stderr
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "lotsman-e2e", Version: "v0"}, nil)
+	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: cmd, TerminateDuration: 5 * time.Second}, nil)
+	if err != nil {
+		t.Fatalf("connect over stdio: %v\nstderr:\n%s", err, stderr.String())
+	}
+	defer func() {
+		if closeErr := session.Close(); closeErr != nil {
+			t.Errorf("close session: %v", closeErr)
+		}
+	}()
+
+	tools, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("tools/list: %v\nstderr:\n%s", err, stderr.String())
+	}
+
+	names := map[string]bool{}
+	for _, tool := range tools.Tools {
+		names[tool.Name] = true
+	}
+	// ping + the two GETs (listPets, getPet). createPet is a POST and
+	// deletePet a DELETE -- neither is published yet (T011: GET only).
+	// getOrder is rejected outright (missing path parameter).
+	for _, want := range []string{"ping", "listPets", "getPet"} {
+		if !names[want] {
+			t.Errorf("tools/list missing %q: got %v", want, names)
+		}
+	}
+	for _, unwanted := range []string{"createPet", "deletePet", "getOrder"} {
+		if names[unwanted] {
+			t.Errorf("tools/list published %q, want it withheld", unwanted)
+		}
+	}
+
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "listPets"})
+	if err != nil {
+		t.Fatalf("tools/call listPets: %v\nstderr:\n%s", err, stderr.String())
+	}
+	if !res.IsError {
+		t.Error("listPets succeeded, want isError: execution is not wired yet (T012)")
+	}
+}
+
 // TestVersionCommand covers the one command that is allowed to write to stdout.
 func TestVersionCommand(t *testing.T) {
 	bin := buildBinary(t)
