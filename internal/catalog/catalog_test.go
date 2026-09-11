@@ -159,6 +159,15 @@ func TestDescriptionRespectsByteBudget(t *testing.T) {
 	}
 }
 
+func TestBuildPropagatesServers(t *testing.T) {
+	op := supportedOp("ns:GET:/x", "GET", "/x", "getX")
+	op.Servers = []string{"https://api.example.com"}
+	cat := Build("d", []domain.Operation{op})
+	if got := cat.Tools[0].Servers; len(got) != 1 || got[0] != "https://api.example.com" {
+		t.Errorf("Servers = %v, want [https://api.example.com]", got)
+	}
+}
+
 func TestDigestChangesOnlyWhenContentChanges(t *testing.T) {
 	ops := []domain.Operation{supportedOp("ns:GET:/x", "GET", "/x", "getX")}
 	cat1 := Build("d", ops)

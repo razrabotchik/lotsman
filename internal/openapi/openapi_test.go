@@ -254,3 +254,110 @@ paths:
 		t.Fatalf("Operations = %+v, want getWidget still enumerated", doc.Operations)
 	}
 }
+
+func TestParseServersRootOnly(t *testing.T) {
+	const spec = `
+openapi: 3.0.3
+info: { title: X, version: "1.0" }
+servers:
+  - url: https://api.example.com
+paths:
+  /widgets:
+    get:
+      operationId: getWidget
+      responses:
+        "200": { description: ok }
+`
+	doc, err := Parse([]byte(spec), "", nil)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	want := []string{"https://api.example.com"}
+	if got := doc.Operations[0].Servers; !equalStrings(got, want) {
+		t.Errorf("Servers = %v, want %v", got, want)
+	}
+}
+
+func TestParseServersPathOverridesRoot(t *testing.T) {
+	const spec = `
+openapi: 3.0.3
+info: { title: X, version: "1.0" }
+servers:
+  - url: https://root.example.com
+paths:
+  /widgets:
+    servers:
+      - url: https://path.example.com
+    get:
+      operationId: getWidget
+      responses:
+        "200": { description: ok }
+`
+	doc, err := Parse([]byte(spec), "", nil)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	want := []string{"https://path.example.com"}
+	if got := doc.Operations[0].Servers; !equalStrings(got, want) {
+		t.Errorf("Servers = %v, want %v", got, want)
+	}
+}
+
+func TestParseServersOperationOverridesPath(t *testing.T) {
+	const spec = `
+openapi: 3.0.3
+info: { title: X, version: "1.0" }
+servers:
+  - url: https://root.example.com
+paths:
+  /widgets:
+    servers:
+      - url: https://path.example.com
+    get:
+      operationId: getWidget
+      servers:
+        - url: https://op.example.com
+      responses:
+        "200": { description: ok }
+`
+	doc, err := Parse([]byte(spec), "", nil)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	want := []string{"https://op.example.com"}
+	if got := doc.Operations[0].Servers; !equalStrings(got, want) {
+		t.Errorf("Servers = %v, want %v", got, want)
+	}
+}
+
+func TestParseServersNoneDeclared(t *testing.T) {
+	const spec = `
+openapi: 3.0.3
+info: { title: X, version: "1.0" }
+paths:
+  /widgets:
+    get:
+      operationId: getWidget
+      responses:
+        "200": { description: ok }
+`
+	doc, err := Parse([]byte(spec), "", nil)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got := doc.Operations[0].Servers; len(got) != 0 {
+		t.Errorf("Servers = %v, want none", got)
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

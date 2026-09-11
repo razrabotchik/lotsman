@@ -44,8 +44,18 @@ Checkpoints match the tracer-bullet steps; stop at any checkpoint with working s
         source for FR-18/19; golden fixture (T009) updated accordingly.
 
 ### Step 4: First real call  ✅ CHECKPOINT: agent hits a live API through lotsman
-- [ ] T012 requestbuild+response: execute parameterless GET; servers resolution v0 (+--base-url); bounded reader; {status, contentType, body} result; isError on 4xx/5xx
-- [ ] T013 Integration test vs httptest; then manual run against a public API
+- [x] T012 requestbuild+response: execute parameterless GET; servers resolution v0 (+--base-url); bounded reader; {status, contentType, body} result; isError on 4xx/5xx
+      → domain.Operation/catalog.Tool gained Servers (operation→path→root inheritance, first
+        non-empty wins; no server-variable substitution yet). mcpserver now executes any
+        published GET tool whose path template has no `{...}` placeholder for real; the rest
+        stay honest "not implemented yet" stubs pending T014-018.
+- [x] T013 Integration test vs httptest; then manual run against a public API
+      → httptest coverage in internal/requestbuild, internal/response, internal/mcpserver
+        (success, upstream 4xx/5xx, large-body truncation).
+      → Manual run 2026-09-11 against https://httpbin.org through the real stdio MCP transport:
+        `getHttpbin` (GET /get) → status 200, real httpbin JSON body, isError=false;
+        `getNotFound` (GET /status/404) → status 404, isError=true. Confirms the Step 4
+        checkpoint end to end, not just at the package level.
 
 ### Step 5: Parameters
 - [ ] T014 domain+openapi: params with location/style/explode (per-location defaults!), grouped InputModel

@@ -27,6 +27,9 @@ type Tool struct {
 	Method       string              `json:"method"`
 	PathTemplate string              `json:"pathTemplate"`
 	Description  string              `json:"description,omitempty"`
+	// Servers is the operation's effective server URL list (v0: no
+	// variable substitution), passed through for request execution.
+	Servers []string `json:"servers,omitempty"`
 }
 
 // Catalog is the deterministic, immutable snapshot built from parsed
@@ -67,6 +70,7 @@ func Build(specDigest string, operations []domain.Operation) Catalog {
 			Method:       op.Method,
 			PathTemplate: op.PathTemplate,
 			Description:  description(op),
+			Servers:      op.Servers,
 		})
 	}
 

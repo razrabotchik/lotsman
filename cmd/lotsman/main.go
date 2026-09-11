@@ -43,6 +43,7 @@ Flags:
   --log-level LEVEL      debug|info|warn|error (default info, env LOTSMAN_LOG_LEVEL)
   --json                 version: machine-readable output
   --rejected             operations: show only rejected operations
+  --base-url URL         serve: override every tool's server (FR-30)
 `
 
 func main() {
@@ -79,6 +80,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	level := fs.String("log-level", envOr("LOTSMAN_LOG_LEVEL", "info"), "debug|info|warn|error")
+	baseURL := fs.String("base-url", "", "override every tool's server (FR-30)")
 	spec, err := parseWithTrailingSpec(fs, args)
 	if err != nil {
 		return exitUsage
@@ -90,7 +92,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 		return exitUsage
 	}
 
-	opts := mcpserver.Options{Logger: logger}
+	opts := mcpserver.Options{Logger: logger, BaseURL: *baseURL}
 	if spec != "" {
 		cat, err := loadCatalog(ctx, spec, logger)
 		if err != nil {
