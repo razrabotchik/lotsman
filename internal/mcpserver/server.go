@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"time"
@@ -11,20 +12,28 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/razrabotchik/lotsman/internal/buildinfo"
+	"github.com/razrabotchik/lotsman/internal/catalog"
 )
 
 // instructions are sent to the client at initialize time. They state the one
-// promise that matters before a catalog exists: nothing is approximated.
+// promise that matters before request execution exists: nothing is
+// approximated.
 const instructions = "lotsman exposes an OpenAPI specification as MCP tools. " +
 	"Operations that cannot be translated safely are not published and never " +
 	"execute approximately; mutations are blocked unless explicitly allowed. " +
-	"This build serves the ping tool only (M0 step 1)."
+	"GET tools from a parsed spec are visible but do not yet execute (T012); " +
+	"calling one returns an explicit not-implemented error rather than a guess."
 
-// Options configures a server. The zero value is usable: logging is discarded.
+// Options configures a server. The zero value is usable: logging is
+// discarded and only the ping tool is served.
 type Options struct {
 	// Logger receives server activity. It MUST NOT write to stdout: on stdio
 	// transport stdout carries protocol frames only.
 	Logger *slog.Logger
+
+	// Catalog, when set, publishes its GET tools alongside ping. Other
+	// methods wait for the mutation policy gate (T019) before publication.
+	Catalog *catalog.Catalog
 
 	// now is the clock used by tool handlers; tests override it.
 	now func() time.Time
@@ -44,11 +53,11 @@ func (o Options) clock() func() time.Time {
 	return time.Now
 }
 
-// New builds the MCP server and registers its tools.
-//
-// M0 step 1 registers a single hardcoded ping tool: it proves the transport,
-// the tool registration path and the client's schema handling before any
-// OpenAPI document is involved (see docs/adr/0004-mcp-client-notes.md).
+// New builds the MCP server and registers its tools: the hardcoded ping tool
+// (it proves the transport, the tool registration path and the client's
+// schema handling before any OpenAPI document is involved -- see
+// docs/adr/0004-mcp-client-notes.md) plus, when a Catalog is supplied, its
+// GET tools.
 func New(opts Options) *mcp.Server {
 	info := buildinfo.Get()
 	srv := mcp.NewServer(&mcp.Implementation{
@@ -60,6 +69,7 @@ func New(opts Options) *mcp.Server {
 		Logger:       sdkLogger(opts.logger()),
 	})
 	addPing(srv, opts.clock())
+	addCatalogTools(srv, catalogGETTools(opts.Catalog))
 	return srv
 }
 
@@ -73,7 +83,7 @@ func ServeStdio(ctx context.Context, opts Options) error {
 		"commit", info.Commit,
 		"mcp_sdk", info.MCPSDKVersion,
 		"mcp_protocol", info.MCPProtocolVersion,
-		"tools", 1)
+		"tools", 1+len(catalogGETTools(opts.Catalog)))
 	err := New(opts).Run(ctx, &mcp.StdioTransport{})
 	switch {
 	case ctx.Err() != nil && errors.Is(err, context.Canceled):
@@ -141,6 +151,48 @@ func addPing(srv *mcp.Server, now func() time.Time) {
 			Echo:            in.Message,
 		}, nil
 	})
+}
+
+// catalogGETTools returns cat's GET tools, or nil for a nil Catalog. Other
+// methods are not published yet: executing them needs the mutation policy
+// gate (T019), which does not exist.
+func catalogGETTools(cat *catalog.Catalog) []catalog.Tool {
+	if cat == nil {
+		return nil
+	}
+	var out []catalog.Tool
+	for _, t := range cat.Tools {
+		if t.Method == "GET" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// addCatalogTools registers each catalog tool with a handler that reports
+// "not implemented" honestly rather than approximating a call: request
+// execution lands in T012. The tools are visible and schema-checkable
+// (Step 3's checkpoint) before they are callable.
+func addCatalogTools(srv *mcp.Server, tools []catalog.Tool) {
+	for _, t := range tools {
+		tool := &mcp.Tool{
+			Name:        t.Name,
+			Description: t.Description,
+			Annotations: &mcp.ToolAnnotations{
+				ReadOnlyHint:  true,
+				OpenWorldHint: ptr(true),
+			},
+		}
+		mcp.AddTool(srv, tool, notImplementedHandler(t))
+	}
+}
+
+// notImplementedHandler never touches the network: it exists so a tool can
+// be listed and schema-validated before T012 wires real execution.
+func notImplementedHandler(t catalog.Tool) mcp.ToolHandlerFor[struct{}, any] {
+	return func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+		return nil, nil, fmt.Errorf("lotsman: %s %s is not executable yet (request execution lands in T012)", t.Method, t.PathTemplate)
+	}
 }
 
 func ptr[T any](v T) *T { return &v }

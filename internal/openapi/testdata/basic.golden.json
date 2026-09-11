@@ -5,6 +5,7 @@
       "sourceOperationId": "getOrder",
       "method": "GET",
       "pathTemplate": "/orders/{orderId}",
+      "summary": "Get an order by ID",
       "support": {
         "level": "rejected",
         "reasons": [
@@ -25,6 +26,7 @@
       "sourceOperationId": "listPets",
       "method": "GET",
       "pathTemplate": "/pets",
+      "summary": "List pets",
       "support": {
         "level": "supported"
       }
@@ -34,6 +36,7 @@
       "sourceOperationId": "createPet",
       "method": "POST",
       "pathTemplate": "/pets",
+      "summary": "Create a pet",
       "support": {
         "level": "supported"
       }
@@ -43,6 +46,7 @@
       "sourceOperationId": "getPet",
       "method": "GET",
       "pathTemplate": "/pets/{petId}",
+      "summary": "Get a pet by ID",
       "support": {
         "level": "supported"
       }
@@ -52,6 +56,7 @@
       "sourceOperationId": "deletePet",
       "method": "DELETE",
       "pathTemplate": "/pets/{petId}",
+      "summary": "Delete a pet by ID",
       "support": {
         "level": "supported"
       }
