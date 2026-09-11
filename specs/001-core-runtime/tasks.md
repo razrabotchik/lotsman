@@ -12,9 +12,12 @@ Checkpoints match the tracer-bullet steps; stop at any checkpoint with working s
 
 ### Step 1: Ping over stdio  ✅ CHECKPOINT: agent calls a tool
 - [x] T003 mcpserver: stdio server with hardcoded `ping` tool (go-sdk v1.7); logs to stderr only
-- [~] T004 Manual e2e: register in Claude Desktop config, verify call; document quirks in docs/adr/0004-mcp-client-notes.md (draft)
+- [x] T004 Manual e2e: register in Claude Desktop config, verify call; document quirks in docs/adr/0004-mcp-client-notes.md (draft)
       → ADR drafted; stdio e2e automated (cmd/lotsman/e2e_test.go) and `claude mcp list` reports Connected.
-      → Pending: the desktop-UI checklist in ADR-0004 ("Open — to confirm on a desktop client") needs a human.
+      → Desktop confirmed 2026-09-11: `ping` round trip via Claude Desktop returned `pong`, version
+        `5d9117d-dirty`, correct echo, and server timestamp `2026-09-11T17:51:12Z`.
+      → Remaining: the detailed client-behavior table in ADR-0004 ("Open — to confirm on a desktop
+        client") needs more than one tool/larger schemas to exercise — revisit at the M0 gate (T022).
 
 ### Step 2: Operations enumeration
 - [ ] T005 specsource: file/stdin loader with byte/time limits; sha256 digest
