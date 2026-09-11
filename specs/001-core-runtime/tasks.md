@@ -26,8 +26,11 @@ Checkpoints match the tracer-bullet steps; stop at any checkpoint with working s
       → Found and fixed: libopenapi's default DocumentConfiguration logs errors to
         *stdout* as JSON, which would corrupt the MCP JSON-RPC stream on stdio transport.
         Parse now requires a caller logger (nil falls back to stderr, not upstream's default).
-- [ ] T008 CLI `lotsman operations SPEC`: table output. Test spec: testdata/mini/basic.yaml (5 ops, handwritten)
-- [ ] T009 [P] Golden test #1: mini spec → expected IR dump
+- [x] T008 CLI `lotsman operations SPEC`: table output. Test spec: testdata/mini/basic.yaml (5 ops, handwritten)
+      → Found and fixed: `--rejected` placed after SPEC (the exact form documented in
+        quickstart.md) was silently ignored — Go's flag.Parse stops at the first
+        positional argument. operations now splits flags from positionals before parsing.
+- [x] T009 [P] Golden test #1: mini spec → expected IR dump
 
 ### Step 3: Static tools  ✅ CHECKPOINT: real spec's GETs visible in Claude
 - [ ] T010 catalog: toolName generation (operationId→snake→charset→64, collision hash), deterministic order, digest

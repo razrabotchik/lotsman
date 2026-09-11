@@ -18,14 +18,14 @@ func NewOperationKey(namespace, method, pathTemplate string) OperationKey {
 // metadata (data-model.md); this is deliberately the minimal slice needed by
 // Step 2 (operations enumeration).
 type Operation struct {
-	Key OperationKey
+	Key OperationKey `json:"key"`
 	// SourceOperationID is the operationId as authored, kept for diagnostics
-	// only — it is never part of Key because it is unreliable in real specs.
-	SourceOperationID string
-	Method            string
-	PathTemplate      string
-	Support           SupportStatus
-	Diagnostics       []Diagnostic
+	// only -- it is never part of Key because it is unreliable in real specs.
+	SourceOperationID string        `json:"sourceOperationId,omitempty"`
+	Method            string        `json:"method"`
+	PathTemplate      string        `json:"pathTemplate"`
+	Support           SupportStatus `json:"support"`
+	Diagnostics       []Diagnostic  `json:"diagnostics,omitempty"`
 }
 
 // Severity classifies a Diagnostic.
@@ -43,19 +43,19 @@ const (
 type ReasonCode string
 
 // ReasonPathParameterMismatch marks a path template placeholder that has no
-// matching required `in: path` parameter — the operation cannot be called
+// matching required `in: path` parameter -- the operation cannot be called
 // safely because its request path cannot be built.
 const ReasonPathParameterMismatch ReasonCode = "path_parameter_mismatch"
 
 // Diagnostic records a problem found while normalizing an operation, with
 // enough provenance to point back at the source document.
 type Diagnostic struct {
-	Severity Severity
-	Code     ReasonCode
-	Pointer  string // JSON Pointer into the source document
-	Line     int
-	Col      int
-	Message  string
+	Severity Severity   `json:"severity"`
+	Code     ReasonCode `json:"code,omitempty"`
+	Pointer  string     `json:"pointer,omitempty"` // JSON Pointer into the source document
+	Line     int        `json:"line,omitempty"`
+	Col      int        `json:"col,omitempty"`
+	Message  string     `json:"message"`
 }
 
 // SupportLevel classifies whether an operation can be published as a tool.
@@ -71,6 +71,6 @@ const (
 
 // SupportStatus is the verdict for one operation plus the reasons behind it.
 type SupportStatus struct {
-	Level   SupportLevel
-	Reasons []ReasonCode
+	Level   SupportLevel `json:"level"`
+	Reasons []ReasonCode `json:"reasons,omitempty"`
 }
