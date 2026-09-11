@@ -92,6 +92,7 @@ func Parse(specBytes []byte, namespace string, logger *slog.Logger) (*Document, 
 		return out, nil
 	}
 
+	rootServers := model.Model.Servers
 	for _, path := range sortedPathKeys(model.Model.Paths.PathItems) {
 		item, _ := model.Model.Paths.PathItems.Get(path)
 		for _, m := range methodOrder {
@@ -99,14 +100,15 @@ func Parse(specBytes []byte, namespace string, logger *slog.Logger) (*Document, 
 			if op == nil {
 				continue
 			}
-			out.Operations = append(out.Operations, buildOperation(namespace, m.name, path, op, item.Parameters))
+			out.Operations = append(out.Operations,
+				buildOperation(namespace, m.name, path, op, item.Parameters, item.Servers, rootServers))
 		}
 	}
 
 	return out, nil
 }
 
-func buildOperation(namespace, method, path string, op *v3.Operation, pathParams []*v3.Parameter) domain.Operation {
+func buildOperation(namespace, method, path string, op *v3.Operation, pathParams []*v3.Parameter, pathServers, rootServers []*v3.Server) domain.Operation {
 	result := domain.Operation{
 		Key:               domain.NewOperationKey(namespace, method, path),
 		SourceOperationID: op.OperationId,
@@ -114,6 +116,7 @@ func buildOperation(namespace, method, path string, op *v3.Operation, pathParams
 		PathTemplate:      path,
 		Summary:           op.Summary,
 		Description:       op.Description,
+		Servers:           effectiveServers(op.Servers, pathServers, rootServers),
 	}
 
 	merged := mergeParameters(pathParams, op.Parameters)
@@ -144,6 +147,26 @@ func buildOperation(namespace, method, path string, op *v3.Operation, pathParams
 		result.Support = domain.SupportStatus{Level: domain.SupportSupported}
 	}
 	return result
+}
+
+// effectiveServers implements the operation→path→root inheritance from
+// pipeline.md 3.1: the first non-empty level wins, no merging across
+// levels. Server variables are not substituted yet (v0; T012 only executes
+// operations whose path template has no placeholders either) -- a URL that
+// still contains "{...}" is passed through as-is and requestbuild rejects
+// it rather than guessing a value.
+func effectiveServers(opServers, pathServers, rootServers []*v3.Server) []string {
+	for _, level := range [][]*v3.Server{opServers, pathServers, rootServers} {
+		if len(level) == 0 {
+			continue
+		}
+		urls := make([]string, 0, len(level))
+		for _, s := range level {
+			urls = append(urls, s.URL)
+		}
+		return urls
+	}
+	return nil
 }
 
 type paramKey struct{ name, in string }

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -171,6 +173,104 @@ func TestCallCatalogToolReturnsNotImplemented(t *testing.T) {
 	}
 	if !res.IsError {
 		t.Fatalf("getPet call succeeded, want isError: %+v", res.StructuredContent)
+	}
+}
+
+// TestCallCatalogToolExecutesParameterlessGET covers T012's checkpoint: a
+// parameterless GET tool must hit a live server through lotsman, not just
+// report itself as not-implemented.
+func TestCallCatalogToolExecutesParameterlessGET(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/widgets" {
+			t.Errorf("upstream got path %s, want /widgets", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"widgets":[]}`))
+	}))
+	defer srv.Close()
+
+	cat := catalog.Catalog{
+		Tools: []catalog.Tool{{Name: "listWidgets", Method: "GET", PathTemplate: "/widgets", Servers: []string{srv.URL}}},
+	}
+	session := connect(t, mcpserver.Options{Catalog: &cat, HTTPClient: srv.Client()})
+
+	res, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "listWidgets"})
+	if err != nil {
+		t.Fatalf("tools/call: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("listWidgets reported an error: %+v", res.Content)
+	}
+
+	var out struct {
+		Status      int    `json:"status"`
+		ContentType string `json:"contentType"`
+		Body        string `json:"body"`
+	}
+	raw, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatalf("marshal structured content: %v", err)
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode structured content %s: %v", raw, err)
+	}
+	if out.Status != http.StatusOK || out.Body != `{"widgets":[]}` {
+		t.Errorf("result = %+v", out)
+	}
+}
+
+// TestCallCatalogToolUpstreamErrorIsError checks FR-39 through the whole
+// stack: an upstream 4xx must surface as isError with the real status and
+// body, not a generic Go error string.
+func TestCallCatalogToolUpstreamErrorIsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "nope", http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	cat := catalog.Catalog{
+		Tools: []catalog.Tool{{Name: "listWidgets", Method: "GET", PathTemplate: "/widgets", Servers: []string{srv.URL}}},
+	}
+	session := connect(t, mcpserver.Options{Catalog: &cat, HTTPClient: srv.Client()})
+
+	res, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "listWidgets"})
+	if err != nil {
+		t.Fatalf("tools/call: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("want isError for an upstream 403")
+	}
+
+	var out struct {
+		Status int `json:"status"`
+	}
+	raw, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatalf("marshal structured content: %v", err)
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode structured content %s: %v", raw, err)
+	}
+	if out.Status != http.StatusForbidden {
+		t.Errorf("Status = %d, want 403 (the real upstream status, not a generic error)", out.Status)
+	}
+}
+
+// TestCallCatalogToolWithPathParamsStillNotImplemented guards the boundary
+// executeHandler introduces: only genuinely parameterless GETs execute.
+func TestCallCatalogToolWithPathParamsStillNotImplemented(t *testing.T) {
+	cat := catalog.Catalog{
+		Tools: []catalog.Tool{{Name: "getPet", Method: "GET", PathTemplate: "/pets/{petId}"}},
+	}
+	session := connect(t, mcpserver.Options{Catalog: &cat})
+
+	res, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "getPet"})
+	if err != nil {
+		t.Fatalf("tools/call: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("want isError: path parameters are not supported yet")
 	}
 }
 

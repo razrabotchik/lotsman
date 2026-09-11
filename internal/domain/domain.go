@@ -27,8 +27,12 @@ type Operation struct {
 	// Summary and Description are copied from the source document as
 	// authored -- untrusted text (FR-18): a later stage sanitizes and
 	// budgets them before they reach a tool description.
-	Summary     string        `json:"summary,omitempty"`
-	Description string        `json:"description,omitempty"`
+	Summary     string `json:"summary,omitempty"`
+	Description string `json:"description,omitempty"`
+	// Servers is the effective server URL list after operation->path->root
+	// inheritance (first non-empty level wins). Server variables are not
+	// substituted yet -- a v0 limitation shared with requestbuild.
+	Servers     []string      `json:"servers,omitempty"`
 	Support     SupportStatus `json:"support"`
 	Diagnostics []Diagnostic  `json:"diagnostics,omitempty"`
 }
