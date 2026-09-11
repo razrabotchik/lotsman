@@ -30,13 +30,15 @@ const (
 const usage = `lotsman — security-first OpenAPI → MCP runtime.
 
 Usage:
-  lotsman serve [SPEC]   Serve MCP over stdio (stdout is protocol-only)
-  lotsman version        Print build, MCP SDK and protocol identity
-  lotsman help           Print this message
+  lotsman serve [SPEC]     Serve MCP over stdio (stdout is protocol-only)
+  lotsman operations SPEC  List parsed operations as a table
+  lotsman version          Print build, MCP SDK and protocol identity
+  lotsman help             Print this message
 
 Flags:
   --log-level LEVEL      debug|info|warn|error (default info, env LOTSMAN_LOG_LEVEL)
   --json                 version: machine-readable output
+  --rejected             operations: show only rejected operations
 `
 
 func main() {
@@ -56,6 +58,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	switch cmd {
 	case "serve":
 		return serve(ctx, rest, stderr)
+	case "operations":
+		return operations(ctx, rest, stdout, stderr)
 	case "version":
 		return version(rest, stdout, stderr)
 	case "help", "-h", "--help":
@@ -130,4 +134,20 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// splitFlags separates "-"-prefixed flags from positional arguments so a
+// flag.FlagSet can parse them regardless of order. It only supports boolean
+// flags (no "--flag value" pairs): every -prefixed token is independent, so
+// this cannot tell a value-taking flag's value from the next positional
+// argument.
+func splitFlags(args []string) (flagArgs, posArgs []string) {
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") {
+			flagArgs = append(flagArgs, a)
+		} else {
+			posArgs = append(posArgs, a)
+		}
+	}
+	return flagArgs, posArgs
 }

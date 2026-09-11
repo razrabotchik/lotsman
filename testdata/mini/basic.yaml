@@ -1,0 +1,65 @@
+openapi: 3.0.3
+info:
+  title: Mini Pet Store
+  version: "1.0"
+  description: >
+    Handwritten fixture spec for the core-runtime tracer bullet (T008/T009).
+    Five operations, deliberately including one that cannot be supported:
+    GET /orders/{orderId} omits the path parameter for its own placeholder.
+paths:
+  /pets:
+    get:
+      operationId: listPets
+      summary: List pets
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int32
+      responses:
+        "200":
+          description: A page of pets.
+    post:
+      operationId: createPet
+      summary: Create a pet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+      responses:
+        "201":
+          description: Created.
+  /pets/{petId}:
+    parameters:
+      - name: petId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getPet
+      summary: Get a pet by ID
+      responses:
+        "200":
+          description: The pet.
+    delete:
+      operationId: deletePet
+      summary: Delete a pet by ID
+      responses:
+        "204":
+          description: Deleted.
+  /orders/{orderId}:
+    get:
+      operationId: getOrder
+      summary: Get an order by ID
+      responses:
+        "200":
+          description: The order.

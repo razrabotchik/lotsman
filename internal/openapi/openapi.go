@@ -40,8 +40,8 @@ var pathPlaceholder = regexp.MustCompile(`\{([^{}]+)\}`)
 // document-level diagnostics not scoped to a single operation (e.g.
 // structural parse errors from libopenapi).
 type Document struct {
-	Operations  []domain.Operation
-	Diagnostics []domain.Diagnostic
+	Operations  []domain.Operation  `json:"operations"`
+	Diagnostics []domain.Diagnostic `json:"diagnostics,omitempty"`
 }
 
 // Parse builds the IR from raw OpenAPI 3.0/3.1 bytes: pipeline stage 1

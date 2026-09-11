@@ -1,0 +1,60 @@
+{
+  "operations": [
+    {
+      "key": ":GET:/orders/{orderId}",
+      "sourceOperationId": "getOrder",
+      "method": "GET",
+      "pathTemplate": "/orders/{orderId}",
+      "support": {
+        "level": "rejected",
+        "reasons": [
+          "path_parameter_mismatch"
+        ]
+      },
+      "diagnostics": [
+        {
+          "severity": "error",
+          "code": "path_parameter_mismatch",
+          "pointer": "#/paths/~1orders~1{orderId}/get",
+          "message": "path placeholder \"orderId\" has no required 'in: path' parameter"
+        }
+      ]
+    },
+    {
+      "key": ":GET:/pets",
+      "sourceOperationId": "listPets",
+      "method": "GET",
+      "pathTemplate": "/pets",
+      "support": {
+        "level": "supported"
+      }
+    },
+    {
+      "key": ":POST:/pets",
+      "sourceOperationId": "createPet",
+      "method": "POST",
+      "pathTemplate": "/pets",
+      "support": {
+        "level": "supported"
+      }
+    },
+    {
+      "key": ":GET:/pets/{petId}",
+      "sourceOperationId": "getPet",
+      "method": "GET",
+      "pathTemplate": "/pets/{petId}",
+      "support": {
+        "level": "supported"
+      }
+    },
+    {
+      "key": ":DELETE:/pets/{petId}",
+      "sourceOperationId": "deletePet",
+      "method": "DELETE",
+      "pathTemplate": "/pets/{petId}",
+      "support": {
+        "level": "supported"
+      }
+    }
+  ]
+}
