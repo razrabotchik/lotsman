@@ -7,12 +7,14 @@ Checkpoints match the tracer-bullet steps; stop at any checkpoint with working s
 ## Phase A — M0 spike (gate: ADR-0001…0004)
 
 ### Step 0: Skeleton
-- [ ] T001 Init module `github.com/razrabotchik/lotsman`; create package dirs with doc.go; Makefile (test/lint/run/fuzz); .golangci.yml
-- [ ] T002 [P] CI workflow: lint + test + race on push/PR (.github/workflows/ci.yaml); NOTICE file; SECURITY.md stub
+- [x] T001 Init module `github.com/razrabotchik/lotsman`; create package dirs with doc.go; Makefile (test/lint/run/fuzz); .golangci.yml
+- [x] T002 [P] CI workflow: lint + test + race on push/PR (.github/workflows/ci.yaml); NOTICE file; SECURITY.md stub
 
 ### Step 1: Ping over stdio  ✅ CHECKPOINT: agent calls a tool
-- [ ] T003 mcpserver: stdio server with hardcoded `ping` tool (go-sdk v1.7); logs to stderr only
-- [ ] T004 Manual e2e: register in Claude Desktop config, verify call; document quirks in docs/adr/0004-mcp-client-notes.md (draft)
+- [x] T003 mcpserver: stdio server with hardcoded `ping` tool (go-sdk v1.7); logs to stderr only
+- [~] T004 Manual e2e: register in Claude Desktop config, verify call; document quirks in docs/adr/0004-mcp-client-notes.md (draft)
+      → ADR drafted; stdio e2e automated (cmd/lotsman/e2e_test.go) and `claude mcp list` reports Connected.
+      → Pending: the desktop-UI checklist in ADR-0004 ("Open — to confirm on a desktop client") needs a human.
 
 ### Step 2: Operations enumeration
 - [ ] T005 specsource: file/stdin loader with byte/time limits; sha256 digest
