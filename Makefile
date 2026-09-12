@@ -3,6 +3,7 @@
 
 GO              ?= go
 BIN             ?= bin/lotsman
+API_GATEWAY_BIN ?= bin/api-gateway
 PKG             := ./...
 VERSION         ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT          ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
@@ -29,9 +30,17 @@ help: ## List targets
 build: ## Build the binary into bin/
 	$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/lotsman
 
+.PHONY: build-api-gateway
+build-api-gateway: ## Build the local development API into bin/
+	$(GO) build -trimpath -o $(API_GATEWAY_BIN) ./cmd/api-gateway
+
 .PHONY: run
 run: ## Run the stdio MCP server (make run SPEC=path/to/openapi.yaml)
 	$(GO) run -ldflags "$(LDFLAGS)" ./cmd/lotsman serve $(SPEC) $(ARGS)
+
+.PHONY: run-api-gateway
+run-api-gateway: ## Run the local development API on 127.0.0.1:18080
+	$(GO) run ./cmd/api-gateway
 
 .PHONY: test
 test: ## Run tests with the race detector
@@ -50,6 +59,10 @@ fuzz: ## Run every fuzz target briefly (FUZZTIME=30s)
 	    $(GO) test $$pkg -run '^$$' -fuzz "^$$target$$" -fuzztime $(FUZZTIME); \
 	  done; \
 	done
+
+.PHONY: corpus
+corpus: ## Fetch the vendor corpus into testdata/corpus (verifies pinned digests)
+	@python3 scripts/fetch_corpus.py
 
 .PHONY: lint
 lint: ## Run golangci-lint

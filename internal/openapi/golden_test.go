@@ -23,7 +23,7 @@ func TestParseMiniSpecGolden(t *testing.T) {
 		t.Fatalf("read fixture: %v", err)
 	}
 
-	doc, err := Parse(spec, "", nil)
+	doc, err := Parse(t.Context(), spec, Options{})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -35,15 +35,15 @@ func TestParseMiniSpecGolden(t *testing.T) {
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
-	if err := enc.Encode(doc); err != nil {
-		t.Fatalf("encode: %v", err)
+	if encErr := enc.Encode(doc); encErr != nil {
+		t.Fatalf("encode: %v", encErr)
 	}
 	got := buf.Bytes()
 
 	goldenPath := filepath.Join("testdata", "basic.golden.json")
 	if *update {
-		if err := os.WriteFile(goldenPath, got, 0o600); err != nil {
-			t.Fatalf("write golden: %v", err)
+		if writeErr := os.WriteFile(goldenPath, got, 0o600); writeErr != nil {
+			t.Fatalf("write golden: %v", writeErr)
 		}
 	}
 
@@ -66,11 +66,11 @@ func TestParseMiniSpecDeterministic(t *testing.T) {
 		t.Fatalf("read fixture: %v", err)
 	}
 
-	first, err := Parse(spec, "", nil)
+	first, err := Parse(t.Context(), spec, Options{})
 	if err != nil {
 		t.Fatalf("Parse (1st): %v", err)
 	}
-	second, err := Parse(spec, "", nil)
+	second, err := Parse(t.Context(), spec, Options{})
 	if err != nil {
 		t.Fatalf("Parse (2nd): %v", err)
 	}

@@ -1,0 +1,453 @@
+{
+  "specDigest": "sha256:fixture",
+  "tools": [
+    {
+      "name": "delete_pet",
+      "operationKey": "default:DELETE:/pets/{petId}",
+      "method": "DELETE",
+      "pathTemplate": "/pets/{petId}",
+      "description": "Delete a pet by ID",
+      "input": {
+        "parameters": [
+          {
+            "name": "petId",
+            "in": "path",
+            "required": true,
+            "style": "simple",
+            "explode": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "cookies": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "headers": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "path": {
+            "additionalProperties": false,
+            "properties": {
+              "petId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "petId"
+            ],
+            "type": "object"
+          },
+          "query": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "effect": {
+        "effect": "destructive",
+        "source": "http_method",
+        "confidence": "inferred"
+      },
+      "executable": false,
+      "policyBlockers": [
+        "policy_mutation_blocked"
+      ],
+      "policyMessage": "effect is destructive; enable execution.allowMutations to call it"
+    },
+    {
+      "name": "list_pets",
+      "operationKey": "default:GET:/pets",
+      "method": "GET",
+      "pathTemplate": "/pets",
+      "description": "List pets",
+      "input": {
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "style": "form",
+            "explode": true,
+            "description": "Maximum number of pets to return.",
+            "schema": {
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "default": "name",
+              "enum": [
+                "name",
+                "-name",
+                "created"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "tags",
+            "in": "query",
+            "required": false,
+            "style": "form",
+            "explode": true,
+            "description": "Filter by tag; repeated, because form/explode defaults to true.",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          }
+        ]
+      },
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "cookies": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "headers": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "path": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "query": {
+            "additionalProperties": false,
+            "properties": {
+              "limit": {
+                "description": "Maximum number of pets to return.",
+                "format": "int32",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "sort": {
+                "description": "The API uses \"name\" when this is omitted.",
+                "enum": [
+                  "name",
+                  "-name",
+                  "created"
+                ],
+                "type": "string"
+              },
+              "tags": {
+                "description": "Filter by tag; repeated, because form/explode defaults to true.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "effect": {
+        "effect": "read",
+        "source": "http_method",
+        "confidence": "inferred"
+      },
+      "executable": true
+    },
+    {
+      "name": "get_pet",
+      "operationKey": "default:GET:/pets/{petId}",
+      "method": "GET",
+      "pathTemplate": "/pets/{petId}",
+      "description": "Get a pet by ID",
+      "input": {
+        "parameters": [
+          {
+            "name": "petId",
+            "in": "path",
+            "required": true,
+            "style": "simple",
+            "explode": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "verbose",
+            "in": "query",
+            "required": false,
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ]
+      },
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "cookies": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "headers": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "path": {
+            "additionalProperties": false,
+            "properties": {
+              "petId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "petId"
+            ],
+            "type": "object"
+          },
+          "query": {
+            "additionalProperties": false,
+            "properties": {
+              "verbose": {
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "effect": {
+        "effect": "read",
+        "source": "http_method",
+        "confidence": "inferred"
+      },
+      "executable": true
+    },
+    {
+      "name": "create_pet",
+      "operationKey": "default:POST:/pets",
+      "method": "POST",
+      "pathTemplate": "/pets",
+      "description": "Create a pet",
+      "input": {
+        "body": {
+          "mediaType": "application/json",
+          "required": true,
+          "schema": {
+            "properties": {
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "properties": {
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          },
+          "cookies": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "headers": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "path": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "query": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          }
+        },
+        "required": [
+          "body"
+        ],
+        "type": "object"
+      },
+      "effect": {
+        "effect": "unknown",
+        "source": "http_method",
+        "confidence": "inferred"
+      },
+      "executable": false,
+      "policyBlockers": [
+        "policy_unknown_effect_blocked"
+      ],
+      "policyMessage": "effect could not be determined; enable execution.allowMutations or classify the operation explicitly before calling it"
+    }
+  ],
+  "digest": "sha256:b03b43cbc3cbd81650a82fd56f6bc5dbf1dfc007256f1bd05ae00c036b737f2a",
+  "report": {
+    "schemaVersion": "1",
+    "totals": {
+      "found": 5,
+      "supported": 4,
+      "partial": 0,
+      "rejected": 1,
+      "published": 4,
+      "executable": 2,
+      "capabilityBlocked": 0,
+      "policyBlocked": 2,
+      "byEffect": {
+        "destructive": 1,
+        "read": 3,
+        "unknown": 1
+      }
+    },
+    "byReason": {
+      "path_parameter_mismatch": 1,
+      "policy_mutation_blocked": 1,
+      "policy_unknown_effect_blocked": 1
+    },
+    "catalog": {
+      "mode": "tools",
+      "toolCount": 4,
+      "serializedBytesEstimate": 2292,
+      "digest": "sha256:b03b43cbc3cbd81650a82fd56f6bc5dbf1dfc007256f1bd05ae00c036b737f2a"
+    },
+    "security": {
+      "remoteRefs": false,
+      "redirects": false,
+      "unknownMutationsBlocked": true
+    },
+    "operations": [
+      {
+        "key": "default:DELETE:/pets/{petId}",
+        "method": "DELETE",
+        "pathTemplate": "/pets/{petId}",
+        "toolName": "delete_pet",
+        "support": "supported",
+        "published": true,
+        "executable": false,
+        "effect": {
+          "effect": "destructive",
+          "source": "http_method",
+          "confidence": "inferred"
+        },
+        "policyBlockers": [
+          "policy_mutation_blocked"
+        ]
+      },
+      {
+        "key": "default:GET:/orders/{orderId}",
+        "method": "GET",
+        "pathTemplate": "/orders/{orderId}",
+        "support": "rejected",
+        "published": false,
+        "executable": false,
+        "effect": {
+          "effect": "read",
+          "source": "http_method",
+          "confidence": "inferred"
+        },
+        "reasons": [
+          {
+            "code": "path_parameter_mismatch",
+            "detail": "path placeholder \"orderId\" has no required 'in: path' parameter",
+            "pointer": "#/paths/~1orders~1{orderId}/get"
+          }
+        ]
+      },
+      {
+        "key": "default:GET:/pets",
+        "method": "GET",
+        "pathTemplate": "/pets",
+        "toolName": "list_pets",
+        "support": "supported",
+        "published": true,
+        "executable": true,
+        "effect": {
+          "effect": "read",
+          "source": "http_method",
+          "confidence": "inferred"
+        }
+      },
+      {
+        "key": "default:GET:/pets/{petId}",
+        "method": "GET",
+        "pathTemplate": "/pets/{petId}",
+        "toolName": "get_pet",
+        "support": "supported",
+        "published": true,
+        "executable": true,
+        "effect": {
+          "effect": "read",
+          "source": "http_method",
+          "confidence": "inferred"
+        }
+      },
+      {
+        "key": "default:POST:/pets",
+        "method": "POST",
+        "pathTemplate": "/pets",
+        "toolName": "create_pet",
+        "support": "supported",
+        "published": true,
+        "executable": false,
+        "effect": {
+          "effect": "unknown",
+          "source": "http_method",
+          "confidence": "inferred"
+        },
+        "policyBlockers": [
+          "policy_unknown_effect_blocked"
+        ]
+      }
+    ]
+  }
+}

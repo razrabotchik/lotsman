@@ -1,0 +1,67 @@
+{
+  "_comment": [
+    "Vendor corpus for the M0 gate (T022) and the corpus smoke test (T028).",
+    "The documents themselves are not committed: they are megabytes of someone",
+    "else's API and they change upstream. Each entry pins an immutable ref and",
+    "the sha256 of the bytes at that ref, so `make corpus` either reproduces",
+    "exactly what these numbers were measured against or fails loudly.",
+    "Expectations are what lotsman reports today, not what it should report:",
+    "a change here is a deliberate answer to 'did support move, and which way?'"
+  ],
+  "specs": [
+    {
+      "name": "kubernetes-apps-v1.json",
+      "vendor": "Kubernetes",
+      "url": "https://raw.githubusercontent.com/kubernetes/kubernetes/v1.31.0/api/openapi-spec/v3/apis__apps__v1_openapi.json",
+      "digest": "sha256:91c2ff75cfcb3f4f743bf08bda2d1b9c893a4987c792200df0364d6d52a9cdc9",
+      "bytes": 833849,
+      "note": "OpenAPI 3.0, self-contained JSON. The reference case for real translation coverage.",
+      "expect": {
+        "outcome": "reported",
+        "found": 77,
+        "supported": 65,
+        "rejected": 12,
+        "byReason": ["unsupported_media_type"]
+      }
+    },
+    {
+      "name": "stripe.yaml",
+      "vendor": "Stripe",
+      "url": "https://raw.githubusercontent.com/stripe/openapi/v1301/openapi/spec3.yaml",
+      "digest": "sha256:be8f55b4164ef9e4ccef0a523ffe8b47b66951b98eb956b34003ca0a7798c860",
+      "bytes": 5227216,
+      "note": "OpenAPI 3.0, 5 MB, form-urlencoded bodies and deepObject query styles throughout. The pathological-schema case.",
+      "expect": {
+        "outcome": "reported",
+        "found": 559,
+        "supported": 0,
+        "rejected": 559,
+        "byReason": ["unsupported_media_type", "unsupported_parameter_style"]
+      }
+    },
+    {
+      "name": "digitalocean.yaml",
+      "vendor": "DigitalOcean",
+      "url": "https://raw.githubusercontent.com/DigitalOcean/openapi/87e82da6548bb4df718745c241b66061185e2d0c/specification/DigitalOcean-public.v2.yaml",
+      "digest": "sha256:4ce7b0b809e1029ad24420f5dcd5c550120f06f54388178a7fdf944ef880ffc0",
+      "bytes": 111890,
+      "note": "Exploded spec: the root is an index of 662 sibling documents. File $ref resolution lands with T025.",
+      "expect": {
+        "outcome": "refused",
+        "message": "$ref closure spans 662 documents"
+      }
+    },
+    {
+      "name": "gitlab.yaml",
+      "vendor": "GitLab",
+      "url": "https://gitlab.com/gitlab-org/gitlab/-/raw/v17.5.0-ee/doc/api/openapi/openapi_v2.yaml",
+      "digest": "sha256:be3bcb29077192bbad0c47693421af8117eb125406842c6489e72a6ff7303276",
+      "bytes": 1763445,
+      "note": "Published as Swagger 2.0, not OpenAPI 3.x. A compatibility adapter is out of scope for this release.",
+      "expect": {
+        "outcome": "refused",
+        "message": "swagger: 2.0"
+      }
+    }
+  ]
+}

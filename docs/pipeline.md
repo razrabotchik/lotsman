@@ -1,6 +1,6 @@
 # lotsman: конвейер OpenAPI → MCP
 
-Детальное описание того, как спецификация превращается в исполняемые MCP-инструменты. Дополняет спеку v1.1.3; предназначен для `docs/pipeline.md`. Каждый этап привязан к пакету из §7.3.
+Детальное описание того, как спецификация превращается в исполняемые MCP-инструменты. Дополняет спеку v1.1.4; предназначен для `docs/pipeline.md`. Каждый этап привязан к пакету из §7.3.
 
 ```text
 байты ──▶ 0.доверие ──▶ 1.парсинг ──▶ 2.$ref ──▶ 3.нормализация(IR) ──▶ 4.каталог/tools
@@ -105,7 +105,7 @@ IR хранит это как `[]SecurityAlternative{Requirements []SecurityRequ
 
 ### 3.6 Effect и вердикт поддержки
 
-Каждой операции присваивается `EffectDecision{Effect, Source, Confidence}` (метод → inferred; override/recipe → explicit) + прогон suspicious-verb сканера. Затем — **вердикт**: `supported` / `partially_supported` (с documented fallback) / `rejected` (с machine-readable reason). Вердикт — это выход capability report, и правило одно: сомнение = rejected. lotsman doesn't guess.
+Каждой операции присваивается `EffectDecision{Effect, Source, Confidence}` (метод → inferred; override/recipe → explicit) + прогон suspicious-verb сканера. Mutation-like GET/HEAD/OPTIONS повышается до `unknown` и блокируется до reviewed override. Затем — **вердикт перевода**: `supported` / `partially_supported` (с documented fallback) / `rejected` (с machine-readable reason). Отдельно вычисляются publication и runtime executability: supported операция может быть видима, но `executionBlockers` не дают ей войти в request builder. Вердикты — выход capability report, и правило одно: сомнение = отказ до сети. lotsman doesn't guess.
 
 ## Этап 4. Генерация инструментов (`internal/catalog`)
 
@@ -135,6 +135,8 @@ IR хранит это как `[]SecurityAlternative{Requirements []SecurityRequ
 
 **Каталог**: сортировка детерминированная, digest считается по сериализованному содержимому, `tools/list` строится один раз на snapshot. В search-режиме вместо N tools публикуются 5 мета-инструментов, а каталог уходит в поисковый индекс.
 
+Публикация не равна полномочию на вызов. Перед handler проверяет `executable` и machine-readable blockers; отсутствие ещё не реализованной стадии (params/body/auth/config/policy) завершается до `requestbuild` и даёт ноль сетевых попыток.
+
 ## Этапы 5–8. Runtime-путь вызова
 
 ### 5. Валидация аргументов (`internal/policy` + validator)
@@ -151,11 +153,11 @@ IR хранит это как `[]SecurityAlternative{Requirements []SecurityRequ
 - **cookie**: сериализация form, значения кодируются;
 - **body**: JSON-маршалинг ровно того, что пришло в `body` (после валидации), `Content-Type` из выбранного media type.
 
-URL собирается из effective servers (+ подстановка server variables с валидацией по enum) или `--base-url`; итоговый origin проверяется EgressPolicy **после** полной сборки и резолва DNS.
+URL собирается из effective servers (+ подстановка server variables с валидацией по enum) или `--base-url`; итоговый origin проверяется EgressPolicy **после** полной сборки и резолва DNS. До появления полной allowedOrigins policy M0 требует явный `--base-url`: origin из недоверенной спеки сам по себе не даёт право на сеть.
 
 ### 7. Auth + сеть (`internal/auth`, `internal/egress`)
 
-Конвейер RoundTripper'ов: rate limit → auth (последним перед сетью, чтобы секрет не попал в логи промежуточных слоёв) → redirect guard (каждый hop заново через egress, sensitive headers не пересекают origin) → лимит времени и байтов.
+Конвейер RoundTripper'ов: rate limit → auth (последним перед сетью, чтобы секрет не попал в логи промежуточных слоёв) → redirect guard (каждый hop заново через egress, sensitive headers не пересекают origin) → лимит времени и байтов. Redirect deny действует уже в M0 с первого реального вызова; T032 расширяет его, а не вводит задним числом.
 
 ### 8. Shaping ответа (`internal/response`)
 

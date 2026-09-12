@@ -3,7 +3,6 @@ package mcpserver
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -13,8 +12,13 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/razrabotchik/lotsman/internal/argvalidate"
 	"github.com/razrabotchik/lotsman/internal/buildinfo"
 	"github.com/razrabotchik/lotsman/internal/catalog"
+	"github.com/razrabotchik/lotsman/internal/domain"
+	"github.com/razrabotchik/lotsman/internal/egress"
+	"github.com/razrabotchik/lotsman/internal/errs"
+	"github.com/razrabotchik/lotsman/internal/policy"
 	"github.com/razrabotchik/lotsman/internal/requestbuild"
 	"github.com/razrabotchik/lotsman/internal/response"
 )
@@ -23,11 +27,14 @@ import (
 // promise that matters before full parameter/policy support exists: nothing
 // is approximated.
 const instructions = "lotsman exposes an OpenAPI specification as MCP tools. " +
-	"Operations that cannot be translated safely are not published and never " +
-	"execute approximately; mutations are blocked unless explicitly allowed. " +
-	"Parameterless GET tools execute for real; GET tools that need path " +
-	"parameters are visible but not callable yet (T014-018), and return an " +
-	"explicit not-implemented error rather than a guess."
+	"Operations that cannot be translated safely are not published. Supported " +
+	"operations with runtime blockers may remain discoverable but never execute " +
+	"approximately; mutations are blocked unless explicitly allowed. " +
+	"A tool executes only when its operation is fully translated and its effect " +
+	"is permitted by policy; blocked tools return an explicit error before any " +
+	"network call. Read operations are allowed by default, everything else " +
+	"requires mutations to be enabled. During M0, real HTTP execution also " +
+	"requires an explicit --base-url."
 
 // defaultTimeout bounds an upstream call. No config wiring exists yet
 // (T032 adds full connect/TLS/header/body budgets); this is the v0
@@ -73,9 +80,9 @@ func (o Options) clock() func() time.Time {
 
 func (o Options) httpClient() *http.Client {
 	if o.HTTPClient != nil {
-		return o.HTTPClient
+		return egress.Client(o.HTTPClient)
 	}
-	return &http.Client{Timeout: defaultTimeout}
+	return egress.Client(&http.Client{Timeout: defaultTimeout})
 }
 
 // New builds the MCP server and registers its tools: the hardcoded ping tool
@@ -94,7 +101,7 @@ func New(opts Options) *mcp.Server {
 		Logger:       sdkLogger(opts.logger()),
 	})
 	addPing(srv, opts.clock())
-	addCatalogTools(srv, catalogGETTools(opts.Catalog), opts.httpClient(), opts.BaseURL)
+	addCatalogTools(srv, catalogTools(opts.Catalog), opts.httpClient(), opts.BaseURL, opts.logger())
 	return srv
 }
 
@@ -108,7 +115,7 @@ func ServeStdio(ctx context.Context, opts Options) error {
 		"commit", info.Commit,
 		"mcp_sdk", info.MCPSDKVersion,
 		"mcp_protocol", info.MCPProtocolVersion,
-		"tools", 1+len(catalogGETTools(opts.Catalog)))
+		"tools", 1+len(catalogTools(opts.Catalog)))
 	err := New(opts).Run(ctx, &mcp.StdioTransport{})
 	switch {
 	case ctx.Err() != nil && errors.Is(err, context.Canceled):
@@ -178,69 +185,136 @@ func addPing(srv *mcp.Server, now func() time.Time) {
 	})
 }
 
-// catalogGETTools returns cat's GET tools, or nil for a nil Catalog. Other
-// methods are not published yet: executing them needs the mutation policy
-// gate (T019), which does not exist.
-func catalogGETTools(cat *catalog.Catalog) []catalog.Tool {
+// catalogTools returns the catalog's tools, or nil for a nil Catalog.
+//
+// Every supported operation is published, whatever its method: publication is
+// discovery, and the mutation gate decides execution (ADR-0005). A tool the
+// policy blocks is listed with conservative annotations and refuses before the
+// network, which tells a model what exists and what it may not do -- rather
+// than leaving it to guess why an endpoint it can see in the docs is missing.
+func catalogTools(cat *catalog.Catalog) []catalog.Tool {
 	if cat == nil {
 		return nil
 	}
-	var out []catalog.Tool
-	for _, t := range cat.Tools {
-		if t.Method == "GET" {
-			out = append(out, t)
-		}
-	}
-	return out
+	return cat.Tools
 }
 
-// addCatalogTools registers each catalog tool. A tool whose path template
-// has no "{...}" placeholder is genuinely callable (T012: parameterless GET
-// execution); everything else stays visible but honestly not-implemented
-// rather than approximating a call with parameters this pipeline stage
-// cannot supply (T014-018 add them).
-func addCatalogTools(srv *mcp.Server, tools []catalog.Tool, client *http.Client, baseURL string) {
-	for _, t := range tools {
+// addCatalogTools registers each catalog tool. Publication supports discovery;
+// only tools explicitly marked executable receive a network-capable handler.
+//
+// tools is owned by the caller and never mutated afterwards, so the handlers
+// below may hold a pointer into it (a Catalog is immutable once built).
+func addCatalogTools(srv *mcp.Server, tools []catalog.Tool, client *http.Client, baseURL string, log *slog.Logger) {
+	for i := range tools {
+		t := &tools[i]
+		// Annotations are derived conservatively from the effect and are hints
+		// for the client's UX only: the gate below does not read them, and
+		// nothing a client does with them can relax it (FR-42, FR-43).
+		hints := policy.AnnotationsFor(t.Effect)
 		tool := &mcp.Tool{
 			Name:        t.Name,
 			Description: t.Description,
+			// The published schema is the contract: the client sees it, the
+			// SDK checks arguments against it, and lotsman validates against
+			// the very same document before serializing anything.
+			InputSchema: publishedSchema(t),
 			Annotations: &mcp.ToolAnnotations{
-				ReadOnlyHint:  true,
-				OpenWorldHint: ptr(true),
+				ReadOnlyHint:    hints.ReadOnly,
+				DestructiveHint: ptr(hints.Destructive),
+				OpenWorldHint:   ptr(true),
 			},
 		}
-		if strings.Contains(t.PathTemplate, "{") {
-			mcp.AddTool(srv, tool, notImplementedHandler(t, "needs parameters, not supported yet (T014-018)"))
+		if len(t.PolicyBlockers) > 0 {
+			// A policy refusal is the operator's decision, not a gap in
+			// lotsman: say which, and say what would change it.
+			mcp.AddTool(srv, tool, refusalHandler(t, errs.ClassPolicy,
+				"blocked by policy ("+reasonCodes(t.PolicyBlockers)+"): "+t.PolicyMessage))
 			continue
 		}
-		mcp.AddTool(srv, tool, executeHandler(t, client, baseURL))
+		if !t.Executable {
+			reason := "not executable by this runtime"
+			if len(t.ExecutionBlockers) > 0 {
+				reason += ": " + reasonCodes(t.ExecutionBlockers)
+			}
+			mcp.AddTool(srv, tool, refusalHandler(t, errs.ClassUnsupported, reason))
+			continue
+		}
+
+		// A schema that will not compile cannot be validated against, and an
+		// unvalidated argument must never reach a URL: publish the tool, but
+		// only as a refusal.
+		validator, err := argvalidate.Compile(t.Name, publishedSchema(t))
+		if err != nil {
+			log.Error("tool input schema did not compile; publishing it as not executable",
+				"tool", t.Name, "operation", string(t.OperationKey), "error", err)
+			mcp.AddTool(srv, tool, refusalHandler(t, errs.ClassSpecInvalid, "not executable: "+string(domain.ReasonInvalidSchema)))
+			continue
+		}
+
+		mcp.AddTool(srv, tool, executeHandler(t, validator, client, baseURL))
 	}
 }
 
-// notImplementedHandler never touches the network: it exists so a tool can
-// be listed and schema-validated before it is genuinely callable.
-func notImplementedHandler(t catalog.Tool, reason string) mcp.ToolHandlerFor[struct{}, any] {
-	return func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
-		return nil, nil, fmt.Errorf("lotsman: %s %s %s", t.Method, t.PathTemplate, reason)
+// publishedSchema is the tool's input schema, or the most restrictive schema
+// there is when a catalog somehow arrives without one. Falling back to
+// "object with no properties" keeps a catalog bug from either panicking the
+// SDK's schema inference or publishing a tool that accepts anything.
+func publishedSchema(t *catalog.Tool) map[string]any {
+	if len(t.InputSchema) > 0 {
+		return t.InputSchema
+	}
+	return map[string]any{
+		"type":                 "object",
+		"properties":           map[string]any{},
+		"additionalProperties": false,
 	}
 }
 
-// executeHandler runs the runtime call order for a parameterless GET
-// (docs/pipeline.md stages 6-8, minus auth/egress -- those land with
-// T029-31/T032): build the request, execute it, shape the response.
+// refusalHandler never touches the network: it exists so a tool can be listed
+// and schema-validated while still being impossible to call.
+func refusalHandler(t *catalog.Tool, class errs.Class, reason string) mcp.ToolHandlerFor[map[string]any, any] {
+	return func(_ context.Context, _ *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, any, error) {
+		return nil, nil, errs.Errorf(class, "lotsman: %s %s %s", t.Method, t.PathTemplate, reason)
+	}
+}
+
+// executeHandler runs the runtime call order (docs/pipeline.md stages 5-8):
+// validate the arguments, build the request, apply the M0 egress floor,
+// execute it and shape the response. Auth and full egress policy land later.
 //
 // An upstream 4xx/5xx is not a Go error: it is a successful tool call that
 // reports isError=true with the upstream status and body, so the model sees
 // what the API actually said (FR-39) instead of a generic failure message.
-func executeHandler(t catalog.Tool, client *http.Client, baseURL string) mcp.ToolHandlerFor[struct{}, response.Result] {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, response.Result, error) {
-		req, err := requestbuild.Build(ctx, t.Method, t.PathTemplate, t.Servers, requestbuild.Options{BaseURL: baseURL})
+func executeHandler(t *catalog.Tool, validator *argvalidate.Validator, client *http.Client, baseURL string) mcp.ToolHandlerFor[map[string]any, response.Result] {
+	op := requestbuild.Operation{
+		Method:       t.Method,
+		PathTemplate: t.PathTemplate,
+		Servers:      t.Servers,
+		Parameters:   t.Input.Parameters,
+		Body:         t.Input.Body,
+	}
+	return func(ctx context.Context, _ *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, response.Result, error) {
+		if err := validator.Validate(args); err != nil {
+			return nil, response.Result{}, err
+		}
+		req, err := requestbuild.Build(ctx, &op, requestbuild.Arguments(args), requestbuild.Options{BaseURL: baseURL})
 		if err != nil {
 			return nil, response.Result{}, err
 		}
+		// Defence in depth: an unexpanded template would mean a placeholder
+		// reached the wire as a literal, which is a guess about the API.
+		if strings.ContainsAny(req.URL.EscapedPath(), "{}") {
+			return nil, response.Result{}, errs.Errorf(errs.ClassInternal,
+				"lotsman: %s %s: unexpanded path template", t.Method, t.PathTemplate)
+		}
+		if denied := egress.CheckTarget(req.URL, baseURL); denied != nil {
+			return nil, response.Result{}, denied
+		}
+		//nolint:bodyclose // response.FromHTTP closes resp.Body on every path;
+		// bodyclose cannot see through the call.
 		resp, err := client.Do(req)
 		if err != nil {
-			return nil, response.Result{}, fmt.Errorf("lotsman: %s %s: %w", t.Method, t.PathTemplate, err)
+			return nil, response.Result{}, errs.Errorf(errs.ClassUpstream, "lotsman: %s %s: %w", t.Method, t.PathTemplate, err)
 		}
 		result, err := response.FromHTTP(resp)
 		if err != nil {
@@ -252,6 +326,14 @@ func executeHandler(t catalog.Tool, client *http.Client, baseURL string) mcp.Too
 		}
 		return res, result, nil
 	}
+}
+
+func reasonCodes(codes []domain.ReasonCode) string {
+	parts := make([]string, len(codes))
+	for i, code := range codes {
+		parts[i] = string(code)
+	}
+	return strings.Join(parts, ", ")
 }
 
 func ptr[T any](v T) *T { return &v }

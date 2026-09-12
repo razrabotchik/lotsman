@@ -27,7 +27,7 @@ func TestExecuteGETEndToEnd(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	req, err := requestbuild.Build(t.Context(), "GET", "/widgets", []string{srv.URL}, requestbuild.Options{})
+	req, err := requestbuild.Build(t.Context(), &requestbuild.Operation{Method: "GET", PathTemplate: "/widgets", Servers: []string{srv.URL}}, nil, requestbuild.Options{})
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestExecuteGETUpstream4xxIsError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	req, err := requestbuild.Build(t.Context(), "GET", "/widgets", []string{srv.URL}, requestbuild.Options{})
+	req, err := requestbuild.Build(t.Context(), &requestbuild.Operation{Method: "GET", PathTemplate: "/widgets", Servers: []string{srv.URL}}, nil, requestbuild.Options{})
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}

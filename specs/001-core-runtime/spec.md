@@ -1,8 +1,8 @@
 # Feature Specification: Core Runtime (M0–M1)
 
 **Feature Branch**: `001-core-runtime`
-**Status**: Ready for planning
-**Source**: docs/spec.md v1.1.3 (§3.1, §4, §13) — this document scopes the first milestone slice.
+**Status**: In implementation
+**Source**: docs/spec.md v1.1.4 (§3.1, §4, §13) — this document scopes the first milestone slice.
 
 ## Overview
 
@@ -39,7 +39,7 @@ Mapped to docs/spec.md numbering; the frozen spec is the authority on details.
 - Spec loading: FR-1 (OAS 3.0/3.1, YAML/JSON), FR-3 (file/stdin), FR-4 (local refs confined
   to root), FR-6 (cycles without panic), FR-7 (errors with JSON Pointer), FR-8 (`--lax`),
   FR-9 (parse limits incl. YAML alias budget).
-- Capability report: FR-10–FR-13, FR-12a (first-class report; `inspect diff` may land in 002).
+- Capability report: FR-10–FR-13b, FR-12a (first-class report; `inspect diff` may land in 002). The report distinguishes supported, published, executable and policy-blocked operations.
 - Tool profile: FR-14–FR-19 (deterministic names ≤64 chars, sanitized budgeted descriptions).
 - Schemas: FR-20–FR-25 (JSON Schema 2020-12, OAS 3.0 normalization, grouped inputs always,
   server-side argument validation).
@@ -49,7 +49,7 @@ Mapped to docs/spec.md numbering; the frozen spec is the authority on details.
   response, header allowlist, isError mapping, explain-call).
 - Effect & policy: FR-40–FR-43 + EffectDecision(source, confidence) + suspicious-verb warnings.
   Interactive approval (FR-44–46) lands with mutations UX in 002; M1 gates mutations by policy only.
-- Auth: FR-55–FR-62 (security OR/AND semantics; apiKey/basic/bearer via secretRef; redaction).
+- Auth: FR-55–FR-62 except `keyring:` (security OR/AND semantics; apiKey/basic/bearer via `env:`/`file:` secretRef; redaction). Cross-platform `keyring:` is deferred to feature 004 after its portability spike.
 - Transport & CLI: FR-68 (stdio, logs to stderr), FR-72 (atomic reload may defer to 003),
   FR-76–FR-78 (`serve`, `inspect [--json]`, `validate`, `operations`, `explain-call`,
   `version`; distinct exit codes).
@@ -58,12 +58,18 @@ Mapped to docs/spec.md numbering; the frozen spec is the authority on details.
 
 1. M0 gate: three dissimilar real specs (GitLab, DigitalOcean, Kubernetes) pass the declared
    support profile with no engine patches; the 4 spike questions answered in ADRs 0001–0004.
-2. Acceptance criteria 1–5, 7 of docs/spec.md §13 pass (inspect determinism; OAS 3.0+3.1 GET
+2. Acceptance criteria 1–4 and 7 of docs/spec.md §13 pass (inspect determinism; OAS 3.0+3.1 GET
    and JSON POST over stdio; unsupported styles never execute approximately; read-only
    enforcement; canary secrets never leak).
 3. Parse+normalize p95 < 2 s for a 5 MiB / 1000-operation spec on the CI runner; RSS < 200 MiB.
 4. Two consecutive runs on the same spec+config produce byte-identical catalog and digest.
 5. All 14 pipeline pitfalls (docs/pipeline.md checklist) are covered by at least one test each.
+
+## Strictness and execution states
+
+- Default strict `serve` fails when any operation is rejected or partial; `--lax` serves only the supported subset. Document-level errors are fatal in both modes.
+- `supported` describes a safe translation verdict; `published` describes MCP discovery; `executable` additionally requires no capability/config/auth/policy blockers.
+- Every refusal is asserted to make zero network calls. During the tracer bullet, real HTTP additionally requires explicit `--base-url`; the later `allowedOrigins` configuration replaces this temporary authorization boundary.
 
 ## Assumptions & Dependencies
 

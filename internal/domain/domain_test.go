@@ -10,7 +10,7 @@ func TestNewOperationKey(t *testing.T) {
 		pathTemplate string
 		want         OperationKey
 	}{
-		{"empty namespace", "", "get", "/pets", ":GET:/pets"},
+		{"empty namespace defaults", "", "get", "/pets", "default:GET:/pets"},
 		{"namespace and lowercase method", "petstore", "post", "/pets/{petId}", "petstore:POST:/pets/{petId}"},
 		{"method already uppercase", "ns", "DELETE", "/pets/{petId}", "ns:DELETE:/pets/{petId}"},
 	}

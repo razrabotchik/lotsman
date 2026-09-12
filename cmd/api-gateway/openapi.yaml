@@ -1,0 +1,213 @@
+openapi: 3.1.0
+info:
+  title: Lotsman development API
+  version: 1.0.0
+  description: >-
+    Deterministic local fixture for exercising Lotsman. It is not a production
+    gateway and must not be exposed to an untrusted network.
+servers:
+  - url: http://127.0.0.1:18080
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Check that the development API is running
+      responses:
+        "200":
+          description: API is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, service]
+                properties:
+                  status: {type: string, const: ok}
+                  service: {type: string}
+
+  /v1/pets:
+    get:
+      operationId: listPets
+      summary: List pets with optional filtering
+      parameters:
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+        - name: tag
+          in: query
+          schema: {type: string}
+      responses:
+        "200":
+          description: Pet list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: "#/components/schemas/Pet"}
+                  count: {type: integer}
+    post:
+      operationId: createPet
+      summary: Create a pet
+      security:
+        - apiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/NewPet"}
+      responses:
+        "201":
+          description: Created pet
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Pet"}
+        "401": {$ref: "#/components/responses/Error"}
+
+  /v1/pets/{petId}:
+    parameters:
+      - name: petId
+        in: path
+        required: true
+        schema: {type: integer, minimum: 1}
+    get:
+      operationId: getPet
+      summary: Get one pet
+      responses:
+        "200":
+          description: Pet
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Pet"}
+        "404": {$ref: "#/components/responses/Error"}
+    delete:
+      operationId: deletePet
+      summary: Delete a pet
+      security:
+        - apiKey: []
+      responses:
+        "204": {description: Pet deleted}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+
+  /v1/secure/profile:
+    get:
+      operationId: getSecureProfile
+      summary: Return a profile protected by a bearer token
+      security:
+        - bearer: []
+      responses:
+        "200": {description: Demo profile}
+        "401": {$ref: "#/components/responses/Error"}
+
+  /v1/echo:
+    get:
+      operationId: echoParameters
+      summary: Echo query and header parameters
+      parameters:
+        - name: query
+          in: query
+          schema: {type: string}
+        - name: tag
+          in: query
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: {type: string}
+        - name: X-Request-ID
+          in: header
+          schema: {type: string}
+      responses:
+        "200": {description: Echoed values}
+
+  /v1/status/{code}:
+    get:
+      operationId: getStatus
+      summary: Return a caller-selected HTTP status
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema: {type: integer, minimum: 100, maximum: 599}
+      responses:
+        default: {description: Requested status}
+
+  /v1/redirect:
+    get:
+      operationId: getRedirect
+      summary: Redirect to the health endpoint
+      responses:
+        "302": {description: Redirect response}
+
+  /v1/large:
+    get:
+      operationId: getLargeResponse
+      summary: Return a bounded but deliberately large text response
+      parameters:
+        - name: bytes
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 2097152, default: 614400}
+      responses:
+        "200":
+          description: Generated text
+          content:
+            text/plain:
+              schema: {type: string}
+
+  /v1/slow:
+    get:
+      operationId: getSlowResponse
+      summary: Delay a response to exercise timeout handling
+      parameters:
+        - name: ms
+          in: query
+          schema: {type: integer, minimum: 0, maximum: 60000, default: 100}
+      responses:
+        "200": {description: Delay completed}
+
+components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+    bearer:
+      type: http
+      scheme: bearer
+  schemas:
+    Pet:
+      type: object
+      required: [id, name]
+      properties:
+        id: {type: integer}
+        name: {type: string}
+        tags:
+          type: array
+          items: {type: string}
+    NewPet:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: {type: string, minLength: 1}
+        tags:
+          type: array
+          items: {type: string}
+  responses:
+    Error:
+      description: Error response
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error:
+                type: object
+                required: [status, message]
+                properties:
+                  status: {type: integer}
+                  message: {type: string}
