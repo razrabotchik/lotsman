@@ -10,12 +10,17 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/razrabotchik/lotsman/internal/auth"
 	"github.com/razrabotchik/lotsman/internal/buildinfo"
 	"github.com/razrabotchik/lotsman/internal/catalog"
 	"github.com/razrabotchik/lotsman/internal/domain"
 	"github.com/razrabotchik/lotsman/internal/errs"
 	"github.com/razrabotchik/lotsman/internal/policy"
+	"github.com/razrabotchik/lotsman/internal/redact"
 )
+
+// maxListedIssues bounds the human report's issue list.
+const maxListedIssues = 10
 
 // inspectDocument is the `inspect --json` contract (contracts/cli.md,
 // schemaVersion 1). It is spelled out here, in the order the contract
@@ -66,6 +71,7 @@ func inspect(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	asJSON := fs.Bool("json", false, "machine-readable report (schemaVersion 1)")
 	allowMutations := fs.Bool("allow-mutations", false, "report as if mutations were enabled at serve time")
+	configPath := fs.String("config", "", "configuration file (auth profiles, execution settings)")
 	failOnRejected := fs.Bool("fail-on-rejected", false, "exit non-zero when any operation is rejected (CI helper)")
 	spec, err := parseWithTrailingSpec(fs, args)
 	if err != nil {
@@ -76,15 +82,22 @@ func inspect(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 
-	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	logger := slog.New(redact.NewHandler(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelError})))
 	doc, err := parseSpec(ctx, spec, logger)
 	if err != nil {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
 		return exitError
 	}
 
-	cat := catalog.Build(doc.digest, doc.Operations,
-		catalog.Options{Policy: policy.Config{AllowMutations: *allowMutations}})
+	runtime, err := resolveConfig(*configPath, fs, *allowMutations, false, "")
+	if err != nil {
+		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
+		return exitUsage
+	}
+	cat := catalog.Build(doc.digest, doc.Operations, catalog.Options{
+		Policy: policy.Config{AllowMutations: runtime.AllowMutations},
+		Auth:   auth.NewProfiles(runtime.AuthProfiles),
+	})
 
 	info := buildinfo.Get()
 	report := inspectDocument{
@@ -152,8 +165,15 @@ func writeHumanReport(w io.Writer, report *inspectDocument) {
 		blockedWord(report.Security.UnknownMutationsBlocked))
 
 	if len(report.DocumentIssues) > 0 {
-		fmt.Fprintf(w, "document issues (these stop `serve` in every mode):\n")
-		for _, issue := range report.DocumentIssues {
+		fmt.Fprintf(w, "document issues (these stop `serve` in every mode): %d\n", len(report.DocumentIssues))
+		// A document whose every reference is unresolvable produces one issue
+		// per reference; a reader needs the first few and the count, not all
+		// of them. The --json form carries the complete list.
+		for i, issue := range report.DocumentIssues {
+			if i == maxListedIssues {
+				fmt.Fprintf(w, "  ... and %d more (use --json for the full list)\n", len(report.DocumentIssues)-i)
+				break
+			}
 			fmt.Fprintf(w, "  %-7s %s\n", issue.Severity, issue.Message)
 		}
 		fmt.Fprintln(w)

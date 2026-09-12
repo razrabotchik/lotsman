@@ -49,6 +49,36 @@ jobs:
       - name: Test (race, shuffled)
         run: go test -race -shuffle=on -count=1 ./...
 
+  corpus:
+    # The corpus is the regression test for translation *support*: it answers
+    # "did this change move what lotsman can do to a real API, and which way?"
+    # The documents are fetched from pinned refs rather than committed, so the
+    # job needs network access and runs on one platform only.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Fetch the vendor corpus
+        run: make corpus
+      - name: Corpus smoke
+        run: go test -run 'TestCorpus' -count=1 ./cmd/lotsman/
+
+  fuzz:
+    # A short fuzz run on every change: the seeds are the pitfalls, and a
+    # regression in any of them is cheaper to find here than in a corpus.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Fuzz (short)
+        run: make fuzz FUZZTIME=20s
+
   vuln:
     runs-on: ubuntu-latest
     steps:

@@ -71,7 +71,17 @@ func inputSchema(input domain.InputModel) map[string]any {
 		"additionalProperties": false,
 	}
 	if len(requiredGroups) > 0 {
-		schema["required"] = requiredGroups // already in groupOrder order
+		schema["required"] = requiredGroups // already in domain.GroupOrder order
+	}
+	// The tool's input schema is a standalone document, so the components its
+	// groups point at travel with it. "#/$defs/..." resolves against this
+	// root, which is why the bundle belongs here and not inside a group.
+	if len(input.Defs) > 0 {
+		defs := make(map[string]any, len(input.Defs))
+		for name, def := range input.Defs {
+			defs[name] = sanitizeSchema(map[string]any(def))
+		}
+		schema["$defs"] = defs
 	}
 	return schema
 }

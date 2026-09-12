@@ -13,12 +13,14 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/razrabotchik/lotsman/internal/argvalidate"
+	"github.com/razrabotchik/lotsman/internal/auth"
 	"github.com/razrabotchik/lotsman/internal/buildinfo"
 	"github.com/razrabotchik/lotsman/internal/catalog"
 	"github.com/razrabotchik/lotsman/internal/domain"
 	"github.com/razrabotchik/lotsman/internal/egress"
 	"github.com/razrabotchik/lotsman/internal/errs"
 	"github.com/razrabotchik/lotsman/internal/policy"
+	"github.com/razrabotchik/lotsman/internal/redact"
 	"github.com/razrabotchik/lotsman/internal/requestbuild"
 	"github.com/razrabotchik/lotsman/internal/response"
 )
@@ -251,7 +253,9 @@ func addCatalogTools(srv *mcp.Server, tools []catalog.Tool, client *http.Client,
 			continue
 		}
 
-		mcp.AddTool(srv, tool, executeHandler(t, validator, client, baseURL))
+		// The credential is applied by the innermost round tripper, after
+		// every other layer has seen the request without it.
+		mcp.AddTool(srv, tool, executeHandler(t, validator, auth.Client(client, t.AuthBinding), baseURL))
 	}
 }
 
@@ -294,12 +298,15 @@ func executeHandler(t *catalog.Tool, validator *argvalidate.Validator, client *h
 		Body:         t.Input.Body,
 	}
 	return func(ctx context.Context, _ *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, response.Result, error) {
+		// Every error leaving a handler passes through redaction: an argument,
+		// a URL or an upstream message may quote a credential, and this is the
+		// boundary where anything lotsman says reaches a client.
 		if err := validator.Validate(args); err != nil {
-			return nil, response.Result{}, err
+			return nil, response.Result{}, redact.Error(err)
 		}
 		req, err := requestbuild.Build(ctx, &op, requestbuild.Arguments(args), requestbuild.Options{BaseURL: baseURL})
 		if err != nil {
-			return nil, response.Result{}, err
+			return nil, response.Result{}, redact.Error(err)
 		}
 		// Defence in depth: an unexpanded template would mean a placeholder
 		// reached the wire as a literal, which is a guess about the API.
@@ -314,11 +321,14 @@ func executeHandler(t *catalog.Tool, validator *argvalidate.Validator, client *h
 		// bodyclose cannot see through the call.
 		resp, err := client.Do(req)
 		if err != nil {
-			return nil, response.Result{}, errs.Errorf(errs.ClassUpstream, "lotsman: %s %s: %w", t.Method, t.PathTemplate, err)
+			// A transport error can carry the request URL, and an API key may
+			// live in a query parameter.
+			return nil, response.Result{}, redact.Error(
+				errs.Errorf(errs.ClassUpstream, "lotsman: %s %s: %w", t.Method, t.PathTemplate, err))
 		}
 		result, err := response.FromHTTP(resp)
 		if err != nil {
-			return nil, response.Result{}, err
+			return nil, response.Result{}, redact.Error(err)
 		}
 		var res *mcp.CallToolResult
 		if result.IsError {

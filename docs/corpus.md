@@ -7,12 +7,15 @@ ref and a sha256 for each, so these numbers are reproducible or the fetch fails.
 The corpus is not a scoreboard. It exists to answer one question per document: *when lotsman
 refuses, is the reason a design flaw or a feature that has not been written yet?*
 
-| Document | Operations | Supported | Executable (default policy) | Verdict |
-|---|---|---|---|---|
-| Kubernetes `apps/v1` (v1.31.0) | 77 | 65 | 38 | translated |
-| Stripe (v1301) | 559 | 0 | 0 | refused per matrix |
-| DigitalOcean (pinned commit) | — | — | — | refused before parsing |
-| GitLab (v17.5.0-ee) | — | — | — | refused before parsing |
+| Document | Operations | Supported | Executable (default policy) | Catalog | Verdict |
+|---|---|---|---|---|---|
+| Kubernetes `apps/v1` (v1.31.0) | 77 | 65 | 38 | 2.23 MB | translated |
+| DigitalOcean, exploded (pinned commit) | 659 | 631 | 0 (all need auth) | 743 KB | translated |
+| Stripe (v1301) | 559 | 0 | 0 | — | refused per matrix |
+| DigitalOcean, root only | 0 | 0 | 0 | — | every reference refused |
+| GitLab (v17.5.0-ee) | — | — | — | — | refused before parsing |
+
+Numbers below were re-measured after Phase B step 8 (references, normalization, security).
 
 ## Kubernetes `apps/v1` — the reference case
 
@@ -33,7 +36,8 @@ was declared. lotsman now sends JSON for a sole `*/*` or `application/*` and say
 `Content-Type`; a wildcard *alongside* a concrete type is still refused, because then two schemas
 are in play. Supported operations went from 38 to 65.
 
-**Catalog size:** 65 tools serialize to **4.2 MB** of `tools/list` payload. That is the number
+**Catalog size:** 65 tools serialize to **2.23 MB** of `tools/list` payload (4.25 MB before
+references were kept as references — ADR-0009). That is the number
 that decides feature 002: one tool per operation is not viable for Kubernetes at any context
 budget, and `--mode=search` (FR-48) is not an optimization but the only workable mode for specs of
 this shape. The estimate is in every report (`catalog.serializedBytesEstimate`) precisely so this
@@ -56,13 +60,23 @@ Parsing the 5.2 MB document, normalizing it and producing the full report takes 
 
 ## DigitalOcean — the exploded-spec case
 
-Refused before parsing: the root document is a 112 KB index whose `$ref`s point at **662 sibling
-files**. File reference resolution with root confinement is T025; until it exists, resolving one
-means reading a file chosen by an untrusted document, so the closure budget refuses the document as
-a whole rather than emitting 662 identical diagnostics.
+**659 operations, 631 supported, in 0.3 s.** The root is a 112 KB index whose `$ref`s point at 662
+sibling documents; the transitive closure is about 2,900 files and 14 MB, every one of them
+resolved relative to the document that referenced it, expanded through symlinks and checked to be
+inside the spec root before being read (ADR-0009). The parser receives the verified list as an
+allowlist, so the secrets file sitting next to a spec is never opened.
 
-**Found by this run:** the default `MaxRefDocuments` of 64 is an order of magnitude below what a
-real exploded spec needs. T025 should set it from this evidence rather than from intuition.
+The 28 rejections are precise: 21 request bodies using conditional subschemas, 6 path parameters
+declared as unions, one unsupported media type and one invalid parameter. All 631 published tools
+need a bearer credential, so none is executable until the auth stage — which is the honest
+statement about an API that authenticates everything.
+
+**Found by this run:** the closure is far larger than the root suggests — 662 direct references,
+~2,900 documents transitively. `MaxRefDocuments` is now 4,096, set from this measurement.
+
+The root document *alone* is kept in the corpus as its own entry: downloading the index without
+the files it points at is a real mistake, and lotsman answers it with 662 diagnostics that each
+name the missing document and the pointer that asked for it, rather than one confusing failure.
 
 ## GitLab — the wrong-version case
 

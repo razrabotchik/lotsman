@@ -769,3 +769,70 @@ func TestAllowedMutationStillValidatesItsBody(t *testing.T) {
 		t.Fatalf("RoundTrip calls = %d, want zero", transport.calls)
 	}
 }
+
+// A recursive schema has to survive the whole publication path: the SDK
+// resolves the published schema, lotsman compiles the same document for
+// validation, and both must handle "#/$defs" without inlining anything.
+func TestRecursiveSchemaSurvivesPublicationAndValidation(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	node := domain.Schema{
+		"type": "object",
+		"properties": map[string]any{
+			"label": map[string]any{"type": "string"},
+			"child": map[string]any{"$ref": "#/$defs/Node"},
+		},
+		"required":             []any{"label"},
+		"additionalProperties": false,
+	}
+	op := domain.Operation{
+		Key: "ns:POST:/nodes", Method: "POST", PathTemplate: "/nodes", Servers: []string{srv.URL},
+		Effect: domain.EffectDecision{Effect: domain.EffectUnknown},
+		Input: domain.InputModel{
+			Body: &domain.BodySpec{MediaType: "application/json", Required: true,
+				Schema: domain.Schema{"$ref": "#/$defs/Node"}},
+			Defs: domain.SchemaDefs{"Node": node},
+		},
+		Support: domain.SupportStatus{Level: domain.SupportSupported},
+	}
+	cat := catalog.Build("sha256:test", []domain.Operation{op},
+		catalog.Options{Policy: policy.Config{AllowMutations: true}})
+	session := connect(t, mcpserver.Options{Catalog: &cat, HTTPClient: srv.Client(), BaseURL: srv.URL})
+
+	// A well-formed nested value is accepted and sent.
+	res, err := session.CallTool(t.Context(), &mcp.CallToolParams{
+		Name: cat.Tools[0].Name,
+		Arguments: map[string]any{"body": map[string]any{
+			"label": "root",
+			"child": map[string]any{"label": "leaf"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("tools/call: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("a recursive schema broke the call: %+v", res.Content)
+	}
+	if gotBody != `{"child":{"label":"leaf"},"label":"root"}` {
+		t.Errorf("upstream body = %s", gotBody)
+	}
+
+	// And the recursion is validated at depth, not just at the top level.
+	bad, err := session.CallTool(t.Context(), &mcp.CallToolParams{
+		Name: cat.Tools[0].Name,
+		Arguments: map[string]any{"body": map[string]any{
+			"label": "root",
+			"child": map[string]any{"nope": true},
+		}},
+	})
+	if err == nil && !bad.IsError {
+		t.Error("an invalid nested node was accepted")
+	}
+}

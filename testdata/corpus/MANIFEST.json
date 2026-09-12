@@ -2,9 +2,10 @@
   "_comment": [
     "Vendor corpus for the M0 gate (T022) and the corpus smoke test (T028).",
     "The documents themselves are not committed: they are megabytes of someone",
-    "else's API and they change upstream. Each entry pins an immutable ref and",
-    "the sha256 of the bytes at that ref, so `make corpus` either reproduces",
-    "exactly what these numbers were measured against or fails loudly.",
+    "else's API and they change upstream. Each entry pins an immutable ref --",
+    "a sha256 for a single file, a commit for an exploded specification -- so",
+    "`make corpus` either reproduces exactly what these numbers were measured",
+    "against or fails loudly.",
     "Expectations are what lotsman reports today, not what it should report:",
     "a change here is a deliberate answer to 'did support move, and which way?'"
   ],
@@ -21,7 +22,9 @@
         "found": 77,
         "supported": 65,
         "rejected": 12,
-        "byReason": ["unsupported_media_type"]
+        "byReason": [
+          "unsupported_media_type"
+        ]
       }
     },
     {
@@ -36,7 +39,10 @@
         "found": 559,
         "supported": 0,
         "rejected": 559,
-        "byReason": ["unsupported_media_type", "unsupported_parameter_style"]
+        "byReason": [
+          "unsupported_media_type",
+          "unsupported_parameter_style"
+        ]
       }
     },
     {
@@ -45,10 +51,13 @@
       "url": "https://raw.githubusercontent.com/DigitalOcean/openapi/87e82da6548bb4df718745c241b66061185e2d0c/specification/DigitalOcean-public.v2.yaml",
       "digest": "sha256:4ce7b0b809e1029ad24420f5dcd5c550120f06f54388178a7fdf944ef880ffc0",
       "bytes": 111890,
-      "note": "Exploded spec: the root is an index of 662 sibling documents. File $ref resolution lands with T025.",
+      "note": "Exploded spec, root document only -- the case of downloading the index and none of the 662 files it points at. Every reference is refused by name.",
       "expect": {
-        "outcome": "refused",
-        "message": "$ref closure spans 662 documents"
+        "outcome": "reported",
+        "found": 0,
+        "supported": 0,
+        "rejected": 0,
+        "documentIssuesAtLeast": 662
       }
     },
     {
@@ -61,6 +70,25 @@
       "expect": {
         "outcome": "refused",
         "message": "swagger: 2.0"
+      }
+    },
+    {
+      "name": "digitalocean-exploded",
+      "vendor": "DigitalOcean",
+      "repo": "https://github.com/DigitalOcean/openapi.git",
+      "commit": "8041307476bda69ea1640dcf44b220dd653c6808",
+      "spec": "specification/DigitalOcean-public.v2.yaml",
+      "note": "The same specification with its files: a root index over 662 documents whose transitive closure is about 2,900 files and 14 MB. The reference case for confined file $ref resolution (T025).",
+      "expect": {
+        "outcome": "reported",
+        "found": 659,
+        "supported": 631,
+        "rejected": 28,
+        "byReason": [
+          "unsupported_body_schema",
+          "unsupported_parameter_schema",
+          "authentication_not_implemented"
+        ]
       }
     }
   ]

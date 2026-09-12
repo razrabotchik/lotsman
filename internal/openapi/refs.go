@@ -24,6 +24,9 @@ type refScan struct {
 	// parser's (pipeline.md stage 1.1).
 	version string
 	swagger string
+	// files are the confined file references the parser is allowed to read,
+	// relative to the spec root.
+	files []string
 }
 
 // scanRefs enforces the ref closure budget and refuses every reference that
@@ -51,13 +54,28 @@ func scanRefs(specBytes []byte, rootPath string, limits Limits) (*refScan, error
 	// but the aggregate is bounded first: a spec that fans out to hundreds of
 	// files is refused as a whole, not one diagnostic at a time.
 	scan := &refScan{documents: 1, bytes: int64(len(specBytes)), version: scanVersion.openapi, swagger: scanVersion.swagger}
-	external := make(map[string]bool)
-	for _, ref := range refs {
-		if doc := externalDocument(ref.value); doc != "" {
-			external[doc] = true
+
+	// File references are followed only inside the directory the document came
+	// from, and only for documents that actually exist there; the closure is
+	// budgeted as it is walked. Everything else -- remote references, paths
+	// that escape the root, a spec read from stdin that has no root at all --
+	// is refused by name.
+	files, err := resolveClosure(specBytes, rootPath, refs, limits)
+	if err != nil {
+		return nil, err
+	}
+	scan.files = files.files
+	scan.documents = 1 + len(files.files)
+	scan.bytes = files.bytes
+	scan.diagnostics = append(scan.diagnostics, files.diagnostics...)
+	if rootPath == "" {
+		for _, ref := range refs {
+			if externalDocument(ref.value) != "" {
+				scan.diagnostics = append(scan.diagnostics, diagnostic(domain.ReasonExternalRefUnsupported, ref,
+					"reference leaves the document, and a spec read from stdin has no directory to resolve it against"))
+			}
 		}
 	}
-	scan.documents += len(external)
 	if scan.documents > limits.maxRefDocuments() {
 		return nil, errs.Errorf(errs.ClassUnsupported,
 			"openapi: $ref closure spans %d documents, limit is %d", scan.documents, limits.maxRefDocuments())
@@ -70,15 +88,7 @@ func scanRefs(specBytes []byte, rootPath string, limits Limits) (*refScan, error
 	depths := make(map[*yaml.Node]int)
 	for _, ref := range refs {
 		if !strings.HasPrefix(ref.value, "#") {
-			scan.diagnostics = append(scan.diagnostics, domain.Diagnostic{
-				Severity: domain.SeverityError,
-				Code:     domain.ReasonExternalRefUnsupported,
-				Pointer:  ref.pointer,
-				Line:     ref.node.Line,
-				Col:      ref.node.Column,
-				Message:  externalRefMessage(rootPath),
-			})
-			continue
+			continue // handled by the closure walk above
 		}
 		depth := chainDepth(&root, ref.value, depths, make(map[*yaml.Node]bool))
 		if depth > scan.maxDepth {
@@ -110,7 +120,7 @@ func attachRefDiagnostics(operations []domain.Operation, diagnostics []domain.Di
 		scope := operationPointer(op.Method, op.PathTemplate) + "/"
 		shared := "#/paths/" + pointerEscape(op.PathTemplate) + "/"
 		for _, d := range diagnostics {
-			if d.Code != domain.ReasonExternalRefUnsupported {
+			if !refRefusal(d.Code) {
 				continue
 			}
 			// A reference on the path item (its own $ref, or its shared
@@ -122,8 +132,20 @@ func attachRefDiagnostics(operations []domain.Operation, diagnostics []domain.Di
 			}
 			op.Diagnostics = append(op.Diagnostics, d)
 			op.Support.Level = domain.SupportRejected
-			op.Support.Reasons = appendReason(op.Support.Reasons, domain.ReasonExternalRefUnsupported)
+			op.Support.Reasons = appendReason(op.Support.Reasons, d.Code)
 		}
+	}
+}
+
+// refRefusal reports whether a diagnostic code means a reference lotsman
+// would not follow. All three are attributed to the operation that contains
+// the reference, because the operation is what a reader has to act on.
+func refRefusal(code domain.ReasonCode) bool {
+	switch code {
+	case domain.ReasonExternalRefUnsupported, domain.ReasonRefOutsideRoot, domain.ReasonRefUnresolvable:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -154,16 +176,6 @@ func externalDocument(ref string) string {
 		return ref[:hash]
 	}
 	return ref
-}
-
-// externalRefMessage explains the refusal in terms of the source the document
-// actually came from: a spec read from stdin has no directory to resolve a
-// relative reference against, so no future policy can make one resolvable.
-func externalRefMessage(rootPath string) string {
-	if rootPath == "" {
-		return "reference leaves the document, and a spec read from stdin has no directory to resolve it against"
-	}
-	return "reference leaves the root document; file and remote $ref resolution is disabled"
 }
 
 // documentVersion is the version declaration read straight from the root

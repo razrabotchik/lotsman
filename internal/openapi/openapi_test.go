@@ -260,7 +260,8 @@ paths:
 
 // Cookie parameters enumerate and publish a schema but cannot be written to
 // the wire yet, so they block execution; path, query and header parameters do
-// not. Authentication is still unimplemented and blocks on its own.
+// not. Whether credentials are available is a configuration question and is
+// decided by the catalog, so it is not a blocker in the IR.
 func TestParseMarksUnsupportedRuntimeCapabilitiesAsExecutionBlockers(t *testing.T) {
 	const spec = `
 openapi: 3.0.3
@@ -290,10 +291,7 @@ components:
 	if op.Executable() {
 		t.Fatal("operation with unimplemented parameters/body/auth is executable")
 	}
-	want := []domain.ReasonCode{
-		domain.ReasonParametersNotImplemented,
-		domain.ReasonAuthenticationNotImplemented,
-	}
+	want := []domain.ReasonCode{domain.ReasonParametersNotImplemented}
 	if len(op.ExecutionBlockers) != len(want) {
 		t.Fatalf("ExecutionBlockers = %v, want %v", op.ExecutionBlockers, want)
 	}

@@ -9,9 +9,11 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/razrabotchik/lotsman/internal/auth"
 	"github.com/razrabotchik/lotsman/internal/domain"
 	"github.com/razrabotchik/lotsman/internal/errs"
 	"github.com/razrabotchik/lotsman/internal/policy"
+	"github.com/razrabotchik/lotsman/internal/redact"
 )
 
 // operations implements `lotsman operations SPEC [--rejected]` (T008):
@@ -23,6 +25,7 @@ func operations(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	rejectedOnly := fs.Bool("rejected", false, "show only rejected operations")
 	supportedOnly := fs.Bool("supported", false, "show only supported operations")
 	allowMutations := fs.Bool("allow-mutations", false, "evaluate as if mutations were enabled at serve time")
+	configPath := fs.String("config", "", "configuration file (auth profiles, execution settings)")
 	spec, err := parseWithTrailingSpec(fs, args)
 	if err != nil {
 		return exitUsage
@@ -39,7 +42,7 @@ func operations(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	// A one-shot CLI command has no long-running session to tune verbosity
 	// for; only libopenapi's own error/warning logs and spec diagnostics
 	// land here.
-	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	logger := slog.New(redact.NewHandler(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelWarn})))
 
 	doc, err := parseSpec(ctx, spec, logger)
 	if err != nil {
@@ -50,7 +53,13 @@ func operations(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	// EXECUTABLE answers the operator's actual question -- would this run? --
 	// so it accounts for policy as well as capability, under the same default
 	// (read-only) the server uses.
-	policyConfig := policy.Config{AllowMutations: *allowMutations}
+	runtime, err := resolveConfig(*configPath, fs, *allowMutations, false, "")
+	if err != nil {
+		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
+		return exitUsage
+	}
+	policyConfig := policy.Config{AllowMutations: runtime.AllowMutations}
+	profiles := auth.NewProfiles(runtime.AuthProfiles)
 
 	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "METHOD\tPATH\tOPERATION ID\tEFFECT\tSUPPORT\tEXECUTABLE\tREASONS")
@@ -72,9 +81,13 @@ func operations(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		if !verdict.Allowed {
 			reasons = append(reasons, verdict.Reason)
 		}
+		credentials := auth.Select(op.Security, profiles)
+		if !credentials.Bound() {
+			reasons = append(reasons, credentials.Reason)
+		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%t\t%s\n",
 			op.Method, op.PathTemplate, orDash(op.SourceOperationID), op.Effect.Effect,
-			op.Support.Level, op.Executable() && verdict.Allowed, joinReasons(reasons))
+			op.Support.Level, op.Executable() && verdict.Allowed && credentials.Bound(), joinReasons(reasons))
 	}
 	if err := tw.Flush(); err != nil {
 		fmt.Fprintf(stderr, "lotsman: %v\n", err)

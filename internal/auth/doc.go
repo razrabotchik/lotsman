@@ -1,6 +1,7 @@
-// Package auth applies credentials to an outgoing request as the last
-// RoundTripper before the wire.
+// Package auth presents credentials to the upstream API.
 //
-// apiKey/basic/bearer providers, SecretRef resolution at call time, redaction
-// helpers.
+// It is the last thing to touch a request before the wire (pipeline stage 7):
+// every other layer -- logging, policy, egress -- sees the request without the
+// credential in it, which is what keeps a token out of a trace by construction
+// rather than by remembering to redact it.
 package auth

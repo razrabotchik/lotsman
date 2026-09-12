@@ -8,14 +8,19 @@ requires a version bump of the report schema.
 ```text
 lotsman serve SPEC [--config FILE] [--base-url URL] [--mode tools] [--lax]
                    [--read-only | --allow-mutations] [--log-level info] [--transport stdio]
-lotsman inspect SPEC [--json] [--allow-mutations] [--fail-on-rejected]
+lotsman inspect SPEC [--config FILE] [--json] [--allow-mutations] [--fail-on-rejected]
 lotsman validate SPEC
-lotsman operations SPEC [--supported|--rejected] [--allow-mutations]
+lotsman operations SPEC [--config FILE] [--supported|--rejected] [--allow-mutations]
 lotsman explain-call OPERATION_KEY --args FILE [--config FILE]
 lotsman version [--json]
 ```
 
 SPEC: file path or `-` (stdin). stdout of `serve` carries MCP protocol ONLY; humans read stderr.
+
+`--config` carries auth profiles and execution settings (docs/spec.md 5.1). Precedence is
+defaults < file < environment < flags (FR-62); a flag that was not given never overrides the file
+with a zero value. Secrets are outside that model: only the reference is configured, and a literal
+value is refused at load time without being echoed.
 
 `serve` is read-only by default: only operations whose effect is `read` execute, and
 `--allow-mutations` is required for anything else (FR-40/41). Every *supported* operation is

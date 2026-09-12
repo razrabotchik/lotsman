@@ -7,7 +7,6 @@ import (
 	"github.com/pb33f/libopenapi/datamodel/high/base"
 	v3 "github.com/pb33f/libopenapi/datamodel/high/v3"
 	"github.com/pb33f/libopenapi/orderedmap"
-	yaml "go.yaml.in/yaml/v4"
 
 	"github.com/razrabotchik/lotsman/internal/domain"
 )
@@ -53,7 +52,7 @@ type inputBuild struct {
 // buildInput normalizes merged path+operation parameters into the IR's input
 // model, resolving the location-dependent style/explode defaults and refusing
 // everything it cannot serialize exactly.
-func buildInput(merged map[paramKey]*v3.Parameter, pointer string) inputBuild {
+func buildInput(merged map[paramKey]*v3.Parameter, pointer string, defs *bundle) inputBuild {
 	var out inputBuild
 
 	for _, key := range sortedParamKeys(merged) {
@@ -92,7 +91,7 @@ func buildInput(merged map[paramKey]*v3.Parameter, pointer string) inputBuild {
 			continue
 		}
 
-		schema, reason := parameterSchema(source)
+		schema, reason := parameterSchema(source, defs)
 		if reason != "" {
 			out.reject(reason, paramPointer,
 				fmt.Sprintf("parameter %q in %q: %s", key.name, in, schemaReasonText(reason)))
@@ -168,208 +167,12 @@ func sortedParamKeys(merged map[paramKey]*v3.Parameter) []paramKey {
 
 // parameterSchema converts a parameter's OAS schema into the JSON Schema
 // 2020-12 fragment published to the client, or returns the reason it cannot.
-func parameterSchema(p *v3.Parameter) (domain.Schema, domain.ReasonCode) {
+func parameterSchema(p *v3.Parameter, defs *bundle) (domain.Schema, domain.ReasonCode) {
 	if p.Schema == nil {
 		if orderedmap.Len(p.Content) > 0 {
 			return nil, domain.ReasonUnsupportedMediaType
 		}
 		return nil, domain.ReasonInvalidParameter
 	}
-	schema := p.Schema.Schema()
-	if schema == nil {
-		return nil, domain.ReasonInvalidSchema
-	}
-	return convertSchema(schema, true)
-}
-
-// convertSchema translates the scalar/array subset a path or query value can
-// carry. Composition, objects and nested arrays are refused rather than
-// half-translated: a value lotsman cannot serialize exactly must not become a
-// tool argument (Principle I).
-//
-// The two OAS 3.0 constructs that would otherwise emit invalid 2020-12 --
-// `nullable` and boolean exclusive bounds -- are translated here for the
-// parameter subset; T023 does the same for body and response schemas.
-func convertSchema(schema *base.Schema, allowArray bool) (domain.Schema, domain.ReasonCode) {
-	if hasComposition(schema) {
-		return nil, domain.ReasonUnsupportedParameterSchema
-	}
-
-	types := append([]string(nil), schema.Type...)
-	if len(types) == 0 {
-		return nil, domain.ReasonUnsupportedParameterSchema
-	}
-	for _, t := range types {
-		switch t {
-		case "string", "number", "integer", "boolean", "null":
-		case "array":
-			if !allowArray {
-				return nil, domain.ReasonUnsupportedParameterSchema
-			}
-		default: // object, or a type OAS does not define
-			return nil, domain.ReasonUnsupportedParameterSchema
-		}
-	}
-	if schema.Nullable != nil && *schema.Nullable && !contains(types, "null") {
-		types = append(types, "null")
-	}
-
-	out := domain.Schema{}
-	if len(types) == 1 {
-		out["type"] = types[0]
-	} else {
-		out["type"] = anySlice(types)
-	}
-
-	if contains(types, "array") {
-		if schema.Items == nil || !schema.Items.IsA() || schema.Items.A == nil {
-			return nil, domain.ReasonUnsupportedParameterSchema
-		}
-		item := schema.Items.A.Schema()
-		if item == nil {
-			return nil, domain.ReasonInvalidSchema
-		}
-		converted, reason := convertSchema(item, false)
-		if reason != "" {
-			return nil, reason
-		}
-		out["items"] = map[string]any(converted)
-	}
-
-	copyAnnotations(schema, out)
-	copyStringConstraints(schema, out)
-	copyNumericConstraints(schema, out)
-	copyArrayConstraints(schema, out)
-	return out, ""
-}
-
-func hasComposition(schema *base.Schema) bool {
-	return len(schema.AllOf) > 0 || len(schema.OneOf) > 0 || len(schema.AnyOf) > 0 ||
-		len(schema.PrefixItems) > 0 || schema.Not != nil || schema.If != nil ||
-		schema.Then != nil || schema.Else != nil ||
-		orderedmap.Len(schema.Properties) > 0 || orderedmap.Len(schema.PatternProperties) > 0
-}
-
-func copyAnnotations(schema *base.Schema, out domain.Schema) {
-	if schema.Title != "" {
-		out["title"] = schema.Title
-	}
-	// Description is copied as authored: it is untrusted text bound for an LLM
-	// context, and the catalog sanitizes it when it builds the tool schema.
-	if schema.Description != "" {
-		out["description"] = schema.Description
-	}
-	if schema.Format != "" {
-		out["format"] = schema.Format
-	}
-	if len(schema.Enum) > 0 {
-		values := make([]any, 0, len(schema.Enum))
-		for _, node := range schema.Enum {
-			values = append(values, decodeNode(node))
-		}
-		out["enum"] = values
-	}
-	if schema.Const != nil {
-		out["const"] = decodeNode(schema.Const)
-	}
-	if schema.Default != nil {
-		// Published for the model to see; never applied silently (FR-24).
-		out["default"] = decodeNode(schema.Default)
-	}
-}
-
-func copyStringConstraints(schema *base.Schema, out domain.Schema) {
-	if schema.Pattern != "" {
-		// Safe to publish and to compile: Go's regexp is RE2, so a hostile
-		// pattern cannot backtrack the validator into a hang.
-		out["pattern"] = schema.Pattern
-	}
-	if schema.MinLength != nil {
-		out["minLength"] = *schema.MinLength
-	}
-	if schema.MaxLength != nil {
-		out["maxLength"] = *schema.MaxLength
-	}
-}
-
-// copyNumericConstraints translates both spellings of exclusive bounds: OAS
-// 3.0's boolean modifier on minimum/maximum, and 2020-12's standalone numeric
-// keyword (pitfall #6).
-func copyNumericConstraints(schema *base.Schema, out domain.Schema) {
-	if schema.MultipleOf != nil {
-		out["multipleOf"] = *schema.MultipleOf
-	}
-	exclusiveMin, minIsExclusive := exclusiveBound(schema.ExclusiveMinimum, schema.Minimum)
-	if exclusiveMin != nil {
-		out["exclusiveMinimum"] = *exclusiveMin
-	}
-	if schema.Minimum != nil && !minIsExclusive {
-		out["minimum"] = *schema.Minimum
-	}
-	exclusiveMax, maxIsExclusive := exclusiveBound(schema.ExclusiveMaximum, schema.Maximum)
-	if exclusiveMax != nil {
-		out["exclusiveMaximum"] = *exclusiveMax
-	}
-	if schema.Maximum != nil && !maxIsExclusive {
-		out["maximum"] = *schema.Maximum
-	}
-}
-
-// exclusiveBound returns the numeric exclusive bound and whether it consumed
-// the companion inclusive bound (the OAS 3.0 form).
-func exclusiveBound(value *base.DynamicValue[bool, float64], inclusive *float64) (*float64, bool) {
-	if value == nil {
-		return nil, false
-	}
-	if value.IsB() {
-		bound := value.B
-		return &bound, false
-	}
-	if value.A && inclusive != nil {
-		bound := *inclusive
-		return &bound, true
-	}
-	return nil, false
-}
-
-func copyArrayConstraints(schema *base.Schema, out domain.Schema) {
-	if schema.MinItems != nil {
-		out["minItems"] = *schema.MinItems
-	}
-	if schema.MaxItems != nil {
-		out["maxItems"] = *schema.MaxItems
-	}
-	if schema.UniqueItems != nil {
-		out["uniqueItems"] = *schema.UniqueItems
-	}
-}
-
-// decodeNode turns a YAML scalar node into the Go value it represents, so the
-// published schema carries JSON values rather than YAML syntax.
-func decodeNode(node *yaml.Node) any {
-	if node == nil {
-		return nil
-	}
-	var value any
-	if err := node.Decode(&value); err != nil {
-		return node.Value
-	}
-	return value
-}
-
-func contains(values []string, want string) bool {
-	for _, v := range values {
-		if v == want {
-			return true
-		}
-	}
-	return false
-}
-
-func anySlice(values []string) []any {
-	out := make([]any, len(values))
-	for i, v := range values {
-		out[i] = v
-	}
-	return out
+	return defs.normalizeProxy(p.Schema, parameterTarget, 0, map[*base.Schema]bool{})
 }

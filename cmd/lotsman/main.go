@@ -15,13 +15,16 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/razrabotchik/lotsman/internal/auth"
 	"github.com/razrabotchik/lotsman/internal/buildinfo"
 	"github.com/razrabotchik/lotsman/internal/catalog"
+	"github.com/razrabotchik/lotsman/internal/config"
 	"github.com/razrabotchik/lotsman/internal/domain"
 	"github.com/razrabotchik/lotsman/internal/errs"
 	"github.com/razrabotchik/lotsman/internal/mcpserver"
 	"github.com/razrabotchik/lotsman/internal/openapi"
 	"github.com/razrabotchik/lotsman/internal/policy"
+	"github.com/razrabotchik/lotsman/internal/redact"
 	"github.com/razrabotchik/lotsman/internal/specsource"
 )
 
@@ -58,6 +61,7 @@ Flags:
   --lax                  serve supported subset; strict mode is the default
   --read-only            serve: only read operations execute (the default)
   --allow-mutations      serve: let write/destructive/unknown operations execute
+  --config FILE          serve, inspect, operations: auth profiles and execution settings
 `
 
 func main() {
@@ -100,6 +104,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 	lax := fs.Bool("lax", false, "serve the supported subset when individual operations are rejected")
 	allowMutations := fs.Bool("allow-mutations", false, "allow non-read operations to execute (FR-41)")
 	readOnly := fs.Bool("read-only", false, "state the default explicitly: only read operations execute")
+	configPath := fs.String("config", "", "configuration file (auth profiles, execution settings)")
 	spec, err := parseWithTrailingSpec(fs, args)
 	if err != nil {
 		return exitUsage
@@ -115,13 +120,17 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 		return exitUsage
 	}
 
-	// Read-only is the default; the flag exists so an operator can write it
-	// down, and so a config that enables mutations can be overridden back.
-	policyConfig := policy.Config{AllowMutations: *allowMutations && !*readOnly}
+	runtime, err := resolveConfig(*configPath, fs, *allowMutations, *readOnly, *baseURL)
+	if err != nil {
+		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
+		return exitUsage
+	}
+	policyConfig := policy.Config{AllowMutations: runtime.AllowMutations}
+	profiles := auth.NewProfiles(runtime.AuthProfiles)
 
-	opts := mcpserver.Options{Logger: logger, BaseURL: *baseURL}
+	opts := mcpserver.Options{Logger: logger, BaseURL: runtime.BaseURL}
 	if spec != "" {
-		cat, err := loadCatalog(ctx, spec, logger, *lax, policyConfig)
+		cat, err := loadCatalog(ctx, spec, logger, *lax, catalog.Options{Policy: policyConfig, Auth: profiles})
 		if err != nil {
 			logger.Error("load spec failed", "class", string(errs.ClassOf(err)), "error", err)
 			return exitError
@@ -138,7 +147,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 
 // loadCatalog runs pipeline stages 0-4 (specsource, openapi, catalog) for
 // `serve SPEC`.
-func loadCatalog(ctx context.Context, spec string, logger *slog.Logger, lax bool, policyConfig policy.Config) (*catalog.Catalog, error) {
+func loadCatalog(ctx context.Context, spec string, logger *slog.Logger, lax bool, opts catalog.Options) (*catalog.Catalog, error) {
 	doc, err := parseSpec(ctx, spec, logger)
 	if err != nil {
 		return nil, err
@@ -153,11 +162,52 @@ func loadCatalog(ctx context.Context, spec string, logger *slog.Logger, lax bool
 			}
 		}
 	}
-	cat := catalog.Build(doc.digest, doc.Operations, catalog.Options{Policy: policyConfig})
+	cat := catalog.Build(doc.digest, doc.Operations, opts)
 	if len(cat.Tools) == 0 {
 		return nil, errs.Errorf(errs.ClassUnsupported, "spec contains zero supported operations")
 	}
 	return &cat, nil
+}
+
+// maxLoggedDiagnostics bounds how many spec diagnostics reach the log.
+const maxLoggedDiagnostics = 10
+
+// resolveConfig applies the documented precedence: defaults < file <
+// environment < flags (FR-62). A flag that was not given must not override the
+// file with its zero value, which is why the overrides carry pointers.
+func resolveConfig(path string, fs *flag.FlagSet, allowMutations, readOnly bool, baseURL string) (config.Runtime, error) {
+	var file *config.File
+	if path != "" {
+		loaded, err := config.Load(path)
+		if err != nil {
+			return config.Runtime{}, err
+		}
+		file = loaded
+	}
+
+	overrides := config.Overrides{}
+	if wasSet(fs, "allow-mutations") || wasSet(fs, "read-only") {
+		effective := allowMutations && !readOnly
+		overrides.AllowMutations = &effective
+	}
+	if wasSet(fs, "base-url") {
+		overrides.BaseURL = &baseURL
+	}
+
+	environment := config.Environment{BaseURL: os.Getenv("LOTSMAN_BASE_URL")}
+	return config.Resolve(file, environment, overrides), nil
+}
+
+// wasSet reports whether a flag was given on the command line, which is what
+// separates "set to false" from "not mentioned".
+func wasSet(fs *flag.FlagSet, name string) bool {
+	var set bool
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			set = true
+		}
+	})
+	return set
 }
 
 // specDoc pairs the parsed IR with the digest of the bytes it came from,
@@ -183,9 +233,21 @@ func parseSpec(ctx context.Context, spec string, logger *slog.Logger) (*specDoc,
 	if err != nil {
 		return nil, err
 	}
-	for _, d := range doc.Diagnostics {
+	// One exploded specification can produce hundreds of identical-looking
+	// diagnostics. The log carries the first few with their provenance; the
+	// full list is what `inspect` is for.
+	for i, d := range doc.Diagnostics {
+		if i == maxLoggedDiagnostics {
+			logger.LogAttrs(ctx, slog.LevelError, "more spec diagnostics suppressed",
+				slog.Int("remaining", len(doc.Diagnostics)-i),
+				slog.String("hint", "run `lotsman inspect SPEC --json` for the full list"))
+			break
+		}
 		logger.LogAttrs(ctx, diagnosticLevel(d.Severity), "spec diagnostic",
-			slog.String("severity", string(d.Severity)), slog.String("message", d.Message))
+			slog.String("severity", string(d.Severity)),
+			slog.String("code", string(d.Code)),
+			slog.String("pointer", d.Pointer),
+			slog.String("message", d.Message))
 	}
 	return &specDoc{Document: doc, digest: src.Digest}, nil
 }
@@ -235,7 +297,10 @@ func newLogger(stderr io.Writer, level string) (*slog.Logger, error) {
 	if err := lvl.UnmarshalText([]byte(strings.ToLower(level))); err != nil {
 		return nil, errs.Errorf(errs.ClassUsage, "invalid --log-level %q: want debug|info|warn|error", level)
 	}
-	return slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: lvl})), nil
+	// Redaction wraps the outermost handler: whatever any package logs, and
+	// however it got there, the bytes leaving the process pass through it
+	// (FR-61).
+	return slog.New(redact.NewHandler(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: lvl}))), nil
 }
 
 func envOr(key, fallback string) string {

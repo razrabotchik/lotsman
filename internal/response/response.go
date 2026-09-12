@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"github.com/razrabotchik/lotsman/internal/redact"
 )
 
 // MaxBodyBytes bounds how much of a response body is read into memory
@@ -38,9 +40,13 @@ func FromHTTP(resp *http.Response) (Result, error) {
 		return Result{}, fmt.Errorf("response: read body: %w", err)
 	}
 	return Result{
-		Status:      resp.StatusCode,
-		ContentType: resp.Header.Get("Content-Type"),
-		Body:        string(body),
+		Status: resp.StatusCode,
+		// An upstream is entitled to echo a credential back -- some APIs
+		// return the token they were given, and a 401 body often quotes the
+		// header it rejected. Whatever the reason, a value lotsman resolved
+		// must not travel on into a model's context (FR-61, pitfall #14).
+		ContentType: redact.String(resp.Header.Get("Content-Type")),
+		Body:        redact.String(string(body)),
 		IsError:     resp.StatusCode >= http.StatusBadRequest,
 	}, nil
 }
