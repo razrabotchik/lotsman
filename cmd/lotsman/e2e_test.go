@@ -437,3 +437,170 @@ func TestServeMutationPolicyEndToEnd(t *testing.T) {
 		}
 	})
 }
+
+// TestServeSearchModeEndToEnd is feature 002's checkpoint over the real
+// transport: a catalog published as five tools, searched, described and called,
+// with the mutation gate behaving exactly as it does in tools mode (T111).
+func TestServeSearchModeEndToEnd(t *testing.T) {
+	bin := buildBinary(t)
+	ctx := t.Context()
+
+	type received struct{ method, uri, body string }
+	requests := make(chan received, 8)
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := make([]byte, r.ContentLength)
+		if r.ContentLength > 0 {
+			_, _ = r.Body.Read(body)
+		}
+		requests <- received{method: r.Method, uri: r.URL.RequestURI(), body: string(body)}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":"p-1"}`))
+	}))
+	defer api.Close()
+
+	open := func(t *testing.T, extra ...string) *mcp.ClientSession {
+		t.Helper()
+		args := append([]string{"serve", miniSpecPath(t), "--lax", "--mode=search",
+			"--base-url", api.URL, "--log-level", "warn"}, extra...)
+		cmd := exec.Command(bin, args...)
+		var stderr syncBuffer
+		cmd.Stderr = &stderr
+
+		client := mcp.NewClient(&mcp.Implementation{Name: "search-e2e", Version: "v0"}, nil)
+		session, err := client.Connect(ctx, &mcp.CommandTransport{Command: cmd, TerminateDuration: 5 * time.Second}, nil)
+		if err != nil {
+			t.Fatalf("connect: %v\nstderr:\n%s", err, stderr.String())
+		}
+		t.Cleanup(func() {
+			if closeErr := session.Close(); closeErr != nil {
+				t.Errorf("close: %v", closeErr)
+			}
+		})
+		return session
+	}
+
+	t.Run("five tools, search, describe, read call", func(t *testing.T) {
+		session := open(t)
+
+		tools, err := session.ListTools(ctx, nil)
+		if err != nil {
+			t.Fatalf("tools/list: %v", err)
+		}
+		names := map[string]bool{}
+		for _, tool := range tools.Tools {
+			names[tool.Name] = true
+		}
+		for _, want := range []string{"ping", "search_operations", "list_tags", "describe_operation", "call_read_operation"} {
+			if !names[want] {
+				t.Errorf("%s missing: %v", want, names)
+			}
+		}
+		if names["get_pet"] || names["call_mutating_operation"] {
+			t.Errorf("unexpected tools published: %v", names)
+		}
+
+		// Search, then describe, then call -- the path a model actually walks.
+		found, err := session.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "search_operations",
+			Arguments: map[string]any{"query": "get a pet by id"},
+		})
+		if err != nil || found.IsError {
+			t.Fatalf("search_operations: %v %+v", err, found.Content)
+		}
+		var search struct {
+			Results []struct {
+				Key    string `json:"key"`
+				Effect string `json:"effect"`
+			} `json:"results"`
+		}
+		decodeStructured(t, found, &search)
+		if len(search.Results) == 0 {
+			t.Fatal("search found nothing")
+		}
+		id := search.Results[0].Key
+		if id != "default:GET:/pets/{petId}" {
+			t.Errorf("top hit = %q", id)
+		}
+
+		described, err := session.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "describe_operation",
+			Arguments: map[string]any{"id": id},
+		})
+		if err != nil || described.IsError {
+			t.Fatalf("describe_operation: %v %+v", err, described.Content)
+		}
+		var describe struct {
+			Callable    bool           `json:"callable"`
+			InputSchema map[string]any `json:"inputSchema"`
+		}
+		decodeStructured(t, described, &describe)
+		if !describe.Callable || describe.InputSchema == nil {
+			t.Fatalf("describe = %+v", describe)
+		}
+
+		called, err := session.CallTool(ctx, &mcp.CallToolParams{
+			Name: "call_read_operation",
+			Arguments: map[string]any{
+				"id":        id,
+				"arguments": map[string]any{"path": map[string]any{"petId": "p 1/2"}},
+			},
+		})
+		if err != nil || called.IsError {
+			t.Fatalf("call_read_operation: %v %+v", err, called.Content)
+		}
+		got := <-requests
+		if got.method != http.MethodGet || got.uri != "/pets/p%201%2F2" {
+			t.Errorf("upstream received %+v", got)
+		}
+	})
+
+	t.Run("mutation blocked by default", func(t *testing.T) {
+		session := open(t)
+		res, err := session.CallTool(ctx, &mcp.CallToolParams{
+			Name: "call_read_operation",
+			Arguments: map[string]any{
+				"id":        "default:POST:/pets",
+				"arguments": map[string]any{"body": map[string]any{"name": "Murka"}},
+			},
+		})
+		if err == nil && !res.IsError {
+			t.Fatal("a POST was called through call_read_operation")
+		}
+		select {
+		case got := <-requests:
+			t.Fatalf("upstream was called: %+v", got)
+		default:
+		}
+	})
+
+	t.Run("mutation executes when allowed", func(t *testing.T) {
+		session := open(t, "--allow-mutations")
+		res, err := session.CallTool(ctx, &mcp.CallToolParams{
+			Name: "call_mutating_operation",
+			Arguments: map[string]any{
+				"id":        "default:POST:/pets",
+				"arguments": map[string]any{"body": map[string]any{"name": "Murka"}},
+			},
+		})
+		if err != nil || res.IsError {
+			t.Fatalf("call_mutating_operation: %v %+v", err, res.Content)
+		}
+		got := <-requests
+		if got.method != http.MethodPost || got.body != `{"name":"Murka"}` {
+			t.Errorf("upstream received %+v", got)
+		}
+	})
+}
+
+// decodeStructured reads a tool result's structured content into target.
+func decodeStructured(t *testing.T, res *mcp.CallToolResult, target any) {
+	t.Helper()
+	raw, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, target); err != nil {
+		t.Fatalf("decode %s: %v", raw, err)
+	}
+}

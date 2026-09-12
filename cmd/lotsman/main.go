@@ -198,7 +198,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 			logger.Error("load spec failed", "class", string(errs.ClassOf(err)), "error", err)
 			return exitCode(err)
 		}
-		warnIfOverBudget(logger, cat)
+		reportMode(logger, cat)
 		opts.Catalog = cat
 	}
 
@@ -236,36 +236,37 @@ func loadCatalog(ctx context.Context, spec string, logger *slog.Logger, lax bool
 // maxLoggedDiagnostics bounds how many spec diagnostics reach the log.
 const maxLoggedDiagnostics = 10
 
-// parseMode validates the requested catalog mode. `search` is accepted as a
-// word and refused as a capability: an operator who asks for it deserves to be
-// told it is not in this release, not to be silently given tools mode.
+// parseMode validates the requested catalog mode.
 func parseMode(requested string) (catalog.Mode, error) {
 	switch catalog.Mode(requested) {
-	case catalog.ModeTools, catalog.ModeAuto:
+	case catalog.ModeTools, catalog.ModeSearch, catalog.ModeAuto:
 		return catalog.Mode(requested), nil
-	case catalog.ModeSearch:
-		return "", errs.Errorf(errs.ClassUnsupported,
-			"--mode=search is not implemented in this release (feature 002); use --mode=tools")
 	default:
 		return "", errs.Errorf(errs.ClassUsage, "--mode %q is not tools, search or auto", requested)
 	}
 }
 
-// warnIfOverBudget says out loud what the report records: this catalog is
-// bigger than a model's context budget, and the mode that would fix it does
-// not exist yet. Serving it anyway is the honest choice -- it works today --
-// but doing so quietly would not be.
-func warnIfOverBudget(logger *slog.Logger, cat *catalog.Catalog) {
+// reportMode says out loud which mode is in force and why. A catalog served as
+// tools while the measurement asks for search is a choice an operator may make
+// deliberately -- but not one lotsman should make quietly.
+func reportMode(logger *slog.Logger, cat *catalog.Catalog) {
 	estimate := cat.Report.Estimate
+	attrs := []any{
+		"mode", string(cat.Mode),
+		"tools", estimate.ToolCount,
+		"serialized_bytes", estimate.SerializedBytes,
+		"budget_bytes", estimate.ThresholdBytes,
+	}
 	if !estimate.OverBudget {
+		logger.Info("catalog mode selected", attrs...)
 		return
 	}
-	logger.Warn("catalog exceeds the context budget",
-		slog.Int("serialized_bytes", estimate.SerializedBytes),
-		slog.Int("budget_bytes", estimate.ThresholdBytes),
-		slog.Int("tools", estimate.ToolCount),
-		slog.String("recommended_mode", string(estimate.Recommended)),
-		slog.String("note", "search mode arrives with feature 002; a model may not fit this many tool definitions"))
+	if cat.Mode == catalog.ModeSearch {
+		logger.Info("catalog exceeds the context budget; serving search mode", attrs...)
+		return
+	}
+	logger.Warn("catalog exceeds the context budget and tools mode was requested anyway; "+
+		"a model may not fit this many tool definitions", attrs...)
 }
 
 // resolveConfig applies the documented precedence: defaults < file <
