@@ -161,3 +161,48 @@ func TestReportEstimatesTheToolListPayload(t *testing.T) {
 		t.Error("the estimate must carry the catalog digest it describes")
 	}
 }
+
+// FR-52: the mode is decided on the measured catalog, not on an operation
+// count. 65 Kubernetes tools weigh more than 600 DigitalOcean ones, and a
+// count cannot tell them apart.
+func TestModeIsRecommendedFromTheMeasuredCatalog(t *testing.T) {
+	small := Build("sha256:spec", reportFixture(), Options{}).Report.Estimate
+	if small.OverBudget || small.Recommended != ModeTools {
+		t.Errorf("a small catalog = %+v, want tools mode within budget", small)
+	}
+	if small.ThresholdBytes != DefaultMaxSerializedBytes {
+		t.Errorf("threshold = %d, want the documented default", small.ThresholdBytes)
+	}
+
+	// The same catalog against a budget it cannot fit.
+	tight := Build("sha256:spec", reportFixture(), Options{MaxSerializedBytes: 10}).Report.Estimate
+	if !tight.OverBudget {
+		t.Fatalf("estimate = %+v, want over budget", tight)
+	}
+	if tight.Recommended != ModeSearch {
+		t.Errorf("recommended = %q, want search", tight.Recommended)
+	}
+	// Until search mode exists, the mode in force is still tools -- and the
+	// report says both, because hiding the gap would be the actual failure.
+	if tight.Mode != ModeTools {
+		t.Errorf("mode = %q, want tools until feature 002", tight.Mode)
+	}
+}
+
+// The recommendation must not depend on how the operator spelled the request:
+// asking for `auto` and asking for nothing are the same thing.
+func TestModeRequestDoesNotChangeTheMeasurement(t *testing.T) {
+	ops := reportFixture()
+	auto := Build("sha256:spec", ops, Options{Mode: ModeAuto, MaxSerializedBytes: 10}).Report.Estimate
+	implicit := Build("sha256:spec", ops, Options{MaxSerializedBytes: 10}).Report.Estimate
+	pinned := Build("sha256:spec", ops, Options{Mode: ModeTools, MaxSerializedBytes: 10}).Report.Estimate
+
+	if auto != implicit {
+		t.Errorf("auto = %+v, implicit = %+v", auto, implicit)
+	}
+	// Pinning tools mode does not make the catalog fit: the recommendation is
+	// a measurement, not a preference.
+	if !pinned.OverBudget || pinned.Recommended != ModeSearch {
+		t.Errorf("pinned = %+v, want the recommendation unchanged", pinned)
+	}
+}

@@ -153,6 +153,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 	configPath := fs.String("config", "", "configuration file (auth profiles, execution settings)")
 	allowPrivate := fs.Bool("allow-private-network", false,
 		"permit an allowed origin whose hostname resolves into a private or link-local range")
+	mode := fs.String("mode", string(catalog.ModeAuto), "catalog mode: tools|search|auto")
 	spec, err := parseWithTrailingSpec(fs, args)
 	if err != nil {
 		return exitUsage
@@ -174,6 +175,11 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
 		return exitUsage
 	}
+	catalogMode, err := parseMode(*mode)
+	if err != nil {
+		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
+		return exitCode(err)
+	}
 	policyConfig := policy.Config{AllowMutations: runtime.AllowMutations}
 	profiles := auth.NewProfiles(runtime.AuthProfiles)
 
@@ -186,11 +192,13 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 
 	opts := mcpserver.Options{Logger: logger, BaseURL: runtime.BaseURL, Egress: egressPolicy}
 	if spec != "" {
-		cat, err := loadCatalog(ctx, spec, logger, *lax, catalog.Options{Policy: policyConfig, Auth: profiles})
+		cat, err := loadCatalog(ctx, spec, logger, *lax,
+			catalog.Options{Mode: catalogMode, Policy: policyConfig, Auth: profiles})
 		if err != nil {
 			logger.Error("load spec failed", "class", string(errs.ClassOf(err)), "error", err)
 			return exitCode(err)
 		}
+		warnIfOverBudget(logger, cat)
 		opts.Catalog = cat
 	}
 
@@ -227,6 +235,38 @@ func loadCatalog(ctx context.Context, spec string, logger *slog.Logger, lax bool
 
 // maxLoggedDiagnostics bounds how many spec diagnostics reach the log.
 const maxLoggedDiagnostics = 10
+
+// parseMode validates the requested catalog mode. `search` is accepted as a
+// word and refused as a capability: an operator who asks for it deserves to be
+// told it is not in this release, not to be silently given tools mode.
+func parseMode(requested string) (catalog.Mode, error) {
+	switch catalog.Mode(requested) {
+	case catalog.ModeTools, catalog.ModeAuto:
+		return catalog.Mode(requested), nil
+	case catalog.ModeSearch:
+		return "", errs.Errorf(errs.ClassUnsupported,
+			"--mode=search is not implemented in this release (feature 002); use --mode=tools")
+	default:
+		return "", errs.Errorf(errs.ClassUsage, "--mode %q is not tools, search or auto", requested)
+	}
+}
+
+// warnIfOverBudget says out loud what the report records: this catalog is
+// bigger than a model's context budget, and the mode that would fix it does
+// not exist yet. Serving it anyway is the honest choice -- it works today --
+// but doing so quietly would not be.
+func warnIfOverBudget(logger *slog.Logger, cat *catalog.Catalog) {
+	estimate := cat.Report.Estimate
+	if !estimate.OverBudget {
+		return
+	}
+	logger.Warn("catalog exceeds the context budget",
+		slog.Int("serialized_bytes", estimate.SerializedBytes),
+		slog.Int("budget_bytes", estimate.ThresholdBytes),
+		slog.Int("tools", estimate.ToolCount),
+		slog.String("recommended_mode", string(estimate.Recommended)),
+		slog.String("note", "search mode arrives with feature 002; a model may not fit this many tool definitions"))
+}
 
 // resolveConfig applies the documented precedence: defaults < file <
 // environment < flags (FR-62). A flag that was not given must not override the

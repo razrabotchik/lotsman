@@ -312,6 +312,7 @@ func buildOperation(namespace, method, path string, op *v3.Operation, pathParams
 		PathTemplate:      path,
 		Summary:           op.Summary,
 		Description:       op.Description,
+		Tags:              append([]string(nil), op.Tags...),
 		Servers:           effectiveServers(op.Servers, pathServers, rootServers),
 	}
 

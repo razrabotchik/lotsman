@@ -13,11 +13,20 @@ and what a failure means.
 ## Decision
 
 1. **The origin check is not enough, so it runs twice.** `CheckTarget` authorizes a URL against the
-   allowlist before anything is attempted. Then, on *every connection*, the dial guard checks the
-   address actually being connected to. A name can resolve to anything -- including
-   `169.254.169.254`, which on most clouds hands out credentials to whoever asks -- and a name
-   checked once can resolve differently a second later. That is DNS rebinding, and the only place
-   to catch it is the dial.
+   allowlist before anything is attempted. Then, on *every connection*, lotsman resolves the name
+   itself, checks every address it gets, and connects to an address it has checked. A name can
+   resolve to anything -- including `169.254.169.254`, which on most clouds hands out credentials
+   to whoever asks -- and a name checked once can resolve differently a second later. That is DNS
+   rebinding, and the only place to catch it is the dial.
+
+   **The obvious implementation of this does not work, and shipped broken for an afternoon.**
+   `http.Transport` passes `DialContext` the *host:port from the URL*, not a resolved address, so a
+   guard that parses "the address" sees a hostname, finds no IP to check, and waves the connection
+   through -- resolution then happens inside the dialer, unchecked. The unit tests passed because
+   they called the guard directly with an address. It was caught by pointing the real binary at a
+   hostname that resolves to loopback (`localtest.me`) and watching the call succeed. Resolving
+   first and dialing the resolved address also closes the window between check and connect: there
+   is no second lookup to return a different answer.
 2. **Naming a private address is intent; resolving into one is not.** An origin written as
    `http://127.0.0.1:8080` or `localhost` is allowed without ceremony: the operator meant it, and
    refusing would make lotsman useless against a local API while stopping no attack. A *hostname*

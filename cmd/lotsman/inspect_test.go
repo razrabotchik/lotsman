@@ -261,3 +261,44 @@ func TestInspectIsDeterministic(t *testing.T) {
 		t.Error("two inspect runs produced different reports")
 	}
 }
+
+// T101/T102: the mode is reported with the measurement behind it, and an
+// operator who asks for a mode that does not exist is told so.
+func TestInspectReportsTheCatalogBudget(t *testing.T) {
+	stdout, _, code := runCLI(t, "inspect", miniSpecPath(t), "--json")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	var report struct {
+		Catalog struct {
+			Mode            string `json:"mode"`
+			Recommended     string `json:"recommendedMode"`
+			SerializedBytes int    `json:"serializedBytesEstimate"`
+			ThresholdBytes  int    `json:"thresholdBytes"`
+			OverBudget      bool   `json:"overBudget"`
+		} `json:"catalog"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Catalog.Mode != "tools" || report.Catalog.Recommended != "tools" {
+		t.Errorf("modes = %+v", report.Catalog)
+	}
+	if report.Catalog.ThresholdBytes == 0 || report.Catalog.OverBudget {
+		t.Errorf("budget = %+v, want a threshold and a fitting catalog", report.Catalog)
+	}
+}
+
+func TestInspectRefusesAModeThatDoesNotExistYet(t *testing.T) {
+	_, stderr, code := runCLI(t, "inspect", miniSpecPath(t), "--mode=search")
+	if code != 4 {
+		t.Errorf("exit = %d, want 4 (valid request, unsupported capability)", code)
+	}
+	if !strings.Contains(stderr, "feature 002") {
+		t.Errorf("stderr = %q, want it to say where search mode is", stderr)
+	}
+
+	if _, _, code := runCLI(t, "inspect", miniSpecPath(t), "--mode=nonsense"); code != 2 {
+		t.Errorf("exit = %d for a bad mode, want 2", code)
+	}
+}

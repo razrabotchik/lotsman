@@ -76,11 +76,18 @@ type Policy struct {
 	// localhost never needs it: naming 127.0.0.1 is intent, not rebinding.
 	AllowPrivateNetworks bool
 	Budget               Budget
+
+	// resolver is a test seam. Production uses net.DefaultResolver; a test
+	// needs to say "this name resolves to the metadata endpoint" without
+	// owning a zone to prove it.
+	resolver interface {
+		LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error)
+	}
 }
 
 // CheckTarget authorizes a target URL against the policy, before any
 // connection is attempted.
-func (p Policy) CheckTarget(target *url.URL) error {
+func (p *Policy) CheckTarget(target *url.URL) error {
 	if err := validateHTTPURL(target, true); err != nil {
 		return fmt.Errorf("%w: target: %w", ErrDenied, err)
 	}
@@ -111,7 +118,7 @@ func (p Policy) CheckTarget(target *url.URL) error {
 // base lets a caller inject a transport (a test server's, typically). Its
 // transport is kept as-is: a caller that supplies one has already decided how
 // connections are made.
-func (p Policy) Client(base *http.Client) *http.Client {
+func (p *Policy) Client(base *http.Client) *http.Client {
 	budget := p.Budget.orDefaults()
 
 	clone := &http.Client{Timeout: budget.Total}
@@ -130,7 +137,7 @@ func (p Policy) Client(base *http.Client) *http.Client {
 	return clone
 }
 
-func (p Policy) transport(budget Budget) *http.Transport {
+func (p *Policy) transport(budget Budget) *http.Transport {
 	dialer := &net.Dialer{Timeout: budget.Connect, KeepAlive: 30 * time.Second}
 
 	def, ok := http.DefaultTransport.(*http.Transport)
@@ -147,50 +154,112 @@ func (p Policy) transport(budget Budget) *http.Transport {
 	transport.TLSHandshakeTimeout = budget.TLSHandshake
 	transport.ResponseHeaderTimeout = budget.ResponseHeader
 	transport.IdleConnTimeout = budget.IdleConnection
-	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-		if err := p.checkAddress(address); err != nil {
-			return nil, err
-		}
-		return dialer.DialContext(ctx, network, address)
-	}
+	transport.DialContext = p.dial(dialer)
 	return transport
 }
 
-// checkAddress is the DNS rebinding defence (FR-32's neighbour): the origin
-// check above runs on a name, and a name can resolve to anything -- including
+// dial resolves the name itself, checks every address it gets, and then
+// connects to an address it has checked.
+//
+// Handing the name to the dialer and checking "the address" is the obvious
+// implementation and it does not work: http.Transport passes DialContext the
+// *host:port from the URL*, so the check would run on a hostname and
+// resolution would happen afterwards, inside the dialer, unchecked. Resolving
+// first and dialing the resolved address also closes the window between the
+// two -- there is no second lookup to return a different answer.
+func (p *Policy) dial(dialer *net.Dialer) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, fmt.Errorf("%w: cannot parse address %q", ErrDenied, address)
+		}
+
+		if ip := net.ParseIP(host); ip != nil {
+			if err := p.checkIP(host, ip); err != nil {
+				return nil, err
+			}
+			return dialer.DialContext(ctx, network, address)
+		}
+
+		addresses, lookupErr := p.lookup(ctx, host)
+		if lookupErr != nil {
+			return nil, lookupErr
+		}
+
+		var refusals []string
+		var lastDialErr error
+		for _, candidate := range addresses {
+			if checkErr := p.checkIP(host, candidate.IP); checkErr != nil {
+				refusals = append(refusals, candidate.IP.String())
+				continue
+			}
+			// Connect to the address that was checked, not to the name.
+			conn, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(candidate.IP.String(), port))
+			if dialErr == nil {
+				return conn, nil
+			}
+			lastDialErr = dialErr
+		}
+		if len(refusals) > 0 {
+			return nil, fmt.Errorf("%w: %q resolved to %s, which is private or link-local; "+
+				"set execution.allowPrivateNetworks to permit it", ErrDenied, host, strings.Join(refusals, ", "))
+		}
+		if lastDialErr == nil {
+			lastDialErr = fmt.Errorf("%w: %q resolved to no usable address", ErrDenied, host)
+		}
+		return nil, lastDialErr
+	}
+}
+
+func (p *Policy) lookup(ctx context.Context, host string) ([]net.IPAddr, error) {
+	resolver := p.resolver
+	if resolver == nil {
+		resolver = net.DefaultResolver
+	}
+	addresses, err := resolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	if len(addresses) == 0 {
+		return nil, fmt.Errorf("%w: %q resolved to no address", ErrDenied, host)
+	}
+	return addresses, nil
+}
+
+// checkIP is the DNS rebinding defence (FR-32's neighbour): the origin check
+// runs on a name, and a name can resolve to anything -- including
 // 169.254.169.254, which on most clouds hands out credentials to whoever asks.
 //
-// The check therefore runs here, on the address actually being connected to,
-// for every connection rather than once per catalog. An origin written as an
-// address or as localhost is exempt: naming a private address is intent, and
-// refusing it would make lotsman unusable against a local API while stopping
-// no attack.
-func (p Policy) checkAddress(address string) error {
-	host, _, err := net.SplitHostPort(address)
-	if err != nil {
-		return fmt.Errorf("%w: cannot parse address", ErrDenied)
-	}
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return nil // not an address yet; the resolver will hand us one
-	}
+// host is the name (or literal) the origin was written as. An origin written
+// as an address, or as localhost, is exempt: naming a private address is
+// intent, and refusing it would make lotsman unusable against a local API
+// while stopping no attack.
+func (p *Policy) checkIP(host string, ip net.IP) error {
 	if !isPrivate(ip) || p.AllowPrivateNetworks || p.allowsLiteral(host) {
 		return nil
 	}
-	return fmt.Errorf("%w: the allowed origin resolved to %s, which is a private or link-local address; "+
-		"set execution.allowPrivateNetworks to permit it", ErrDenied, ip)
+	return fmt.Errorf("%w: %q resolved to %s, which is a private or link-local address; "+
+		"set execution.allowPrivateNetworks to permit it", ErrDenied, host, ip)
 }
 
-// allowsLiteral reports whether an allowed origin names this address (or
-// localhost) directly, which is the operator saying they meant it.
-func (p Policy) allowsLiteral(host string) bool {
+// allowsLiteral reports whether an allowed origin names this host directly as
+// an address, or names localhost, which is the operator saying they meant it.
+//
+// A hostname is never "literal": that is the whole case this guard exists for.
+func (p *Policy) allowsLiteral(host string) bool {
+	if net.ParseIP(host) == nil && !strings.EqualFold(host, "localhost") {
+		return false
+	}
 	for _, allowed := range p.AllowedOrigins {
 		parsed, err := url.Parse(allowed)
 		if err != nil {
 			continue
 		}
 		hostname := parsed.Hostname()
-		if hostname == host || strings.EqualFold(hostname, "localhost") {
+		if strings.EqualFold(hostname, "localhost") && strings.EqualFold(host, "localhost") {
+			return true
+		}
+		if hostname == host {
 			return true
 		}
 		if ip := net.ParseIP(hostname); ip != nil && ip.String() == host {

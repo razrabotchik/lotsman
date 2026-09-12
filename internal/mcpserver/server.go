@@ -80,7 +80,8 @@ func (o *Options) clock() func() time.Time {
 }
 
 func (o *Options) httpClient() *http.Client {
-	return o.egressPolicy().Client(o.HTTPClient)
+	outbound := o.egressPolicy()
+	return outbound.Client(o.HTTPClient)
 }
 
 // egressPolicy falls back to authorizing exactly the operator's --base-url
@@ -115,7 +116,8 @@ func New(opts *Options) *mcp.Server {
 		Logger:       sdkLogger(opts.logger()),
 	})
 	addPing(srv, opts.clock())
-	addCatalogTools(srv, catalogTools(opts.Catalog), opts.httpClient(), opts.BaseURL, opts.egressPolicy(), opts.logger())
+	outbound := opts.egressPolicy()
+	addCatalogTools(srv, catalogTools(opts.Catalog), opts.httpClient(), opts.BaseURL, &outbound, opts.logger())
 	return srv
 }
 
@@ -218,7 +220,7 @@ func catalogTools(cat *catalog.Catalog) []catalog.Tool {
 //
 // tools is owned by the caller and never mutated afterwards, so the handlers
 // below may hold a pointer into it (a Catalog is immutable once built).
-func addCatalogTools(srv *mcp.Server, tools []catalog.Tool, client *http.Client, baseURL string, egressPolicy egress.Policy, log *slog.Logger) {
+func addCatalogTools(srv *mcp.Server, tools []catalog.Tool, client *http.Client, baseURL string, egressPolicy *egress.Policy, log *slog.Logger) {
 	for i := range tools {
 		t := &tools[i]
 		// Annotations are derived conservatively from the effect and are hints
@@ -301,7 +303,7 @@ func refusalHandler(t *catalog.Tool, class errs.Class, reason string) mcp.ToolHa
 // An upstream 4xx/5xx is not a Go error: it is a successful tool call that
 // reports isError=true with the upstream status and body, so the model sees
 // what the API actually said (FR-39) instead of a generic failure message.
-func executeHandler(t *catalog.Tool, validator *argvalidate.Validator, client *http.Client, baseURL string, outbound egress.Policy) mcp.ToolHandlerFor[map[string]any, response.Result] {
+func executeHandler(t *catalog.Tool, validator *argvalidate.Validator, client *http.Client, baseURL string, outbound *egress.Policy) mcp.ToolHandlerFor[map[string]any, response.Result] {
 	op := requestbuild.Operation{
 		Method:       t.Method,
 		PathTemplate: t.PathTemplate,

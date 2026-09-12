@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"unicode"
 
 	"github.com/razrabotchik/lotsman/internal/domain"
+	"github.com/razrabotchik/lotsman/internal/textnorm"
 )
 
 // mutationVerbs are the tokens that make a nominally read-only method
@@ -79,44 +79,10 @@ func Decide(c Candidate) domain.EffectDecision {
 // from the document, and letting it change an effect would hand the spec
 // author's copywriting a say in policy.
 func suspiciousVerb(c Candidate) (string, bool) {
-	for _, token := range append(tokenize(c.OperationID), tokenize(c.PathTemplate)...) {
+	for _, token := range append(textnorm.Tokens(c.OperationID), textnorm.Tokens(c.PathTemplate)...) {
 		if mutationVerbs[token] {
 			return token, true
 		}
 	}
 	return "", false
-}
-
-// tokenize splits an identifier or path into lower-case words, breaking on
-// non-alphanumeric characters and camelCase boundaries so that
-// "rebuildCache", "rebuild_cache" and "/rebuild-cache" all yield "rebuild".
-func tokenize(s string) []string {
-	var tokens []string
-	var current strings.Builder
-
-	flush := func() {
-		if current.Len() > 0 {
-			tokens = append(tokens, strings.ToLower(current.String()))
-			current.Reset()
-		}
-	}
-	runes := []rune(s)
-	for i, r := range runes {
-		switch {
-		case unicode.IsUpper(r):
-			// A camelCase boundary, but not inside an acronym: "APIKey"
-			// breaks before "Key", not between "A" and "P".
-			if i > 0 && (unicode.IsLower(runes[i-1]) || unicode.IsDigit(runes[i-1]) ||
-				(i+1 < len(runes) && unicode.IsLower(runes[i+1]))) {
-				flush()
-			}
-			current.WriteRune(r)
-		case unicode.IsLetter(r) || unicode.IsDigit(r):
-			current.WriteRune(r)
-		default:
-			flush()
-		}
-	}
-	flush()
-	return tokens
 }

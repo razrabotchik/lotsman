@@ -72,6 +72,7 @@ func inspect(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	asJSON := fs.Bool("json", false, "machine-readable report (schemaVersion 1)")
 	allowMutations := fs.Bool("allow-mutations", false, "report as if mutations were enabled at serve time")
 	configPath := fs.String("config", "", "configuration file (auth profiles, execution settings)")
+	mode := fs.String("mode", string(catalog.ModeAuto), "catalog mode: tools|search|auto")
 	failOnRejected := fs.Bool("fail-on-rejected", false, "exit non-zero when any operation is rejected (CI helper)")
 	spec, err := parseWithTrailingSpec(fs, args)
 	if err != nil {
@@ -94,7 +95,13 @@ func inspect(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
 		return exitUsage
 	}
+	catalogMode, err := parseMode(*mode)
+	if err != nil {
+		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
+		return exitCode(err)
+	}
 	cat := catalog.Build(doc.digest, doc.Operations, catalog.Options{
+		Mode:   catalogMode,
 		Policy: policy.Config{AllowMutations: runtime.AllowMutations},
 		Auth:   auth.NewProfiles(runtime.AuthProfiles),
 	})
@@ -158,8 +165,13 @@ func writeHumanReport(w io.Writer, report *inspectDocument) {
 	fmt.Fprintf(w, "tools:      %d published, %d executable, %d blocked by policy, %d not implemented yet\n",
 		t.Published, t.Executable, t.PolicyBlocked, t.CapabilityBlocked)
 	fmt.Fprintf(w, "effects:    %s\n", formatEffects(t.ByEffect))
-	fmt.Fprintf(w, "catalog:    mode=%s, %d tools, ~%d bytes, %s\n",
-		report.Catalog.Mode, report.Catalog.ToolCount, report.Catalog.SerializedBytes, report.Catalog.Digest)
+	fmt.Fprintf(w, "catalog:    mode=%s, %d tools, ~%d bytes of tools/list (budget %d), %s\n",
+		report.Catalog.Mode, report.Catalog.ToolCount, report.Catalog.SerializedBytes,
+		report.Catalog.ThresholdBytes, report.Catalog.Digest)
+	if report.Catalog.OverBudget {
+		fmt.Fprintf(w, "            OVER BUDGET by %d bytes — this catalog needs mode=%s, which arrives with feature 002\n",
+			report.Catalog.SerializedBytes-report.Catalog.ThresholdBytes, report.Catalog.Recommended)
+	}
 	fmt.Fprintf(w, "security:   remote refs %s, redirects %s, unknown mutations %s\n\n",
 		enabledWord(report.Security.RemoteRefs), enabledWord(report.Security.Redirects),
 		blockedWord(report.Security.UnknownMutationsBlocked))

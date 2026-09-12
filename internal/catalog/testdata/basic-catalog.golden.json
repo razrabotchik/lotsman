@@ -332,6 +332,7 @@
     }
   ],
   "digest": "sha256:b03b43cbc3cbd81650a82fd56f6bc5dbf1dfc007256f1bd05ae00c036b737f2a",
+  "mode": "tools",
   "report": {
     "schemaVersion": "1",
     "totals": {
@@ -356,8 +357,11 @@
     },
     "catalog": {
       "mode": "tools",
+      "recommendedMode": "tools",
       "toolCount": 4,
       "serializedBytesEstimate": 2292,
+      "thresholdBytes": 120000,
+      "overBudget": false,
       "digest": "sha256:b03b43cbc3cbd81650a82fd56f6bc5dbf1dfc007256f1bd05ae00c036b737f2a"
     },
     "security": {

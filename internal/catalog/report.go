@@ -50,13 +50,22 @@ type Totals struct {
 }
 
 // Estimate sizes the published catalog. serializedBytes is what the tool list
-// costs a model's context, which is the number that decides whether a spec
-// needs search mode rather than one tool per operation (FR-52).
+// costs a model's context, and it is the number that decides the mode (FR-52):
+// 65 Kubernetes tools weigh more than 600 DigitalOcean ones, so an operation
+// count cannot tell them apart.
 type Estimate struct {
-	Mode            string `json:"mode"`
-	ToolCount       int    `json:"toolCount"`
-	SerializedBytes int    `json:"serializedBytesEstimate"`
-	Digest          string `json:"digest"`
+	// Mode is the mode actually in force.
+	Mode Mode `json:"mode"`
+	// Recommended is what the measurement says the catalog needs. It can
+	// differ from Mode -- an operator may pin tools mode for a catalog that
+	// exceeds the budget, and a report that hid that would be useless.
+	Recommended     Mode `json:"recommendedMode"`
+	ToolCount       int  `json:"toolCount"`
+	SerializedBytes int  `json:"serializedBytesEstimate"`
+	// ThresholdBytes is the budget Recommended was decided against.
+	ThresholdBytes int    `json:"thresholdBytes"`
+	OverBudget     bool   `json:"overBudget"`
+	Digest         string `json:"digest"`
 }
 
 // SecuritySummary states the posture a reader would otherwise have to infer
@@ -107,12 +116,7 @@ func buildReport(operations []domain.Operation, tools []Tool, digest string, opt
 	report := Report{
 		SchemaVersion: ReportSchemaVersion,
 		ByReason:      map[domain.ReasonCode]int{},
-		Estimate: Estimate{
-			Mode:            "tools",
-			ToolCount:       len(tools),
-			SerializedBytes: serializedBytes(tools),
-			Digest:          digest,
-		},
+		Estimate:      estimate(tools, digest, opts),
 		Security: SecuritySummary{
 			UnknownMutationsBlocked: !opts.Policy.AllowMutations,
 		},
@@ -206,6 +210,26 @@ func reasonsFor(op *domain.Operation) []Reason {
 		}
 	}
 	return reasons
+}
+
+// estimate measures the published catalog and states which mode it needs.
+func estimate(tools []Tool, digest string, opts Options) Estimate {
+	bytes := serializedBytes(tools)
+	threshold := opts.maxSerializedBytes()
+
+	out := Estimate{
+		Mode:            opts.mode(),
+		ToolCount:       len(tools),
+		SerializedBytes: bytes,
+		ThresholdBytes:  threshold,
+		OverBudget:      bytes > threshold,
+		Digest:          digest,
+	}
+	out.Recommended = ModeTools
+	if out.OverBudget {
+		out.Recommended = ModeSearch
+	}
+	return out
 }
 
 // serializedBytes estimates what the published tool list costs a model's

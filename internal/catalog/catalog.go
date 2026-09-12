@@ -30,6 +30,9 @@ type Tool struct {
 	Method       string              `json:"method"`
 	PathTemplate string              `json:"pathTemplate"`
 	Description  string              `json:"description,omitempty"`
+	// Tags carry the document's grouping vocabulary, sanitized like every
+	// other piece of spec-authored text that reaches a model.
+	Tags []string `json:"tags,omitempty"`
 	// Servers is the operation's effective server URL list (v0: no
 	// variable substitution), passed through for request execution.
 	Servers []string `json:"servers,omitempty"`
@@ -65,20 +68,63 @@ type Catalog struct {
 	SpecDigest string `json:"specDigest"`
 	Tools      []Tool `json:"tools"` // deterministic order
 	Digest     string `json:"digest"`
+	// Mode is how this catalog is published. Until search mode exists, an
+	// `auto` catalog over the budget still publishes tools -- and says so in
+	// the report rather than quietly serving something nobody asked for.
+	Mode Mode `json:"mode"`
 	// Report accounts for every operation in the document, including the ones
 	// that never became tools. It is derived from the same pass, so it can
 	// never disagree with what was published.
 	Report Report `json:"report"`
 }
 
+// Mode is how a catalog is published: one tool per operation, or a handful of
+// meta-tools over a searchable index (FR-47/48).
+type Mode string
+
+// Publication modes. ModeAuto is a request, not a result: it resolves to one
+// of the other two against the measured catalog size.
+const (
+	ModeTools  Mode = "tools"
+	ModeSearch Mode = "search"
+	ModeAuto   Mode = "auto"
+)
+
+// DefaultMaxSerializedBytes is the catalog budget from the example
+// configuration in docs/spec.md 5.1 (`catalog.maxSerializedBytes`). It is a
+// context budget rather than a transport one: stdio delivers 4 MB in 146 ms,
+// and a model's window is what actually runs out (docs/benchmarks.md).
+const DefaultMaxSerializedBytes = 120_000
+
 // Options configures catalog derivation. The zero value is the documented
-// default: read-only execution with no credentials (docs/spec.md 5.1).
+// default: read-only execution with no credentials, tools mode chosen
+// automatically (docs/spec.md 5.1).
 type Options struct {
+	// Mode requests a publication mode. The empty value means ModeAuto.
+	Mode Mode
+	// MaxSerializedBytes is the catalog budget auto mode decides against.
+	MaxSerializedBytes int
+
 	Policy policy.Config
 	// Auth holds the configured credential profiles. Which operations can be
 	// authenticated is a fact about the configuration, not about the
 	// document, which is why it is decided here rather than in the adapter.
 	Auth auth.Profiles
+}
+
+// mode is the requested mode, defaulting to auto.
+func (o Options) mode() Mode {
+	if o.Mode == "" {
+		return ModeAuto
+	}
+	return o.Mode
+}
+
+func (o Options) maxSerializedBytes() int {
+	if o.MaxSerializedBytes <= 0 {
+		return DefaultMaxSerializedBytes
+	}
+	return o.MaxSerializedBytes
 }
 
 // Build derives a deterministic tool catalog from parsed operations.
@@ -115,6 +161,7 @@ func Build(specDigest string, operations []domain.Operation, opts Options) Catal
 			Method:            op.Method,
 			PathTemplate:      op.PathTemplate,
 			Description:       description(op),
+			Tags:              sanitizeTags(op.Tags),
 			Servers:           op.Servers,
 			Input:             op.Input,
 			InputSchema:       inputSchema(op.Input),
@@ -141,12 +188,18 @@ func Build(specDigest string, operations []domain.Operation, opts Options) Catal
 	}
 
 	catalogDigest := digest(tools)
-	return Catalog{
+	built := Catalog{
 		SpecDigest: specDigest,
 		Tools:      tools,
 		Digest:     catalogDigest,
 		Report:     buildReport(operations, tools, catalogDigest, opts),
 	}
+	// Search mode is feature 002; until it exists, `auto` resolves to tools
+	// whatever the measurement says, and the report carries the
+	// recommendation so the gap is visible rather than silent.
+	built.Mode = ModeTools
+	built.Report.Estimate.Mode = ModeTools
+	return built
 }
 
 // nameCharset is the portable charset a real desktop client accepted
@@ -268,3 +321,35 @@ func digest(tools []Tool) string {
 	sum := sha256.Sum256(b)
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
+
+// maxTags bounds how many tags one tool republishes. A document that attaches
+// forty tags to an operation is describing its own taxonomy, not helping a
+// model choose, and every one of them costs context.
+const maxTags = 8
+
+// sanitizeTags cleans and bounds the document's tags. They are untrusted text
+// on their way to an LLM exactly like a description is, and they are also a
+// filter vocabulary, so duplicates and empties are dropped rather than carried.
+func sanitizeTags(tags []string) []string {
+	if len(tags) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(tags))
+	out := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		clean := budgetBytes(sanitizeText(tag), maxTagBytes)
+		if clean == "" || seen[clean] {
+			continue
+		}
+		seen[clean] = true
+		out = append(out, clean)
+		if len(out) == maxTags {
+			break
+		}
+	}
+	return out
+}
+
+// maxTagBytes bounds one tag. A tag is a label; anything longer is prose that
+// belongs in the description.
+const maxTagBytes = 64

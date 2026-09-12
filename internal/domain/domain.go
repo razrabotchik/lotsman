@@ -32,6 +32,10 @@ type Operation struct {
 	// budgets them before they reach a tool description.
 	Summary     string `json:"summary,omitempty"`
 	Description string `json:"description,omitempty"`
+	// Tags are the document's own grouping vocabulary, kept as authored
+	// (untrusted text). They are what a model filters and browses by when a
+	// catalog is too large to read (FR-48's list_tags).
+	Tags []string `json:"tags,omitempty"`
 	// Servers is the effective server URL list after operation->path->root
 	// inheritance (first non-empty level wins). Server variables are not
 	// substituted yet -- a v0 limitation shared with requestbuild.
