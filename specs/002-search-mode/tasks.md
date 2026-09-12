@@ -100,10 +100,30 @@ which the work could stop and still be worth shipping.
 
 ## Step 4: Honesty at scale
 
-- [ ] T112 Corpus: search-mode catalog size recorded alongside the tools-mode numbers
-- [ ] T113 [P] Fuzz: query parsing and filters never panic and never return an operation the
+- [x] T112 Corpus: search-mode catalog size recorded alongside the tools-mode numbers
+      → `tools/list` is a constant **5 492 bytes** in search mode for both corpora: 406× smaller
+        than tools mode for Kubernetes, 135× for DigitalOcean. For a catalog that did not fit at
+        all, the comparison is not a ratio but a yes.
+      → **Found by this measurement:** an MCP result is carried twice — as `structuredContent` and
+        as the text fallback the SDK generates for older clients — so a response costs roughly
+        double its payload on the wire. The 24 KB describe budget therefore buys ~50 KB, and the
+        Kubernetes Deployment schema is 38.9 KB *after* every description is dropped. That is the
+        honest cost of knowing how to create a Deployment; `schemaBytes` is reported so asking
+        again is an informed decision.
+      → NFR-10 (search p95 < 50 ms) is explicitly left unmeasured rather than assumed: an
+        unclaimed number beats an unmeasured claim.
+- [x] T113 [P] Fuzz: query parsing and filters never panic and never return an operation the
       filters exclude
-- [ ] T114 README + `--help`: when to use which mode, with the measured reason
+      → FuzzSearch pins the security-relevant property: a filter is never violated, whatever the
+        query. A scoring path that could return an excluded operation would make filters advisory.
+        Also: no duplicates, the limit holds, and ranking is monotonic. 2.3 M execs clean.
+      → FuzzTokens pins the shared tokenizer — no empty tokens, everything lower-cased, no
+        separators left inside a token (a token with a capital would never match a query).
+- [x] T114 README + `--help`: when to use which mode, with the measured reason
+      → Both lead with the reason rather than the switch: one tool per operation stops working
+        above a catalog a model can hold, and the numbers say where that is. The README also states
+        the measured recall instead of claiming search quality, and says semantic retrieval would
+        need the same benchmark to earn a claim.
 
 ## Dependencies
 

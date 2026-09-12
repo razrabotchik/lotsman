@@ -66,6 +66,33 @@ The value is read at the moment a request is made, registered for redaction, and
 last code that touches the request before the wire. A canary-secret test suite checks that it
 appears in no log, result, error or report.
 
+### Large APIs: search mode
+
+One tool per operation stops working above a certain catalog — not gradually, but completely: 65
+Kubernetes operations serialize to **2.23 MB** of tool definitions, which is a model's whole context
+spent on a menu. For those, lotsman publishes five tools instead of hundreds:
+
+```bash
+lotsman inspect ./openapi.yaml            # mode=search appears when the catalog does not fit
+lotsman serve ./openapi.yaml --mode=search --base-url https://api.example.com
+```
+
+| | `tools/list` |
+|---|---|
+| Kubernetes `apps/v1`, 65 operations, tools mode | 2.23 MB |
+| the same in search mode | **5.5 KB** |
+| DigitalOcean, 631 operations, tools mode | 743 KB |
+| the same in search mode | **5.5 KB** |
+
+The five tools are `search_operations`, `describe_operation`, `list_tags`, `call_read_operation`
+and `call_mutating_operation` (the last only when mutations are enabled). A search result is
+discovery, never permission: every call re-checks identity, effect, arguments, auth and policy, and
+`call_read_operation` refuses anything that is not a read whatever the search said.
+
+`--mode` is `auto` by default: it follows the measurement (`catalog.maxSerializedBytes`, 120 KB).
+Pin `--mode=tools` if you would rather have the full list and know it may not fit — lotsman will
+serve it and say so.
+
 ### Letting the agent change things
 
 ```bash
@@ -132,9 +159,9 @@ These are not gaps. They are the product.
 ## Commands
 
 ```text
-lotsman serve SPEC [--config FILE] [--base-url URL] [--lax]
+lotsman serve SPEC [--config FILE] [--base-url URL] [--lax] [--mode tools|search|auto]
                    [--read-only | --allow-mutations] [--allow-private-network]
-lotsman inspect SPEC [--json] [--fail-on-rejected] [--config FILE]
+lotsman inspect SPEC [--json] [--fail-on-rejected] [--config FILE] [--mode MODE]
 lotsman validate SPEC [--quiet]
 lotsman operations SPEC [--supported | --rejected] [--config FILE]
 lotsman explain-call OPERATION --spec SPEC [--args FILE] [--config FILE]
@@ -147,9 +174,13 @@ resolved.
 
 ## What is not here yet
 
-Streamable HTTP transport, search mode for large catalogs (Kubernetes publishes 2.2 MB of tool
-definitions — see [docs/benchmarks.md](docs/benchmarks.md)), OAuth2, interactive approval,
-recipes, hot reload, cookie parameters, form-urlencoded bodies, Swagger 2.0.
+Streamable HTTP transport, OAuth2, interactive approval, recipes, hot reload, cookie parameters,
+form-urlencoded bodies, Swagger 2.0.
+
+Search mode ranks lexically (BM25 over names, paths, tags and summaries). Its recall is measured
+rather than claimed: **Kubernetes Recall@5 1.00 / MRR 0.53, DigitalOcean 0.75 / 0.65**
+([docs/corpus.md](docs/corpus.md)). Semantic retrieval is not in this release, and would need the
+same benchmark to earn a claim.
 
 ## Building
 
