@@ -7,13 +7,13 @@ ref and a sha256 for each, so these numbers are reproducible or the fetch fails.
 The corpus is not a scoreboard. It exists to answer one question per document: *when lotsman
 refuses, is the reason a design flaw or a feature that has not been written yet?*
 
-| Document | Operations | Supported | Executable (default policy) | Catalog | Verdict |
-|---|---|---|---|---|---|
-| Kubernetes `apps/v1` (v1.31.0) | 77 | 65 | 38 | 2.23 MB | translated |
-| DigitalOcean, exploded (pinned commit) | 659 | 631 | 0 (all need auth) | 743 KB | translated |
-| Stripe (v1301) | 559 | 0 | 0 | — | refused per matrix |
-| DigitalOcean, root only | 0 | 0 | 0 | — | every reference refused |
-| GitLab (v17.5.0-ee) | — | — | — | — | refused before parsing |
+| Document | Operations | Supported | Executable (default policy) | Catalog (tools) | Catalog (search) | Verdict |
+|---|---|---|---|---|---|---|
+| Kubernetes `apps/v1` (v1.31.0) | 77 | 65 | 38 | 2.23 MB | **5.5 KB** | translated |
+| DigitalOcean, exploded (pinned commit) | 659 | 631 | 0 (all need auth) | 743 KB | **5.5 KB** | translated |
+| Stripe (v1301) | 559 | 0 | 0 | — | — | refused per matrix |
+| DigitalOcean, root only | 0 | 0 | 0 | — | — | every reference refused |
+| GitLab (v17.5.0-ee) | — | — | — | — | — | refused before parsing |
 
 Numbers below were re-measured after Phase B step 8 (references, normalization, security).
 
@@ -88,3 +88,31 @@ compatibility adapter is explicitly outside this release.
 someone else's Go API, not about the operator's document. The version is now read from the root
 before the parser is handed the bytes (pipeline.md stage 1.1), and the refusal names Swagger 2.0
 and says it is not part of this release.
+
+## Search mode, measured
+
+Search mode publishes five meta-tools regardless of catalog size, so `tools/list` is a constant
+**5 492 bytes** for both Kubernetes (65 operations) and DigitalOcean (631). Against tools mode that
+is 406× smaller for Kubernetes and 135× for DigitalOcean — and for a catalog that did not fit at
+all, the comparison is not a ratio but a yes.
+
+What a model then pays per step:
+
+| Step | Kubernetes | DigitalOcean |
+|---|---|---|
+| `tools/list` | 5.5 KB | 5.5 KB |
+| `search_operations` (5 hits) | 3.4 KB | 3.3 KB |
+| `describe_operation` (create a Deployment) | 87 KB on the wire, `schemaBytes` 38.9 KB | — |
+
+**Found by this measurement:** an MCP result is carried twice — once as `structuredContent` and
+once as the text fallback the SDK generates for clients that predate it — so the wire cost of a
+response is roughly double its payload. The 24 KB describe budget therefore buys about 50 KB on the
+wire, and the Kubernetes Deployment schema exceeds it even after every description is dropped
+(38.9 KB of pure constraints). That is the honest cost of knowing how to create a Deployment; the
+alternative is a schema a model cannot rely on, and `schemaBytes` is reported so that asking again
+is an informed decision rather than a surprise.
+
+Ranking quality is measured separately and committed as a regression test
+(`internal/searchindex/recall_test.go`): **Kubernetes Recall@5 1.00 / MRR 0.53**, **DigitalOcean
+Recall@5 0.75 / MRR 0.65**. The two fail in opposite directions, and the reasons are recorded next
+to the numbers.

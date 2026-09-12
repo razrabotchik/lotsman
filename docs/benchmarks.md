@@ -55,7 +55,10 @@ theirs rather than a surprise.
 
 ## What is not benchmarked yet
 
-- Search mode (NFR-10) does not exist; it arrives with feature 002.
+- Search latency (NFR-10: p95 < 50 ms over 1000 operations) is unmeasured. Indexing happens once
+  per catalog snapshot and does not appear as a separate cost in the numbers above, but an
+  unclaimed number is better than an unmeasured claim. The catalog-size side of search mode *is*
+  measured, in docs/corpus.md.
 - Per-call latency is dominated by the upstream API and is not a useful lotsman metric until the
   runtime does something expensive per call. Validation and serialization are microseconds against
   a network round trip.
