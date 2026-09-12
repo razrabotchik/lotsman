@@ -60,6 +60,10 @@ fuzz: ## Run every fuzz target briefly (FUZZTIME=30s)
 	  done; \
 	done
 
+.PHONY: bench
+bench: ## Run benchmarks (needs `make corpus` for the vendor documents)
+	$(GO) test $(PKG) -run '^$$' -bench . -benchmem
+
 .PHONY: corpus
 corpus: ## Fetch the vendor corpus into testdata/corpus (verifies pinned digests)
 	@python3 scripts/fetch_corpus.py

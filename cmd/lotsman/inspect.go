@@ -86,7 +86,7 @@ func inspect(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	doc, err := parseSpec(ctx, spec, logger)
 	if err != nil {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
-		return exitError
+		return exitCode(err)
 	}
 
 	runtime, err := resolveConfig(*configPath, fs, *allowMutations, false, "")

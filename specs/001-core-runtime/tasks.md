@@ -306,17 +306,75 @@ Checkpoints match the tracer-bullet steps; stop at any checkpoint with working s
         version of it would have passed while the response body leaked.
 
 ### Step 10: Limits & errors
-- [ ] T032 requestbuild/egress: expand the T013b floor with allowedOrigins/CIDR/DNS-rebinding checks, full timeout budgets and retry=off scaffolding per FR-32–34
-- [ ] T033 response: truncation never yields broken-JSON-as-JSON (pitfall #11); header allowlist; receivedBytes/truncated fields
-- [ ] T034 Distinct error classes + CLI exit codes (FR-77); `lotsman explain-call OP --args FILE` (FR-31)
-- [ ] T035 [P] `lotsman validate` command; relative servers handling (pitfall #12: file source requires --base-url)
+- [x] T032 requestbuild/egress: expand the T013b floor with allowedOrigins/CIDR/DNS-rebinding checks, full timeout budgets and retry=off scaffolding per FR-32–34
+      → egress.Policy: an origin allowlist checked before the call, **and a dial guard checked on
+        every connection**. A name can resolve to anything, including 169.254.169.254; the only
+        place to catch rebinding is the dial.
+      → Naming a private address is intent (127.0.0.1, localhost, [::1] pass without ceremony); a
+        *hostname* that resolves into a private/loopback/link-local/CGNAT/ULA range is refused
+        unless allowPrivateNetworks says otherwise. Naming [::1] does not permit 127.0.0.1.
+      → Per-phase budgets (connect, TLS, response header, idle) alongside the total: one timeout
+        is not enough against a server that accepts and then dribbles.
+      → Retry is **absent, not present-and-disabled**: FR-34's rules are not expressible yet, and
+        a field that could be set to true before they exist would be a hole with a name (ADR-0011).
+- [x] T033 response: truncation never yields broken-JSON-as-JSON (pitfall #11); header allowlist; receivedBytes/truncated fields
+      → The body is always text, deliberately against FR-37's example object: a truncated JSON
+        document handed over as structured content is the pitfall itself. `truncated` and
+        `receivedBytes` report what happened, and a cut inside a multi-byte character is trimmed
+        back to a rune boundary.
+      → Header allowlist (FR-38) with the values redacted like everything else. Verified live:
+        512 KB response → truncated:true with receivedBytes at the limit; a 302 comes back with
+        its location header and is not followed.
+- [x] T034 Distinct error classes + CLI exit codes (FR-77); `lotsman explain-call OP --args FILE` (FR-31)
+      → The mapping lives at the CLI boundary, not on the class: internal/errs knows nothing about
+        processes. usage→2, spec_invalid→3, unsupported/policy→4, auth→5, rest→1.
+      → `explain-call` computes rather than describes: every line comes from the path a real call
+        takes (same serializer, policy, auth and egress decisions), then it stops. The auth line
+        names the profile and the *reference*, never a value — pinned by a canary test.
+      → Found and fixed: flag.Parse stops at a leading positional, so `explain-call OP --spec ...`
+        silently ignored every flag — the same trap as `operations SPEC --rejected` in T008.
+- [x] T035 [P] `lotsman validate` command; relative servers handling (pitfall #12: file source requires --base-url)
+      → `validate` answers with an exit code (3 unusable, 4 nothing publishable, 0 otherwise) and
+        a `--quiet` for pipelines; `inspect` remains the command that explains.
+      → A relative `servers` URL is refused by name: "/api/v2 is relative, and a specification read
+        from a file has no origin to resolve it against; pass --base-url".
 
 ### Step 11: Package & release  ✅ CHECKPOINT: v0.1.0-alpha public
-- [ ] T036 README + CLI `--help`: safe 5-minute quickstart (Claude Desktop), honest support matrix table, "lotsman doesn't guess" positioning (FR-76)
-- [ ] T037 [P] .goreleaser.yaml: platform matrix, checksums, SBOM; release workflow on tag
-- [ ] T038 [P] Benchmarks: parse+normalize on corpus (SC-3), RSS check; record baseline in docs/benchmarks.md
-- [ ] T039 e2e suite via official MCP client over stdio: list, GET call, blocked POST, allowed POST
-- [ ] T040 Tag v0.1.0-alpha; verify acceptance criteria list in spec.md; open 002-search-mode spec
+- [x] T036 README + CLI `--help`: safe 5-minute quickstart (Claude Desktop), honest support matrix table, "lotsman doesn't guess" positioning (FR-76)
+      → README leads with the safe default (read-only, one authorized origin, no credentials) and
+        makes everything else opt-in; the support matrix names what is refused *and why that is
+        the product*, with the corpus numbers behind it. `--help` carries the same quickstart and
+        the exit-code contract.
+- [x] T037 [P] .goreleaser.yaml: platform matrix, checksums, SBOM; release workflow on tag
+      → Static binaries (CGO off, -trimpath), linux/darwin amd64+arm64 and windows/amd64
+        (windows/arm64 is deliberately not shipped: untested is worse than absent), sha256
+        checksums, an SBOM per archive, release drafted on a tag. Verified with `goreleaser check`
+        and a snapshot build whose binary reports the injected version.
+      → The release workflow runs the race tests before publishing: a release that was never
+        tested is a promise nobody made.
+- [x] T038 [P] Benchmarks: parse+normalize on corpus (SC-3), RSS check; record baseline in docs/benchmarks.md
+      → NFR-9 met with room: Stripe (5.2 MB, 559 operations) parses and normalizes in **279 ms**
+        against a 2 s budget; Kubernetes in 61 ms.
+      → **NFR-11 does not hold for exploded specifications**: DigitalOcean peaks at 262 MB RSS
+        against a 200 MiB budget, because the ~2,900-document closure is parsed in full before any
+        operation is enumerated. Recorded rather than fixed — the remedy is lazy per-operation ref
+        resolution, which is a structural change, and an operator deserves the number now.
+- [x] T039 e2e suite via official MCP client over stdio: list, GET call, blocked POST, allowed POST
+      → The suite is written against the feature's user scenarios rather than against a list of
+        verbs: US-1 (a GET with parameters and a JSON POST in one live session, plus the
+        repeated-key array default), US-5 (`--lax` serves the subset, strict refuses the document
+        and says why), and the exit-code contract. US-2/3/4 are pinned by the inspect, mutation
+        and canary suites and are named in the file rather than duplicated.
+- [x] T040 Tag v0.1.0-alpha; verify acceptance criteria list in spec.md; open 002-search-mode spec
+      → docs/release-v0.1.0-alpha.md reviews all eleven criteria of docs/spec.md §13 against
+        evidence: 7 met with the test that would fail if they stopped being true, 3 out of scope
+        for an alpha (search mode, interactive approval, hot reload), 2 partial (MCP conformance
+        suite not run; no container image). Known limits are stated before someone finds them.
+      → specs/002-search-mode/spec.md opened, and it opens with the measurement rather than an
+        intuition: 2.23 MB of tools/list for 65 Kubernetes tools is why search mode is the only
+        workable mode for that shape, not an optimization of this one.
+      → **Tagging is not done here.** The work is uncommitted, and cutting a release is the
+        maintainer's call, not the implementation's.
 
 ## Dependencies
 

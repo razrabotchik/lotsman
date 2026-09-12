@@ -23,7 +23,7 @@ import (
 )
 
 // connect wires a client to a server over in-memory transports.
-func connect(t *testing.T, opts mcpserver.Options) *mcp.ClientSession {
+func connect(t *testing.T, opts *mcpserver.Options) *mcp.ClientSession {
 	t.Helper()
 	ctx := t.Context()
 
@@ -44,7 +44,7 @@ func connect(t *testing.T, opts mcpserver.Options) *mcp.ClientSession {
 }
 
 func TestListToolsPublishesPing(t *testing.T) {
-	session := connect(t, mcpserver.Options{})
+	session := connect(t, &mcpserver.Options{})
 
 	res, err := session.ListTools(t.Context(), nil)
 	if err != nil {
@@ -138,7 +138,7 @@ func TestListToolsPublishesEverySupportedOperation(t *testing.T) {
 			},
 		},
 	}
-	session := connect(t, mcpserver.Options{Catalog: &cat})
+	session := connect(t, &mcpserver.Options{Catalog: &cat})
 
 	res, err := session.ListTools(t.Context(), nil)
 	if err != nil {
@@ -187,7 +187,7 @@ func TestCallPolicyBlockedToolRefusesBeforeNetwork(t *testing.T) {
 		PolicyBlockers: []domain.ReasonCode{domain.ReasonPolicyUnknownEffectBlocked},
 		PolicyMessage:  "enable execution.allowMutations",
 	}}}
-	session := connect(t, mcpserver.Options{
+	session := connect(t, &mcpserver.Options{
 		Catalog: &cat, BaseURL: "https://api.example.com",
 		HTTPClient: &http.Client{Transport: transport},
 	})
@@ -222,7 +222,7 @@ func TestCallCatalogToolReturnsNotImplemented(t *testing.T) {
 	cat := catalog.Catalog{
 		Tools: []catalog.Tool{{Name: "getPet", OperationKey: "ns:GET:/pets/{petId}", Method: "GET", PathTemplate: "/pets/{petId}"}},
 	}
-	session := connect(t, mcpserver.Options{Catalog: &cat})
+	session := connect(t, &mcpserver.Options{Catalog: &cat})
 
 	res, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "getPet"})
 	if err != nil {
@@ -250,7 +250,7 @@ func TestCallCatalogToolExecutesParameterlessGET(t *testing.T) {
 	cat := catalog.Catalog{
 		Tools: []catalog.Tool{{Name: "listWidgets", Method: "GET", PathTemplate: "/widgets", Servers: []string{srv.URL}, Executable: true}},
 	}
-	session := connect(t, mcpserver.Options{Catalog: &cat, HTTPClient: srv.Client(), BaseURL: srv.URL})
+	session := connect(t, &mcpserver.Options{Catalog: &cat, HTTPClient: srv.Client(), BaseURL: srv.URL})
 
 	res, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "listWidgets"})
 	if err != nil {
@@ -289,7 +289,7 @@ func TestCallCatalogToolUpstreamErrorIsError(t *testing.T) {
 	cat := catalog.Catalog{
 		Tools: []catalog.Tool{{Name: "listWidgets", Method: "GET", PathTemplate: "/widgets", Servers: []string{srv.URL}, Executable: true}},
 	}
-	session := connect(t, mcpserver.Options{Catalog: &cat, HTTPClient: srv.Client(), BaseURL: srv.URL})
+	session := connect(t, &mcpserver.Options{Catalog: &cat, HTTPClient: srv.Client(), BaseURL: srv.URL})
 
 	res, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "listWidgets"})
 	if err != nil {
@@ -354,7 +354,7 @@ func TestCallCatalogToolExecutesWithParameters(t *testing.T) {
 		Name: "tags", In: domain.LocationQuery, Style: domain.StyleForm, Explode: true,
 		Schema: domain.Schema{"type": "array", "items": map[string]any{"type": "string"}},
 	})
-	session := connect(t, mcpserver.Options{
+	session := connect(t, &mcpserver.Options{
 		Catalog:    &catalog.Catalog{Tools: []catalog.Tool{tool}},
 		HTTPClient: srv.Client(), BaseURL: srv.URL,
 	})
@@ -379,7 +379,7 @@ func TestCallCatalogToolExecutesWithParameters(t *testing.T) {
 
 func TestCallCatalogToolPublishesGroupedInputSchema(t *testing.T) {
 	tool := widgetTool("https://api.example.com", widgetIDParam())
-	session := connect(t, mcpserver.Options{Catalog: &catalog.Catalog{Tools: []catalog.Tool{tool}}})
+	session := connect(t, &mcpserver.Options{Catalog: &catalog.Catalog{Tools: []catalog.Tool{tool}}})
 
 	res, err := session.ListTools(t.Context(), nil)
 	if err != nil {
@@ -421,7 +421,7 @@ func TestCallCatalogToolRejectsBadArgumentsBeforeNetwork(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			transport := &countingTransport{}
 			tool := widgetTool("https://api.example.com", widgetIDParam())
-			session := connect(t, mcpserver.Options{
+			session := connect(t, &mcpserver.Options{
 				Catalog: &catalog.Catalog{Tools: []catalog.Tool{tool}},
 				BaseURL: "https://api.example.com", HTTPClient: &http.Client{Transport: transport},
 			})
@@ -452,7 +452,7 @@ func TestCallCatalogToolBlockedBeforeNetworkWithoutAuthorizedBaseURL(t *testing.
 		Name: "listWidgets", Method: "GET", PathTemplate: "/widgets",
 		Servers: []string{"https://spec-controlled.example"}, Executable: true,
 	}}}
-	session := connect(t, mcpserver.Options{Catalog: &cat, HTTPClient: &http.Client{Transport: transport}})
+	session := connect(t, &mcpserver.Options{Catalog: &cat, HTTPClient: &http.Client{Transport: transport}})
 
 	res, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "listWidgets"})
 	if err != nil {
@@ -472,7 +472,7 @@ func TestCallCatalogToolWithCapabilityBlockerNeverReachesNetwork(t *testing.T) {
 		Name: "listWidgets", Method: "GET", PathTemplate: "/widgets", Executable: false,
 		ExecutionBlockers: []domain.ReasonCode{domain.ReasonParametersNotImplemented},
 	}}}
-	session := connect(t, mcpserver.Options{
+	session := connect(t, &mcpserver.Options{
 		Catalog: &cat, BaseURL: "https://api.example.com",
 		HTTPClient: &http.Client{Transport: transport},
 	})
@@ -490,7 +490,7 @@ func TestCallCatalogToolWithCapabilityBlockerNeverReachesNetwork(t *testing.T) {
 }
 
 func TestCallPingRejectsUnknownArgument(t *testing.T) {
-	session := connect(t, mcpserver.Options{})
+	session := connect(t, &mcpserver.Options{})
 
 	res, err := session.CallTool(t.Context(), &mcp.CallToolParams{
 		Name:      "ping",
@@ -514,7 +514,7 @@ func TestServeStdioLogsToTheProvidedWriterOnly(t *testing.T) {
 	defer cancel()
 
 	done := make(chan error, 1)
-	go func() { done <- mcpserver.ServeStdio(ctx, mcpserver.Options{Logger: logger}) }()
+	go func() { done <- mcpserver.ServeStdio(ctx, &mcpserver.Options{Logger: logger}) }()
 
 	// Under `go test` stdin is already at EOF, so the session ends immediately;
 	// that is a clean client disconnect, not a failure.
@@ -602,7 +602,7 @@ func TestCallCatalogToolEnforcesFormatsTheSDKTreatsAsAnnotations(t *testing.T) {
 		Name: "widgetId", In: domain.LocationPath, Required: true,
 		Style: domain.StyleSimple, Schema: domain.Schema{"type": "string", "format": "uuid"},
 	})
-	session := connect(t, mcpserver.Options{
+	session := connect(t, &mcpserver.Options{
 		Catalog: &catalog.Catalog{Tools: []catalog.Tool{tool}},
 		BaseURL: "https://api.example.com", HTTPClient: &http.Client{Transport: transport},
 	})
@@ -635,7 +635,7 @@ func TestCallParameterlessCatalogToolWithoutArguments(t *testing.T) {
 		Effect:  domain.EffectDecision{Effect: domain.EffectRead, Source: domain.EffectSourceHTTPMethod, Confidence: domain.ConfidenceInferred},
 		Support: domain.SupportStatus{Level: domain.SupportSupported},
 	}}, catalog.Options{})
-	session := connect(t, mcpserver.Options{Catalog: &cat, HTTPClient: srv.Client(), BaseURL: srv.URL})
+	session := connect(t, &mcpserver.Options{Catalog: &cat, HTTPClient: srv.Client(), BaseURL: srv.URL})
 
 	res, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: cat.Tools[0].Name})
 	if err != nil {
@@ -675,7 +675,7 @@ func createPetOperation(server string) domain.Operation {
 func TestMutationBlockedByDefault(t *testing.T) {
 	transport := &countingTransport{}
 	cat := catalog.Build("sha256:test", []domain.Operation{createPetOperation("https://api.example.com")}, catalog.Options{})
-	session := connect(t, mcpserver.Options{
+	session := connect(t, &mcpserver.Options{
 		Catalog: &cat, BaseURL: "https://api.example.com",
 		HTTPClient: &http.Client{Transport: transport},
 	})
@@ -715,7 +715,7 @@ func TestMutationExecutesWhenAllowed(t *testing.T) {
 
 	cat := catalog.Build("sha256:test", []domain.Operation{createPetOperation(srv.URL)},
 		catalog.Options{Policy: policy.Config{AllowMutations: true}})
-	session := connect(t, mcpserver.Options{Catalog: &cat, HTTPClient: srv.Client(), BaseURL: srv.URL})
+	session := connect(t, &mcpserver.Options{Catalog: &cat, HTTPClient: srv.Client(), BaseURL: srv.URL})
 
 	res, err := session.CallTool(t.Context(), &mcp.CallToolParams{
 		Name:      cat.Tools[0].Name,
@@ -750,7 +750,7 @@ func TestAllowedMutationStillValidatesItsBody(t *testing.T) {
 	transport := &countingTransport{}
 	cat := catalog.Build("sha256:test", []domain.Operation{createPetOperation("https://api.example.com")},
 		catalog.Options{Policy: policy.Config{AllowMutations: true}})
-	session := connect(t, mcpserver.Options{
+	session := connect(t, &mcpserver.Options{
 		Catalog: &cat, BaseURL: "https://api.example.com",
 		HTTPClient: &http.Client{Transport: transport},
 	})
@@ -804,7 +804,7 @@ func TestRecursiveSchemaSurvivesPublicationAndValidation(t *testing.T) {
 	}
 	cat := catalog.Build("sha256:test", []domain.Operation{op},
 		catalog.Options{Policy: policy.Config{AllowMutations: true}})
-	session := connect(t, mcpserver.Options{Catalog: &cat, HTTPClient: srv.Client(), BaseURL: srv.URL})
+	session := connect(t, &mcpserver.Options{Catalog: &cat, HTTPClient: srv.Client(), BaseURL: srv.URL})
 
 	// A well-formed nested value is accepted and sent.
 	res, err := session.CallTool(t.Context(), &mcp.CallToolParams{

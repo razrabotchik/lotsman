@@ -47,7 +47,7 @@ func operations(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	doc, err := parseSpec(ctx, spec, logger)
 	if err != nil {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
-		return exitError
+		return exitCode(err)
 	}
 
 	// EXECUTABLE answers the operator's actual question -- would this run? --

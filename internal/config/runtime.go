@@ -9,7 +9,11 @@ package config
 type Runtime struct {
 	AllowMutations bool
 	BaseURL        string
-	AuthProfiles   map[string]Profile
+	// AllowedOrigins is the egress allowlist. The base URL is added to it, so
+	// the common single-origin case needs no configuration at all.
+	AllowedOrigins       []string
+	AllowPrivateNetworks bool
+	AuthProfiles         map[string]Profile
 }
 
 // Overrides carries what the command line said. A nil field means the flag was
@@ -31,6 +35,8 @@ func Resolve(file *File, env Environment, flags Overrides) Runtime {
 	if file != nil {
 		runtime.AllowMutations = file.Execution.AllowMutations
 		runtime.BaseURL = file.Execution.BaseURL
+		runtime.AllowedOrigins = append([]string(nil), file.Execution.AllowedOrigins...)
+		runtime.AllowPrivateNetworks = file.Execution.AllowPrivateNetworks
 		if len(file.AuthProfiles) > 0 {
 			runtime.AuthProfiles = make(map[string]Profile, len(file.AuthProfiles))
 			for name, profile := range file.AuthProfiles {

@@ -95,3 +95,30 @@ func TestBuildURLValidationDoesNotEchoCredentials(t *testing.T) {
 		t.Fatalf("validation error leaked credential: %v", err)
 	}
 }
+
+// Pitfall #12: a relative server URL is legal and common, and means "wherever
+// this document was served from". A document read off disk was served from
+// nowhere, so lotsman refuses rather than inventing an origin -- and says so
+// in terms an operator can act on.
+func TestRelativeServerNeedsABaseURL(t *testing.T) {
+	op := &Operation{Method: "GET", PathTemplate: "/widgets", Servers: []string{"/api/v2"}}
+
+	_, err := Build(t.Context(), op, nil, Options{})
+	if err == nil {
+		t.Fatal("a relative server URL was accepted")
+	}
+	for _, want := range []string{"relative", "--base-url"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to mention %q", err, want)
+		}
+	}
+
+	// With an origin supplied, the same operation builds.
+	req, err := Build(t.Context(), op, nil, Options{BaseURL: "https://api.example.com"})
+	if err != nil {
+		t.Fatalf("Build with --base-url: %v", err)
+	}
+	if got := req.URL.String(); got != "https://api.example.com/widgets" {
+		t.Errorf("URL = %q", got)
+	}
+}
