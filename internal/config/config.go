@@ -58,6 +58,13 @@ type Profile struct {
 type Execution struct {
 	AllowMutations bool   `yaml:"allowMutations,omitempty"`
 	BaseURL        string `yaml:"baseURL,omitempty"`
+	// AllowedOrigins is the egress allowlist (FR-32). An origin authored by
+	// the specification is never authorization by itself.
+	AllowedOrigins []string `yaml:"allowedOrigins,omitempty"`
+	// AllowPrivateNetworks permits an allowed origin whose *hostname*
+	// resolves into a private or link-local range. An origin written as an
+	// address needs no such permission.
+	AllowPrivateNetworks bool `yaml:"allowPrivateNetworks,omitempty"`
 }
 
 // File is a parsed configuration document.

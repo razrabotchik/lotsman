@@ -1,0 +1,88 @@
+# goreleaser configuration for lotsman.
+#
+# The release is a single static binary per platform, a checksum file and an
+# SBOM. Nothing is fetched at run time and nothing is installed: the artefact
+# an operator downloads is the artefact they run, and they can prove which one
+# it was (docs/spec.md acceptance criterion 11).
+version: 2
+
+project_name: lotsman
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: lotsman
+    main: ./cmd/lotsman
+    binary: lotsman
+    env:
+      # A static binary is the distribution promise: no libc to match, no
+      # container base image to keep patched.
+      - CGO_ENABLED=0
+    flags:
+      # Build paths are not the operator's business, and they make binaries
+      # differ between machines that should produce the same bytes.
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/razrabotchik/lotsman/internal/buildinfo.version={{ .Version }}
+      - -X github.com/razrabotchik/lotsman/internal/buildinfo.commit={{ .FullCommit }}
+      - -X github.com/razrabotchik/lotsman/internal/buildinfo.date={{ .CommitDate }}
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      # Windows on ARM is not in the supported matrix (NFR-2) and shipping an
+      # untested binary is worse than not shipping one.
+      - goos: windows
+        goarch: arm64
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: lotsman
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+      - LICENSE
+      - NOTICE
+      - SECURITY.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+sboms:
+  - id: archives
+    artifacts: archive
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  draft: true
+  prerelease: auto
+  header: |
+    ## lotsman {{ .Tag }}
+
+    Verify what you downloaded:
+
+    ```bash
+    sha256sum -c checksums.txt --ignore-missing
+    ```
+  footer: |
+    Every artefact ships with an SBOM (`*.sbom.json`). The support matrix for this release is in
+    the README; what lotsman refuses, and why, is in `docs/corpus.md`.

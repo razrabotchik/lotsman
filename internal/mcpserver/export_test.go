@@ -11,8 +11,8 @@ import (
 
 // OptionsForTest returns Options with a frozen clock, so that handler output is
 // byte-stable in tests (Constitution IV).
-func OptionsForTest(now time.Time) Options {
-	return Options{now: func() time.Time { return now }}
+func OptionsForTest(now time.Time) *Options {
+	return &Options{now: func() time.Time { return now }}
 }
 
 // SDKLoggerForTest exposes the SDK log wrapper.

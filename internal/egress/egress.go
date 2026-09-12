@@ -3,64 +3,12 @@ package egress
 import (
 	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
 	"strings"
 )
 
 // ErrDenied identifies an outbound request refused before RoundTrip.
 var ErrDenied = errors.New("policy_egress_denied")
-
-// CheckTarget authorizes target against the operator-provided base URL. Until
-// the full allowedOrigins/CIDR policy lands in T032, a spec-authored server is
-// not sufficient authority to make a network call: --base-url is the explicit
-// opt-in for the tracer-bullet runtime.
-func CheckTarget(target *url.URL, authorizedBase string) error {
-	if authorizedBase == "" {
-		return fmt.Errorf("%w: network execution requires an explicit --base-url until allowedOrigins policy is implemented", ErrDenied)
-	}
-	allowed, err := url.Parse(authorizedBase)
-	if err != nil {
-		return fmt.Errorf("%w: invalid authorized base URL syntax", ErrDenied)
-	}
-	if err := validateHTTPURL(target, true); err != nil {
-		return fmt.Errorf("%w: target: %w", ErrDenied, err)
-	}
-	if err := validateHTTPURL(allowed, false); err != nil {
-		return fmt.Errorf("%w: base URL: %w", ErrDenied, err)
-	}
-	if origin(target) != origin(allowed) {
-		return fmt.Errorf("%w: target origin %q is not the authorized origin %q", ErrDenied, origin(target), origin(allowed))
-	}
-	return nil
-}
-
-// Client clones base and installs the fail-closed redirect default. Cloning
-// preserves injected transports/test seams without mutating a caller-owned
-// client that may be used concurrently elsewhere.
-func Client(base *http.Client) *http.Client {
-	if base == nil {
-		base = &http.Client{}
-	}
-	clone := *base
-	if clone.Transport == nil {
-		// The assertion is checked rather than assumed: a caller that has
-		// replaced http.DefaultTransport must not silently get a transport
-		// that still inherits proxy settings from the environment.
-		def, ok := http.DefaultTransport.(*http.Transport)
-		if !ok {
-			clone.Transport = &http.Transport{}
-		} else {
-			transport := def.Clone()
-			transport.Proxy = nil
-			clone.Transport = transport
-		}
-	}
-	clone.CheckRedirect = func(*http.Request, []*http.Request) error {
-		return http.ErrUseLastResponse
-	}
-	return &clone
-}
 
 func validateHTTPURL(u *url.URL, allowQuery bool) error {
 	if u == nil {

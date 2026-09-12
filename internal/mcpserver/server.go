@@ -38,12 +38,6 @@ const instructions = "lotsman exposes an OpenAPI specification as MCP tools. " +
 	"requires mutations to be enabled. During M0, real HTTP execution also " +
 	"requires an explicit --base-url."
 
-// defaultTimeout bounds an upstream call. No config wiring exists yet
-// (T032 adds full connect/TLS/header/body budgets); this is the v0
-// hardcoded default, matching the example config in docs/spec.md
-// (execution.timeout).
-const defaultTimeout = 30 * time.Second
-
 // Options configures a server. The zero value is usable: logging is
 // discarded and only the ping tool is served.
 type Options struct {
@@ -58,6 +52,11 @@ type Options struct {
 	// BaseURL overrides every tool's own servers (FR-30's --base-url).
 	BaseURL string
 
+	// Egress is the outbound network policy: which origins may be called and
+	// under what budgets. The zero value allows nothing, which is the correct
+	// default for a runtime whose targets are named by an untrusted document.
+	Egress egress.Policy
+
 	// HTTPClient executes tool calls; a default with defaultTimeout is used
 	// when nil. Tests inject one pointed at an httptest server.
 	HTTPClient *http.Client
@@ -66,25 +65,38 @@ type Options struct {
 	now func() time.Time
 }
 
-func (o Options) logger() *slog.Logger {
+func (o *Options) logger() *slog.Logger {
 	if o.Logger != nil {
 		return o.Logger
 	}
 	return slog.New(slog.DiscardHandler)
 }
 
-func (o Options) clock() func() time.Time {
+func (o *Options) clock() func() time.Time {
 	if o.now != nil {
 		return o.now
 	}
 	return time.Now
 }
 
-func (o Options) httpClient() *http.Client {
-	if o.HTTPClient != nil {
-		return egress.Client(o.HTTPClient)
+func (o *Options) httpClient() *http.Client {
+	return o.egressPolicy().Client(o.HTTPClient)
+}
+
+// egressPolicy falls back to authorizing exactly the operator's --base-url
+// when no allowlist was configured. That is the documented M0 behaviour: one
+// origin, named on the command line, and nothing else.
+func (o *Options) egressPolicy() egress.Policy {
+	if len(o.Egress.AllowedOrigins) > 0 {
+		return o.Egress
 	}
-	return egress.Client(&http.Client{Timeout: defaultTimeout})
+	derived, err := egress.PolicyFromBaseURL(o.BaseURL, o.Egress.Budget, o.Egress.AllowPrivateNetworks)
+	if err != nil {
+		// An unusable base URL authorizes nothing, which CheckTarget reports
+		// per call with the reason.
+		return egress.Policy{Budget: o.Egress.Budget}
+	}
+	return derived
 }
 
 // New builds the MCP server and registers its tools: the hardcoded ping tool
@@ -92,7 +104,7 @@ func (o Options) httpClient() *http.Client {
 // schema handling before any OpenAPI document is involved -- see
 // docs/adr/0004-mcp-client-notes.md) plus, when a Catalog is supplied, its
 // GET tools.
-func New(opts Options) *mcp.Server {
+func New(opts *Options) *mcp.Server {
 	info := buildinfo.Get()
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    info.Name,
@@ -103,13 +115,13 @@ func New(opts Options) *mcp.Server {
 		Logger:       sdkLogger(opts.logger()),
 	})
 	addPing(srv, opts.clock())
-	addCatalogTools(srv, catalogTools(opts.Catalog), opts.httpClient(), opts.BaseURL, opts.logger())
+	addCatalogTools(srv, catalogTools(opts.Catalog), opts.httpClient(), opts.BaseURL, opts.egressPolicy(), opts.logger())
 	return srv
 }
 
 // ServeStdio runs the server on stdin/stdout until the context is cancelled or
 // the client disconnects. A clean disconnect is not an error.
-func ServeStdio(ctx context.Context, opts Options) error {
+func ServeStdio(ctx context.Context, opts *Options) error {
 	log := opts.logger()
 	info := buildinfo.Get()
 	log.Info("serving mcp over stdio",
@@ -206,7 +218,7 @@ func catalogTools(cat *catalog.Catalog) []catalog.Tool {
 //
 // tools is owned by the caller and never mutated afterwards, so the handlers
 // below may hold a pointer into it (a Catalog is immutable once built).
-func addCatalogTools(srv *mcp.Server, tools []catalog.Tool, client *http.Client, baseURL string, log *slog.Logger) {
+func addCatalogTools(srv *mcp.Server, tools []catalog.Tool, client *http.Client, baseURL string, egressPolicy egress.Policy, log *slog.Logger) {
 	for i := range tools {
 		t := &tools[i]
 		// Annotations are derived conservatively from the effect and are hints
@@ -255,7 +267,7 @@ func addCatalogTools(srv *mcp.Server, tools []catalog.Tool, client *http.Client,
 
 		// The credential is applied by the innermost round tripper, after
 		// every other layer has seen the request without it.
-		mcp.AddTool(srv, tool, executeHandler(t, validator, auth.Client(client, t.AuthBinding), baseURL))
+		mcp.AddTool(srv, tool, executeHandler(t, validator, auth.Client(client, t.AuthBinding), baseURL, egressPolicy))
 	}
 }
 
@@ -289,7 +301,7 @@ func refusalHandler(t *catalog.Tool, class errs.Class, reason string) mcp.ToolHa
 // An upstream 4xx/5xx is not a Go error: it is a successful tool call that
 // reports isError=true with the upstream status and body, so the model sees
 // what the API actually said (FR-39) instead of a generic failure message.
-func executeHandler(t *catalog.Tool, validator *argvalidate.Validator, client *http.Client, baseURL string) mcp.ToolHandlerFor[map[string]any, response.Result] {
+func executeHandler(t *catalog.Tool, validator *argvalidate.Validator, client *http.Client, baseURL string, outbound egress.Policy) mcp.ToolHandlerFor[map[string]any, response.Result] {
 	op := requestbuild.Operation{
 		Method:       t.Method,
 		PathTemplate: t.PathTemplate,
@@ -314,7 +326,7 @@ func executeHandler(t *catalog.Tool, validator *argvalidate.Validator, client *h
 			return nil, response.Result{}, errs.Errorf(errs.ClassInternal,
 				"lotsman: %s %s: unexpanded path template", t.Method, t.PathTemplate)
 		}
-		if denied := egress.CheckTarget(req.URL, baseURL); denied != nil {
+		if denied := outbound.CheckTarget(req.URL); denied != nil {
 			return nil, response.Result{}, denied
 		}
 		//nolint:bodyclose // response.FromHTTP closes resp.Body on every path;

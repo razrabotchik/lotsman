@@ -160,7 +160,12 @@ func resolveBaseURL(servers []string, opts Options) (string, error) {
 		return "", errs.Errorf(errs.ClassUsage, "requestbuild: invalid base URL syntax")
 	}
 	if !u.IsAbs() {
-		return "", errs.Errorf(errs.ClassUsage, "requestbuild: base URL is not absolute")
+		// Pitfall #12: `servers: [{url: /api/v2}]` is legal and common. It is
+		// relative to wherever the document was served from -- which, for a
+		// document read off disk, is nowhere. lotsman will not invent an
+		// origin for it.
+		return "", errs.Errorf(errs.ClassUsage,
+			"requestbuild: server %q is relative, and a specification read from a file has no origin to resolve it against; pass --base-url", candidate)
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return "", errs.Errorf(errs.ClassUsage, "requestbuild: base URL must use http or https")
