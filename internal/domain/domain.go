@@ -16,6 +16,18 @@ func NewOperationKey(namespace, method, pathTemplate string) OperationKey {
 	return OperationKey(namespace + ":" + strings.ToUpper(method) + ":" + pathTemplate)
 }
 
+// Namespace is the first field of the key: which API this operation belongs
+// to. There is one namespace today ("default"), and rules match on it anyway
+// -- a policy written against a single-API deployment should keep meaning the
+// same thing when a second API arrives.
+func (k OperationKey) Namespace() string {
+	namespace, _, found := strings.Cut(string(k), ":")
+	if !found {
+		return ""
+	}
+	return namespace
+}
+
 // Operation is the enumeration-stage IR: identity, method, path template and
 // diagnostics. Later pipeline stages add inputs, security, effect and doc
 // metadata (data-model.md); this is deliberately the minimal slice needed by
@@ -192,6 +204,18 @@ const (
 	ReasonUnsupportedBodySchema ReasonCode = "unsupported_body_schema"
 	// ReasonInvalidSchema marks a schema that is not valid JSON Schema once normalized, so no argument can be validated against it.
 	ReasonInvalidSchema ReasonCode = "invalid_schema"
+	// ReasonDisabledByOverride marks an operation the operator switched off with `enabled: false`.
+	ReasonDisabledByOverride ReasonCode = "disabled_by_override"
+	// ReasonExcludedBySelection marks an operation outside the publication filter (catalog.includeTags).
+	ReasonExcludedBySelection ReasonCode = "excluded_by_selection"
+	// ReasonPolicyDeniedByRule marks an operation a deny rule refused (FR-41).
+	ReasonPolicyDeniedByRule ReasonCode = "policy_denied_by_rule"
+	// ReasonPolicyNotAllowedByRule marks an operation refused because a non-empty allow list did not match it (FR-41).
+	ReasonPolicyNotAllowedByRule ReasonCode = "policy_not_allowed_by_rule"
+	// ReasonApprovalUnavailable marks a call refused because approval was required and the client cannot be asked (FR-45).
+	ReasonApprovalUnavailable ReasonCode = "approval_unavailable"
+	// ReasonApprovalDeclined marks a call refused because the approval prompt was declined or dismissed.
+	ReasonApprovalDeclined ReasonCode = "approval_declined"
 )
 
 // Executable reports whether the operation is both semantically supported

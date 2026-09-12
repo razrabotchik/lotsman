@@ -32,7 +32,7 @@ func session(t *testing.T, env []string, args ...string) (*mcp.ClientSession, *s
 	stderr := &syncBuffer{}
 	cmd.Stderr = stderr
 
-	client := mcp.NewClient(&mcp.Implementation{Name: "acceptance", Version: "v0"}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: "acceptance", Version: "v0"}, approving())
 	connected, err := client.Connect(t.Context(), &mcp.CommandTransport{Command: cmd, TerminateDuration: 5 * time.Second}, nil)
 	if err != nil {
 		t.Fatalf("connect: %v\nstderr:\n%s", err, stderr.String())

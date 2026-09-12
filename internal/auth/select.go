@@ -3,6 +3,7 @@ package auth
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/razrabotchik/lotsman/internal/config"
@@ -86,18 +87,33 @@ func Select(alternatives []domain.SecurityAlternative, profiles Profiles) Verdic
 
 	var bound []Binding
 	var missing []string
+	var ambiguous []string
 	for _, alternative := range alternatives {
 		if len(alternative.Requirements) == 0 {
 			// The document offers a way in with no credential at all; nothing
 			// configured can beat that.
 			return Verdict{}
 		}
-		binding, why := bind(alternative, profiles)
-		if why != "" {
+		binding, why, undecided := bind(alternative, profiles)
+		switch {
+		case undecided != "":
+			ambiguous = append(ambiguous, undecided)
+		case why != "":
 			missing = append(missing, why)
-			continue
+		default:
+			bound = append(bound, binding)
 		}
-		bound = append(bound, binding)
+	}
+
+	// Two profiles that both satisfy one scheme are a choice nothing in the
+	// document can make. Taking the first would be deterministic and still
+	// wrong: it would put a credential on the wire because it sorts early.
+	if len(ambiguous) > 0 {
+		return Verdict{
+			Reason: domain.ReasonAmbiguousSecurity,
+			Message: fmt.Sprintf("%s; name the one this operation uses with operationOverrides[].authProfile",
+				strings.Join(unique(ambiguous), "; ")),
+		}
 	}
 
 	// Two alternatives that resolve to the same credentials are not a choice:
@@ -126,29 +142,37 @@ func Select(alternatives []domain.SecurityAlternative, profiles Profiles) Verdic
 
 // bind tries to satisfy every requirement in one alternative, and says what
 // stopped it if it could not.
-func bind(alternative domain.SecurityAlternative, profiles Profiles) (binding Binding, why string) {
+func bind(alternative domain.SecurityAlternative, profiles Profiles) (binding Binding, why, undecided string) {
 	for r := range alternative.Requirements {
 		requirement := &alternative.Requirements[r]
 		candidates := profiles.byScheme[requirement.Scheme]
 		if len(candidates) == 0 {
-			return Binding{}, fmt.Sprintf("no profile for scheme %q", requirement.Scheme)
+			return Binding{}, fmt.Sprintf("no profile for scheme %q", requirement.Scheme), ""
 		}
-		var matched *Credential
+		var matched []Credential
 		for i := range candidates {
 			if mismatch := compatible(&candidates[i].Profile, requirement); mismatch != "" {
 				continue
 			}
-			matched = &candidates[i]
-			break
+			matched = append(matched, candidates[i])
 		}
-		if matched == nil {
-			return Binding{}, fmt.Sprintf("profile for %q does not match how the API carries it", requirement.Scheme)
+		switch len(matched) {
+		case 0:
+			return Binding{}, fmt.Sprintf("profile for %q does not match how the API carries it", requirement.Scheme), ""
+		case 1:
+		default:
+			names := make([]string, len(matched))
+			for i := range matched {
+				names[i] = strconv.Quote(matched[i].Name)
+			}
+			return Binding{}, "", fmt.Sprintf("profiles %s all satisfy scheme %q",
+				strings.Join(names, ", "), requirement.Scheme)
 		}
-		credential := *matched
+		credential := matched[0]
 		credential.Requirement = *requirement
 		binding.Credentials = append(binding.Credentials, credential)
 	}
-	return binding, ""
+	return binding, "", ""
 }
 
 // compatible checks a profile against what the document says the API expects.
@@ -224,4 +248,24 @@ func unique(values []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// Only narrows the index to a single configured profile.
+//
+// It exists for `operationOverrides[].authProfile`: when two profiles both
+// satisfy an operation, Select refuses it as ambiguous rather than picking
+// (FR-57), and the operator's way out must be to state which one this
+// operation uses -- not to delete a profile the rest of the catalog needs.
+func (p Profiles) Only(name string) Profiles {
+	narrowed := Profiles{byScheme: map[string][]Credential{}}
+	for scheme, credentials := range p.byScheme {
+		for i := range credentials {
+			if credentials[i].Name != name {
+				continue
+			}
+			narrowed.byScheme[scheme] = append(narrowed.byScheme[scheme], credentials[i])
+			narrowed.count = 1
+		}
+	}
+	return narrowed
 }

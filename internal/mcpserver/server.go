@@ -14,6 +14,7 @@ import (
 
 	"github.com/razrabotchik/lotsman/internal/buildinfo"
 	"github.com/razrabotchik/lotsman/internal/catalog"
+	"github.com/razrabotchik/lotsman/internal/config"
 	"github.com/razrabotchik/lotsman/internal/domain"
 	"github.com/razrabotchik/lotsman/internal/egress"
 	"github.com/razrabotchik/lotsman/internal/policy"
@@ -30,8 +31,12 @@ const instructions = "lotsman exposes an OpenAPI specification as MCP tools. " +
 	"A tool executes only when its operation is fully translated and its effect " +
 	"is permitted by policy; blocked tools return an explicit error before any " +
 	"network call. Read operations are allowed by default, everything else " +
-	"requires mutations to be enabled. During M0, real HTTP execution also " +
-	"requires an explicit --base-url."
+	"requires mutations to be enabled. A mutating call may also require the " +
+	"user's confirmation, requested as an input request; a client that cannot " +
+	"be asked is refused before the network. Confirmation is a safety prompt, " +
+	"not an authorization: it can stop a call policy allowed, never permit one " +
+	"policy stopped. During M0, real HTTP execution also requires an explicit " +
+	"--base-url."
 
 // Options configures a server. The zero value is usable: logging is
 // discarded and only the ping tool is served.
@@ -55,6 +60,10 @@ type Options struct {
 	// HTTPClient executes tool calls; a default with defaultTimeout is used
 	// when nil. Tests inject one pointed at an httptest server.
 	HTTPClient *http.Client
+
+	// Approval is when a mutating call asks the client to confirm (FR-44).
+	// The empty value is the documented default, `always`.
+	Approval config.Approval
 
 	// now is the clock used by tool handlers; tests override it.
 	now func() time.Time
@@ -91,6 +100,16 @@ func (o *Options) mutationsAllowed() bool {
 		}
 	}
 	return false
+}
+
+// approval is the configured approval mode, defaulting to the documented
+// `always`. A zero Options must not mean "never ask": the safe default has to
+// be the one you get by not saying anything.
+func (o *Options) approval() config.Approval {
+	if o.Approval == "" {
+		return config.ApprovalAlways
+	}
+	return o.Approval
 }
 
 func (o *Options) clock() func() time.Time {
@@ -139,7 +158,8 @@ func New(opts *Options) *mcp.Server {
 	addPing(srv, opts.clock())
 
 	outbound := opts.egressPolicy()
-	runners := newRunners(catalogTools(opts.Catalog), opts.httpClient(), opts.BaseURL, &outbound, opts.logger())
+	runners := newRunners(catalogTools(opts.Catalog), opts.httpClient(), opts.BaseURL, &outbound,
+		opts.logger(), approver{mode: opts.approval(), log: opts.logger()})
 
 	// Two front doors, one call path. In search mode the catalog is too large
 	// to publish as tools, so five meta-tools stand in front of the same
@@ -298,9 +318,15 @@ func publishedSchema(t *catalog.Tool) map[string]any {
 // reports isError=true with the upstream status and body, so the model sees
 // what the API actually said (FR-39) instead of a generic failure message.
 func executeHandler(prepared *runner) mcp.ToolHandlerFor[map[string]any, response.Result] {
-	return func(ctx context.Context, _ *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, response.Result, error) {
-		result, err := prepared.call(ctx, args)
+	return func(ctx context.Context, req *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, response.Result, error) {
+		result, err := prepared.call(ctx, req, args)
 		if err != nil {
+			// An approval request is not a failure: it is the first half of a
+			// call the client will make again once it has an answer.
+			var ask *pending
+			if errors.As(err, &ask) {
+				return ask.result, response.Result{}, nil
+			}
 			return nil, response.Result{}, err
 		}
 		var res *mcp.CallToolResult

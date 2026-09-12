@@ -10,12 +10,10 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/razrabotchik/lotsman/internal/auth"
 	"github.com/razrabotchik/lotsman/internal/buildinfo"
 	"github.com/razrabotchik/lotsman/internal/catalog"
 	"github.com/razrabotchik/lotsman/internal/domain"
 	"github.com/razrabotchik/lotsman/internal/errs"
-	"github.com/razrabotchik/lotsman/internal/policy"
 	"github.com/razrabotchik/lotsman/internal/redact"
 )
 
@@ -90,7 +88,7 @@ func inspect(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return exitCode(err)
 	}
 
-	runtime, err := resolveConfig(*configPath, fs, *allowMutations, false, "")
+	runtime, err := resolveConfig(*configPath, fs, *allowMutations, false, "", "")
 	if err != nil {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
 		return exitUsage
@@ -100,11 +98,12 @@ func inspect(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
 		return exitCode(err)
 	}
-	cat := catalog.Build(doc.digest, doc.Operations, catalog.Options{
-		Mode:   catalogMode,
-		Policy: policy.Config{AllowMutations: runtime.AllowMutations},
-		Auth:   auth.NewProfiles(runtime.AuthProfiles),
-	})
+	opts, err := catalogOptions(runtime, catalogMode, doc.Operations)
+	if err != nil {
+		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
+		return exitCode(err)
+	}
+	cat := catalog.Build(doc.digest, doc.Operations, opts)
 
 	info := buildinfo.Get()
 	report := inspectDocument{

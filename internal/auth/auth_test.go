@@ -322,3 +322,31 @@ func TestSelectCollapsesIdenticalAlternatives(t *testing.T) {
 		t.Errorf("binding = %+v", verdict.Binding)
 	}
 }
+
+// An operator with two profiles that both satisfy an operation has to be able
+// to say which one it uses. Deleting the other is not an answer: the rest of
+// the catalog may need it.
+func TestOnlyResolvesAnAmbiguousOperationByPinningOneProfile(t *testing.T) {
+	profiles := NewProfiles(map[string]config.Profile{
+		"bearerAuth": {Scheme: config.SchemeBearer, TokenRef: "env:TOKEN"},
+		"personal":   {Scheme: config.SchemeBearer, TokenRef: "env:PERSONAL", Satisfies: []string{"bearerAuth"}},
+	})
+	operation := []domain.SecurityAlternative{alternative(requirement("bearerAuth", "http", "", "", "bearer"))}
+
+	if verdict := Select(operation, profiles); verdict.Reason != domain.ReasonAmbiguousSecurity {
+		t.Fatalf("verdict = %+v, want ambiguous_security before pinning", verdict)
+	}
+
+	verdict := Select(operation, profiles.Only("personal"))
+	if !verdict.Bound() {
+		t.Fatalf("verdict = %+v, want the pinned profile to bind", verdict)
+	}
+	if len(verdict.Binding.Credentials) != 1 || verdict.Binding.Credentials[0].Name != "personal" {
+		t.Errorf("binding = %+v, want the profile the operator named", verdict.Binding)
+	}
+	// Pinning is not a way in: a profile that cannot satisfy the operation
+	// still cannot, and the refusal must say so rather than binding nothing.
+	if verdict := Select(operation, profiles.Only("nonexistent")); verdict.Bound() {
+		t.Error("pinning a profile that satisfies nothing produced a binding")
+	}
+}

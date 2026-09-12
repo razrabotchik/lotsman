@@ -102,7 +102,28 @@ lotsman serve ./openapi.yaml --config ./lotsman.yaml \
 
 Without that flag, nothing whose effect is not a known `read` reaches the network — including
 `POST`, `DELETE`, and a `GET` whose name contains a mutation-like verb (`GET /cache/rebuild` is
-raised to `unknown` and refused). Ask before you enable it:
+raised to `unknown` and refused).
+
+Enabling mutations is not the same as enabling all of them, and it is not the same as running
+them unattended. Each mutating call asks the user first, through the client:
+
+```yaml
+execution:
+  allowMutations: true
+  interactiveApproval: always     # always | client-capability | never
+  denyRules:
+    - { tag: billing }            # never, whatever else is enabled
+  allowRules:
+    - { effect: write }           # then only writes, and no destructive calls
+```
+
+`always` is the default. A client that cannot be asked — one that declared no elicitation
+capability — gets a refusal before the network, not a call that quietly proceeds. That is a
+safety prompt and **not** an authorization: it can stop a call the policy allowed, never permit
+one the policy stopped. Use `--approval never` if your client cannot ask and you have decided
+that is acceptable.
+
+Ask before you enable any of it:
 
 ```bash
 lotsman explain-call create_pet --spec ./openapi.yaml --args ./args.json \
@@ -113,12 +134,34 @@ lotsman explain-call create_pet --spec ./openapi.yaml --args ./args.json \
 operation   default:POST:/pets
 effect      unknown (http_method, inferred)
 policy      DENY (policy_unknown_effect_blocked: … enable execution.allowMutations …)
+approval    required before the call; a client that cannot be asked is refused
 request     POST https://api.example.com/pets
             egress: ALLOW
 auth        profile "bearer_auth" → header Authorization: Bearer <env:MY_API_TOKEN>
 media       application/json (required)
 NO network request was made.
 ```
+
+### Narrowing the catalog, and correcting it
+
+An API with 631 operations rarely has 631 you need, and a heuristic that refuses to guess will
+sometimes refuse something you know is safe. Both are configuration, and both are reported.
+
+```yaml
+catalog:
+  includeTags: [droplets, images]   # publish these; everything else is excluded, and counted
+operationOverrides:
+  - match: { operationId: searchPets }
+    effect: read                    # a reviewed statement: source=local_override, explicit
+  - match: { method: GET, path: /legacy/rebuild-cache }
+    enabled: false                  # not part of the surface at all
+  - match: { operationId: createDraft }
+    authProfile: personal           # which credential, when two could satisfy the operation
+```
+
+An override that matches no operation is a startup error, not a smaller catalog: a control you
+believe is in force has to be in force. An override cannot publish something lotsman refused to
+translate — it classifies, hides or binds, and support is not a matter of opinion.
 
 ## What it supports today
 
@@ -161,6 +204,7 @@ These are not gaps. They are the product.
 ```text
 lotsman serve SPEC [--config FILE] [--base-url URL] [--lax] [--mode tools|search|auto]
                    [--read-only | --allow-mutations] [--allow-private-network]
+                   [--approval always|client-capability|never]
 lotsman inspect SPEC [--json] [--fail-on-rejected] [--config FILE] [--mode MODE]
 lotsman validate SPEC [--quiet]
 lotsman operations SPEC [--supported | --rejected] [--config FILE]
@@ -174,8 +218,8 @@ resolved.
 
 ## What is not here yet
 
-Streamable HTTP transport, OAuth2, interactive approval, recipes, hot reload, cookie parameters,
-form-urlencoded bodies, Swagger 2.0.
+Streamable HTTP transport, OAuth2, recipes, hot reload, cookie parameters, form-urlencoded
+bodies, Swagger 2.0.
 
 Search mode ranks lexically (BM25 over names, paths, tags and summaries). Its recall is measured
 rather than claimed: **Kubernetes Recall@5 1.00 / MRR 0.53, DigitalOcean 0.75 / 0.65**

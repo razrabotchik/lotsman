@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/razrabotchik/lotsman/internal/argvalidate"
 	"github.com/razrabotchik/lotsman/internal/auth"
 	"github.com/razrabotchik/lotsman/internal/catalog"
@@ -31,6 +33,10 @@ type runner struct {
 	baseURL   string
 	egress    *egress.Policy
 
+	// approval asks a human before a call that changes something. It runs
+	// after the gate, never instead of it (FR-44a).
+	approval approver
+
 	// refusal, when set, is why this operation cannot be called at all. The
 	// operation is still published -- discovery is not permission, and a model
 	// that can read the refusal is better off than one guessing why an
@@ -43,8 +49,13 @@ type runner struct {
 func (r *runner) callable() bool { return r.refusal == "" }
 
 // call runs the runtime order (docs/pipeline.md stages 5-8) for validated
-// arguments: validate, build, check egress, send, shape.
-func (r *runner) call(ctx context.Context, args map[string]any) (response.Result, error) {
+// arguments: validate, build, check egress, ask, send, shape.
+//
+// invocation is the tool call being served: it carries the client to ask for
+// approval and the answer, if this is the retry after one was asked for. A
+// nil invocation is a caller with no client, which cannot be asked and
+// therefore fails closed exactly like a client that declared no capability.
+func (r *runner) call(ctx context.Context, invocation *mcp.CallToolRequest, args map[string]any) (response.Result, error) {
 	if !r.callable() {
 		return response.Result{}, errs.Errorf(r.refusalClass, "lotsman: %s %s %s",
 			r.tool.Method, r.tool.PathTemplate, r.refusal)
@@ -77,6 +88,17 @@ func (r *runner) call(ctx context.Context, args map[string]any) (response.Result
 		return response.Result{}, denied
 	}
 
+	// Last: everything that could refuse this call without troubling a human
+	// already has, so a prompt is only ever shown for a call that would
+	// otherwise happen -- and the only thing a yes does is send it.
+	ask, err := r.approval.check(invocation, r.tool, args)
+	if err != nil {
+		return response.Result{}, err
+	}
+	if ask != nil {
+		return response.Result{}, &pending{result: ask}
+	}
+
 	//nolint:bodyclose // response.FromHTTP closes resp.Body on every path;
 	// bodyclose cannot see through the call.
 	resp, err := r.client.Do(req)
@@ -94,11 +116,11 @@ func (r *runner) call(ctx context.Context, args map[string]any) (response.Result
 }
 
 // newRunners prepares one runner per published tool, in catalog order.
-func newRunners(tools []catalog.Tool, client *http.Client, baseURL string, outbound *egress.Policy, log logger) []runner {
+func newRunners(tools []catalog.Tool, client *http.Client, baseURL string, outbound *egress.Policy, log logger, approval approver) []runner {
 	runners := make([]runner, 0, len(tools))
 	for i := range tools {
 		tool := &tools[i]
-		prepared := runner{tool: tool, baseURL: baseURL, egress: outbound}
+		prepared := runner{tool: tool, baseURL: baseURL, egress: outbound, approval: approval}
 
 		switch {
 		case len(tool.PolicyBlockers) > 0:
@@ -136,10 +158,12 @@ func newRunners(tools []catalog.Tool, client *http.Client, baseURL string, outbo
 	return runners
 }
 
-// logger is the narrow slice of *slog.Logger this file needs, which keeps the
-// runner testable without a logging framework.
+// logger is the narrow slice of *slog.Logger this package needs, which keeps
+// the runner testable without a logging framework.
 type logger interface {
 	Error(msg string, args ...any)
+	Warn(msg string, args ...any)
+	Info(msg string, args ...any)
 }
 
 // find locates a runner by the identifier a caller has in hand: the tool name

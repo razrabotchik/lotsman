@@ -10,6 +10,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/razrabotchik/lotsman/internal/auth"
+	"github.com/razrabotchik/lotsman/internal/catalog"
 	"github.com/razrabotchik/lotsman/internal/domain"
 	"github.com/razrabotchik/lotsman/internal/errs"
 	"github.com/razrabotchik/lotsman/internal/policy"
@@ -53,18 +54,26 @@ func operations(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	// EXECUTABLE answers the operator's actual question -- would this run? --
 	// so it accounts for policy as well as capability, under the same default
 	// (read-only) the server uses.
-	runtime, err := resolveConfig(*configPath, fs, *allowMutations, false, "")
+	runtime, err := resolveConfig(*configPath, fs, *allowMutations, false, "", "")
 	if err != nil {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
 		return exitUsage
 	}
-	policyConfig := policy.Config{AllowMutations: runtime.AllowMutations}
+	opts, err := catalogOptions(runtime, catalog.ModeTools, doc.Operations)
+	if err != nil {
+		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
+		return exitCode(err)
+	}
+	// The table reports on the operations as the operator's configuration
+	// leaves them, not as the document wrote them: an overridden effect that
+	// showed up here as the inferred one would describe a run nobody makes.
+	overlaid := catalog.Overlay(doc.Operations, opts)
 	profiles := auth.NewProfiles(runtime.AuthProfiles)
 
 	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "METHOD\tPATH\tOPERATION ID\tEFFECT\tSUPPORT\tEXECUTABLE\tREASONS")
-	for i := range doc.Operations {
-		op := &doc.Operations[i]
+	for i := range overlaid.Operations {
+		op := &overlaid.Operations[i]
 		for _, warning := range op.Effect.Warnings {
 			// A suspicious verb is a warning an operator must see, not a
 			// silent demotion (spec 4.7).
@@ -77,7 +86,7 @@ func operations(ctx context.Context, args []string, stdout, stderr io.Writer) in
 			continue
 		}
 		reasons := append(append([]domain.ReasonCode(nil), op.Support.Reasons...), op.ExecutionBlockers...)
-		verdict := policyConfig.Evaluate(op.Effect)
+		verdict := opts.Policy.Evaluate(policy.SubjectOf(op))
 		if !verdict.Allowed {
 			reasons = append(reasons, verdict.Reason)
 		}
@@ -85,9 +94,16 @@ func operations(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		if !credentials.Bound() {
 			reasons = append(reasons, credentials.Reason)
 		}
+		executable := op.Executable() && verdict.Allowed && credentials.Bound()
+		if excluded, gone := overlaid.Excluded[op.Key]; gone {
+			// Not published means not callable, whatever the other columns
+			// would have said on their own.
+			reasons = append(reasons, excluded)
+			executable = false
+		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%t\t%s\n",
 			op.Method, op.PathTemplate, orDash(op.SourceOperationID), op.Effect.Effect,
-			op.Support.Level, op.Executable() && verdict.Allowed && credentials.Bound(), joinReasons(reasons))
+			op.Support.Level, executable, joinReasons(reasons))
 	}
 	if err := tw.Flush(); err != nil {
 		fmt.Fprintf(stderr, "lotsman: %v\n", err)

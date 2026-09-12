@@ -9,6 +9,16 @@ package config
 type Runtime struct {
 	AllowMutations bool
 	BaseURL        string
+	// InteractiveApproval is never empty after Resolve: the documented
+	// default (`always`) is applied here, so no downstream caller has to
+	// decide what an unset approval mode means.
+	InteractiveApproval Approval
+	AllowRules          []Rule
+	DenyRules           []Rule
+	// IncludeTags is the publication filter; empty publishes everything.
+	IncludeTags []string
+	// Overrides are the operator's per-operation statements, in file order.
+	Overrides []OperationOverride
 	// AllowedOrigins is the egress allowlist. The base URL is added to it, so
 	// the common single-origin case needs no configuration at all.
 	AllowedOrigins       []string
@@ -22,6 +32,7 @@ type Runtime struct {
 type Overrides struct {
 	AllowMutations *bool
 	BaseURL        *string
+	Approval       *Approval
 }
 
 // Resolve applies the precedence order to produce the effective runtime.
@@ -30,10 +41,19 @@ type Overrides struct {
 // operational settings, never for credentials, because an environment variable
 // holding a token is exactly the literal secret FR-59 forbids in a flag.
 func Resolve(file *File, env Environment, flags Overrides) Runtime {
-	runtime := Runtime{} // defaults: read-only, no base URL, no credentials
+	// defaults: read-only, no base URL, no credentials, and a mutation asks
+	// before it happens.
+	runtime := Runtime{InteractiveApproval: ApprovalAlways}
 
 	if file != nil {
 		runtime.AllowMutations = file.Execution.AllowMutations
+		if file.Execution.InteractiveApproval != "" {
+			runtime.InteractiveApproval = file.Execution.InteractiveApproval
+		}
+		runtime.AllowRules = append([]Rule(nil), file.Execution.AllowRules...)
+		runtime.DenyRules = append([]Rule(nil), file.Execution.DenyRules...)
+		runtime.IncludeTags = append([]string(nil), file.Catalog.IncludeTags...)
+		runtime.Overrides = append([]OperationOverride(nil), file.OperationOverrides...)
 		runtime.BaseURL = file.Execution.BaseURL
 		runtime.AllowedOrigins = append([]string(nil), file.Execution.AllowedOrigins...)
 		runtime.AllowPrivateNetworks = file.Execution.AllowPrivateNetworks
@@ -54,6 +74,9 @@ func Resolve(file *File, env Environment, flags Overrides) Runtime {
 	}
 	if flags.BaseURL != nil && *flags.BaseURL != "" {
 		runtime.BaseURL = *flags.BaseURL
+	}
+	if flags.Approval != nil {
+		runtime.InteractiveApproval = *flags.Approval
 	}
 	return runtime
 }
