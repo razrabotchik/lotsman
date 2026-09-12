@@ -159,6 +159,8 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 	allowPrivate := fs.Bool("allow-private-network", false,
 		"permit an allowed origin whose hostname resolves into a private or link-local range")
 	mode := fs.String("mode", string(catalog.ModeAuto), "catalog mode: tools|search|auto")
+	approval := fs.String("approval", "",
+		"ask before a mutating call: always|client-capability|never (default always, FR-44)")
 	spec, err := parseWithTrailingSpec(fs, args)
 	if err != nil {
 		return exitUsage
@@ -174,7 +176,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 		return exitUsage
 	}
 
-	runtime, err := resolveConfig(*configPath, fs, *allowMutations, *readOnly, *baseURL)
+	runtime, err := resolveConfig(*configPath, fs, *allowMutations, *readOnly, *baseURL, *approval)
 	runtime.AllowPrivateNetworks = runtime.AllowPrivateNetworks || *allowPrivate
 	if err != nil {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
@@ -185,9 +187,6 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
 		return exitCode(err)
 	}
-	policyConfig := policy.Config{AllowMutations: runtime.AllowMutations}
-	profiles := auth.NewProfiles(runtime.AuthProfiles)
-
 	egressPolicy, err := egress.PolicyFromBaseURL(runtime.BaseURL, egress.Budget{}, runtime.AllowPrivateNetworks)
 	egressPolicy.AllowedOrigins = append(egressPolicy.AllowedOrigins, runtime.AllowedOrigins...)
 	if err != nil {
@@ -195,10 +194,12 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 		return exitUsage
 	}
 
-	opts := mcpserver.Options{Logger: logger, BaseURL: runtime.BaseURL, Egress: egressPolicy}
+	opts := mcpserver.Options{
+		Logger: logger, BaseURL: runtime.BaseURL, Egress: egressPolicy,
+		Approval: runtime.InteractiveApproval,
+	}
 	if spec != "" {
-		cat, err := loadCatalog(ctx, spec, logger, *lax,
-			catalog.Options{Mode: catalogMode, Policy: policyConfig, Auth: profiles})
+		cat, err := loadCatalog(ctx, spec, logger, *lax, runtime, catalogMode)
 		if err != nil {
 			logger.Error("load spec failed", "class", string(errs.ClassOf(err)), "error", err)
 			return exitCode(err)
@@ -216,8 +217,12 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 
 // loadCatalog runs pipeline stages 0-4 (specsource, openapi, catalog) for
 // `serve SPEC`.
-func loadCatalog(ctx context.Context, spec string, logger *slog.Logger, lax bool, opts catalog.Options) (*catalog.Catalog, error) {
+func loadCatalog(ctx context.Context, spec string, logger *slog.Logger, lax bool, runtime config.Runtime, mode catalog.Mode) (*catalog.Catalog, error) {
 	doc, err := parseSpec(ctx, spec, logger)
+	if err != nil {
+		return nil, err
+	}
+	opts, err := catalogOptions(runtime, mode, doc.Operations)
 	if err != nil {
 		return nil, err
 	}
@@ -277,7 +282,7 @@ func reportMode(logger *slog.Logger, cat *catalog.Catalog) {
 // resolveConfig applies the documented precedence: defaults < file <
 // environment < flags (FR-62). A flag that was not given must not override the
 // file with its zero value, which is why the overrides carry pointers.
-func resolveConfig(path string, fs *flag.FlagSet, allowMutations, readOnly bool, baseURL string) (config.Runtime, error) {
+func resolveConfig(path string, fs *flag.FlagSet, allowMutations, readOnly bool, baseURL, approval string) (config.Runtime, error) {
 	var file *config.File
 	if path != "" {
 		loaded, err := config.Load(path)
@@ -295,9 +300,66 @@ func resolveConfig(path string, fs *flag.FlagSet, allowMutations, readOnly bool,
 	if wasSet(fs, "base-url") {
 		overrides.BaseURL = &baseURL
 	}
+	if wasSet(fs, "approval") {
+		mode := config.Approval(approval)
+		if !mode.Valid() {
+			return config.Runtime{}, errs.Errorf(errs.ClassUsage,
+				"--approval %q is not always, client-capability or never", approval)
+		}
+		overrides.Approval = &mode
+	}
 
 	environment := config.Environment{BaseURL: os.Getenv("LOTSMAN_BASE_URL")}
 	return config.Resolve(file, environment, overrides), nil
+}
+
+// catalogOptions turns the resolved configuration into catalog options,
+// checking the operator's overlay against the document first.
+//
+// The check is separate from Build and fatal on purpose: an override that
+// matches nothing is not a smaller catalog, it is a control the operator
+// believes is in force. `lotsman validate` and `serve` should fail on the
+// same typo.
+func catalogOptions(runtime config.Runtime, mode catalog.Mode, operations []domain.Operation) (catalog.Options, error) {
+	if err := catalog.ValidateOverrides(operations, runtime.Overrides); err != nil {
+		return catalog.Options{}, err
+	}
+	return catalog.Options{
+		Mode:        mode,
+		Policy:      policyConfig(runtime),
+		Auth:        auth.NewProfiles(runtime.AuthProfiles),
+		IncludeTags: runtime.IncludeTags,
+		Overrides:   runtime.Overrides,
+	}, nil
+}
+
+// policyConfig is the execution policy the runtime configuration describes.
+func policyConfig(runtime config.Runtime) policy.Config {
+	return policy.Config{
+		AllowMutations: runtime.AllowMutations,
+		Allow:          policyRules(runtime.AllowRules),
+		Deny:           policyRules(runtime.DenyRules),
+	}
+}
+
+// policyRules translates the configured rules into the gate's own vocabulary.
+// The gate does not read configuration: it is called from three places, and a
+// policy that could only be built one way would be a policy with one caller
+// and three interpretations.
+func policyRules(rules []config.Rule) []policy.Rule {
+	if len(rules) == 0 {
+		return nil
+	}
+	out := make([]policy.Rule, 0, len(rules))
+	for _, rule := range rules {
+		out = append(out, policy.Rule{
+			Namespace:    rule.Namespace,
+			OperationKey: domain.OperationKey(rule.OperationKey),
+			Tag:          rule.Tag,
+			Effect:       domain.Effect(rule.Effect),
+		})
+	}
+	return out
 }
 
 // wasSet reports whether a flag was given on the command line, which is what

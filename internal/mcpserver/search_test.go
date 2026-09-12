@@ -19,6 +19,18 @@ import (
 // destructive operation, tagged so filters have something to bite on.
 func searchCatalog(t *testing.T, server string, allowMutations bool) catalog.Catalog {
 	t.Helper()
+	return searchCatalogWithPolicy(t, server, policy.Config{AllowMutations: allowMutations})
+}
+
+// searchCatalogWithPolicy is the same catalog under an arbitrary execution
+// policy, for the tests that are about the policy rather than the mode.
+func searchCatalogWithPolicy(t *testing.T, server string, gate policy.Config) catalog.Catalog {
+	t.Helper()
+	return catalog.Build("sha256:test", searchOperations(server), catalog.Options{Mode: catalog.ModeSearch, Policy: gate})
+}
+
+// searchOperations is the fixture document behind both.
+func searchOperations(server string) []domain.Operation {
 	read := func(method, path, id string, effect domain.Effect, tags ...string) domain.Operation {
 		return domain.Operation{
 			Key:               domain.NewOperationKey("ns", method, path),
@@ -59,10 +71,7 @@ func searchCatalog(t *testing.T, server string, allowMutations bool) catalog.Cat
 		Style: domain.StyleSimple, Schema: domain.Schema{"type": "string"},
 	}}}
 
-	return catalog.Build("sha256:test", ops, catalog.Options{
-		Mode:   catalog.ModeSearch,
-		Policy: policy.Config{AllowMutations: allowMutations},
-	})
+	return ops
 }
 
 func searchSession(t *testing.T, cat *catalog.Catalog, client *http.Client, baseURL string) *mcp.ClientSession {

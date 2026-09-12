@@ -7,6 +7,7 @@ import (
 
 	yaml "go.yaml.in/yaml/v4"
 
+	"github.com/razrabotchik/lotsman/internal/domain"
 	"github.com/razrabotchik/lotsman/internal/errs"
 )
 
@@ -52,12 +53,55 @@ type Profile struct {
 	Satisfies []string `yaml:"satisfies,omitempty"`
 }
 
+// Approval is when a call that changes something asks a human first (FR-44).
+// It is a UX mechanism and never a security boundary: the protocol cannot
+// promise a person saw the prompt, and a client may answer it on its own
+// (FR-44a). The boundary is the policy gate, which has already run by the
+// time anyone is asked.
+type Approval string
+
+// Approval modes. The default is Always, which costs nothing while mutations
+// are disabled and is the safe answer the moment they are not.
+const (
+	ApprovalAlways           Approval = "always"
+	ApprovalClientCapability Approval = "client-capability"
+	ApprovalNever            Approval = "never"
+)
+
+// Valid reports whether the mode is one lotsman implements.
+func (a Approval) Valid() bool {
+	switch a {
+	case ApprovalAlways, ApprovalClientCapability, ApprovalNever:
+		return true
+	default:
+		return false
+	}
+}
+
+// Rule matches operations by the four axes FR-41 names. Fields inside one
+// rule are ANDed; a list of rules is ORed. An empty rule matches everything,
+// which is a mistake in a deny list and a no-op in an allow list, so it is
+// refused at load time rather than interpreted.
+type Rule struct {
+	Namespace    string `yaml:"namespace,omitempty"`
+	OperationKey string `yaml:"operationKey,omitempty"`
+	Tag          string `yaml:"tag,omitempty"`
+	Effect       string `yaml:"effect,omitempty"`
+}
+
 // Execution mirrors the execution section of the configuration file. Only the
 // settings the runtime reads today are present; the rest of docs/spec.md 5.1
 // arrives with the stages that need them.
 type Execution struct {
 	AllowMutations bool   `yaml:"allowMutations,omitempty"`
 	BaseURL        string `yaml:"baseURL,omitempty"`
+	// InteractiveApproval is when a mutating call asks before it happens.
+	// Empty means the documented default, `always`.
+	InteractiveApproval Approval `yaml:"interactiveApproval,omitempty"`
+	// AllowRules and DenyRules refine `allowMutations` (FR-41). A deny always
+	// wins; a non-empty allow list means an unmatched operation is refused.
+	AllowRules []Rule `yaml:"allowRules,omitempty"`
+	DenyRules  []Rule `yaml:"denyRules,omitempty"`
 	// AllowedOrigins is the egress allowlist (FR-32). An origin authored by
 	// the specification is never authorization by itself.
 	AllowedOrigins []string `yaml:"allowedOrigins,omitempty"`
@@ -67,12 +111,52 @@ type Execution struct {
 	AllowPrivateNetworks bool `yaml:"allowPrivateNetworks,omitempty"`
 }
 
+// Catalog mirrors the catalog section: what gets published, before any
+// question of what may be called.
+type Catalog struct {
+	// IncludeTags publishes only the operations carrying at least one of
+	// these tags (docs/spec.md 5.1). An empty list publishes everything.
+	IncludeTags []string `yaml:"includeTags,omitempty"`
+}
+
+// Match identifies the operations an override applies to. Either an
+// `operationId` or a method+path pair -- never a mix, and never a fragment:
+// half a coordinate would match by accident (docs/spec.md 5.2).
+type Match struct {
+	OperationID string `yaml:"operationId,omitempty"`
+	Method      string `yaml:"method,omitempty"`
+	Path        string `yaml:"path,omitempty"`
+}
+
+// OperationOverride is the operator's reviewed statement about one operation:
+// what it does, whether to publish it at all, and which credential it uses.
+//
+// It is the only thing that can raise an effect from `inferred` to `explicit`
+// (docs/spec.md 4.7), which is why it lives in the operator's configuration
+// and not in anything the document can influence.
+type OperationOverride struct {
+	Match Match `yaml:"match"`
+	// Effect states what the operation actually does. Empty leaves lotsman's
+	// own classification in place.
+	Effect string `yaml:"effect,omitempty"`
+	// Enabled: false removes the operation from publication entirely. Nil
+	// means "not stated", which is the difference between an operator who
+	// wants it hidden and one who never mentioned it.
+	Enabled *bool `yaml:"enabled,omitempty"`
+	// AuthProfile pins which configured credential satisfies this operation,
+	// which is how an ambiguous_security refusal is resolved by decision
+	// rather than by deleting a profile the rest of the catalog needs.
+	AuthProfile string `yaml:"authProfile,omitempty"`
+}
+
 // File is a parsed configuration document.
 type File struct {
-	APIVersion   string             `yaml:"apiVersion"`
-	Kind         string             `yaml:"kind,omitempty"`
-	Execution    Execution          `yaml:"execution,omitempty"`
-	AuthProfiles map[string]Profile `yaml:"authProfiles,omitempty"`
+	APIVersion         string              `yaml:"apiVersion"`
+	Kind               string              `yaml:"kind,omitempty"`
+	Catalog            Catalog             `yaml:"catalog,omitempty"`
+	Execution          Execution           `yaml:"execution,omitempty"`
+	AuthProfiles       map[string]Profile  `yaml:"authProfiles,omitempty"`
+	OperationOverrides []OperationOverride `yaml:"operationOverrides,omitempty"`
 }
 
 // Load reads and validates a configuration file.
@@ -119,7 +203,88 @@ func (f *File) validate() error {
 			return err
 		}
 	}
+	if err := validateApproval(f.Execution.InteractiveApproval); err != nil {
+		return err
+	}
+	for _, list := range []struct {
+		name  string
+		rules []Rule
+	}{{"allowRules", f.Execution.AllowRules}, {"denyRules", f.Execution.DenyRules}} {
+		for i := range list.rules {
+			if err := validateRule(list.name, i, &list.rules[i]); err != nil {
+				return err
+			}
+		}
+	}
+	for i := range f.OperationOverrides {
+		if err := f.validateOverride(i, &f.OperationOverrides[i]); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func validateApproval(mode Approval) error {
+	if mode == "" || mode.Valid() {
+		return nil
+	}
+	return errs.Errorf(errs.ClassUsage,
+		"config: execution.interactiveApproval %q is not always, client-capability or never", mode)
+}
+
+func validateRule(list string, index int, rule *Rule) error {
+	if rule.Namespace == "" && rule.OperationKey == "" && rule.Tag == "" && rule.Effect == "" {
+		return errs.Errorf(errs.ClassUsage,
+			"config: execution.%s[%d] matches every operation; name a namespace, operationKey, tag or effect", list, index)
+	}
+	if rule.Effect != "" && !knownEffect(rule.Effect) {
+		return errs.Errorf(errs.ClassUsage,
+			"config: execution.%s[%d]: effect %q is not read, write, destructive or unknown", list, index, rule.Effect)
+	}
+	return nil
+}
+
+func (f *File) validateOverride(index int, override *OperationOverride) error {
+	where := func(format string, args ...any) error {
+		return errs.Errorf(errs.ClassUsage, "config: operationOverrides[%d]: "+format, append([]any{index}, args...)...)
+	}
+
+	match := override.Match
+	switch {
+	case match.OperationID != "" && (match.Method != "" || match.Path != ""):
+		return where("match by operationId or by method+path, not both")
+	case match.OperationID == "" && match.Method == "" && match.Path == "":
+		return where("match needs an operationId or a method and a path")
+	case match.OperationID == "" && (match.Method == "" || match.Path == ""):
+		return where("match by method needs a path, and a path needs a method")
+	}
+
+	// An override that states nothing is a typo, and a typo in an override is
+	// a security control that silently did not apply.
+	if override.Effect == "" && override.Enabled == nil && override.AuthProfile == "" {
+		return where("states nothing; set effect, enabled or authProfile")
+	}
+	if override.Effect != "" && !knownEffect(override.Effect) {
+		return where("effect %q is not read, write, destructive or unknown", override.Effect)
+	}
+	if override.AuthProfile != "" {
+		if _, configured := f.AuthProfiles[override.AuthProfile]; !configured {
+			return where("authProfile %q is not one of the configured authProfiles", override.AuthProfile)
+		}
+	}
+	return nil
+}
+
+// knownEffect reports whether s is one of the domain's effect classes. The
+// vocabulary is shared rather than repeated: a configuration that accepts an
+// effect the runtime does not know is a config that lies about being applied.
+func knownEffect(s string) bool {
+	switch domain.Effect(s) {
+	case domain.EffectRead, domain.EffectWrite, domain.EffectDestructive, domain.EffectUnknown:
+		return true
+	default:
+		return false
+	}
 }
 
 func validateProfile(name string, profile *Profile) error {

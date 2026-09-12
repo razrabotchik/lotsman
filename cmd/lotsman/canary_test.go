@@ -71,7 +71,7 @@ authProfiles:
 	var stderr syncBuffer
 	cmd.Stderr = &stderr
 
-	client := mcp.NewClient(&mcp.Implementation{Name: "canary", Version: "v0"}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: "canary", Version: "v0"}, approving())
 	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: cmd, TerminateDuration: 5 * time.Second}, nil)
 	if err != nil {
 		t.Fatalf("connect: %v\nstderr:\n%s", err, stderr.String())

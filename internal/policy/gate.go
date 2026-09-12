@@ -2,20 +2,93 @@ package policy
 
 import (
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/razrabotchik/lotsman/internal/domain"
 )
 
+// anyMatch reports whether any rule in the list names this operation.
+func anyMatch(rules []Rule, subject Subject) bool {
+	for _, rule := range rules {
+		if rule.matches(subject) {
+			return true
+		}
+	}
+	return false
+}
+
 // Config is the execution policy in force for a run. The zero value is the
-// documented default: read-only (FR-40, docs/spec.md 5.1
+// documented default: read-only, no rules (FR-40, docs/spec.md 5.1
 // `execution.defaultPolicy: read-only`).
-//
-// Allow/deny rules by namespace, operationKey, tag and effect (FR-41) arrive
-// with the config layer; this is the gate they will refine, not replace.
 type Config struct {
 	// AllowMutations corresponds to `execution.allowMutations`. Without it,
 	// only operations whose effect is read may reach the network.
 	AllowMutations bool
+	// Allow and Deny are the operator's rules (FR-41). They are two lists
+	// rather than one ordered one because first-match-wins would make the
+	// safety of a configuration depend on the order somebody pasted it in.
+	Allow []Rule
+	Deny  []Rule
+}
+
+// Rule matches operations on the four axes FR-41 names. The fields inside one
+// rule are ANDed, a list of rules is ORed, and an empty rule matches
+// everything -- which the config loader refuses rather than interprets.
+type Rule struct {
+	Namespace    string
+	OperationKey domain.OperationKey
+	Tag          string
+	Effect       domain.Effect
+}
+
+// matches reports whether the rule names this operation.
+func (r Rule) matches(subject Subject) bool {
+	if r.Namespace != "" && r.Namespace != subject.Key.Namespace() {
+		return false
+	}
+	if r.OperationKey != "" && r.OperationKey != subject.Key {
+		return false
+	}
+	if r.Effect != "" && r.Effect != subject.Effect.Effect {
+		return false
+	}
+	if r.Tag != "" && !slices.Contains(subject.Tags, r.Tag) {
+		return false
+	}
+	return true
+}
+
+// describe names the axes a rule matched on, so a refusal can say which line
+// of the configuration produced it.
+func (r Rule) describe() string {
+	var parts []string
+	for _, part := range [][2]string{
+		{"namespace", r.Namespace},
+		{"operationKey", string(r.OperationKey)},
+		{"tag", r.Tag},
+		{"effect", string(r.Effect)},
+	} {
+		if part[1] != "" {
+			parts = append(parts, part[0]+"="+part[1])
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+// Subject is the operation a verdict is about. It is spelled out rather than
+// taking a catalog tool or a domain.Operation because the gate runs at three
+// different points in the pipeline, on three different representations, and
+// must reach the same answer at all of them.
+type Subject struct {
+	Key    domain.OperationKey
+	Tags   []string
+	Effect domain.EffectDecision
+}
+
+// SubjectOf is the gate's view of a parsed operation.
+func SubjectOf(op *domain.Operation) Subject {
+	return Subject{Key: op.Key, Tags: op.Tags, Effect: op.Effect}
 }
 
 // Verdict is the gate's answer for one operation.
@@ -35,10 +108,36 @@ type Verdict struct {
 // `unknown` is not a third state that gets the benefit of the doubt -- it is refused with its own reason code, because
 // "we could not tell" and "we know it writes" are different things to an
 // operator reading a report, even though both are blocked.
-func (c Config) Evaluate(effect domain.EffectDecision) Verdict {
+func (c Config) Evaluate(subject Subject) Verdict {
+	// A deny rule is the operator saying "not this one", and it applies
+	// whatever the effect: refusing a read on request can never be the unsafe
+	// answer, and an operator who has to enable mutations to hide an endpoint
+	// would have to make things worse to make them better.
+	for _, rule := range c.Deny {
+		if rule.matches(subject) {
+			return Verdict{
+				Reason:  domain.ReasonPolicyDeniedByRule,
+				Message: "refused by execution.denyRules (" + rule.describe() + ")",
+			}
+		}
+	}
+
+	effect := subject.Effect
 	if effect.IsRead() {
 		return Verdict{Allowed: true}
 	}
+
+	// The allow list gates mutations, which is what FR-41 says it does: a
+	// read is permitted by the default policy and does not need a rule to
+	// license it. Only a deny rule can take one away.
+	if len(c.Allow) > 0 && !anyMatch(c.Allow, subject) {
+		return Verdict{
+			Reason: domain.ReasonPolicyNotAllowedByRule,
+			Message: fmt.Sprintf("effect is %s and execution.allowRules does not list this operation; "+
+				"add a rule that matches it or remove the allow list", effect.Effect),
+		}
+	}
+
 	if c.AllowMutations {
 		return Verdict{Allowed: true}
 	}

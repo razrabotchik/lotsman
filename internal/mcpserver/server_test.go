@@ -22,8 +22,23 @@ import (
 	"github.com/razrabotchik/lotsman/internal/policy"
 )
 
-// connect wires a client to a server over in-memory transports.
+// connect wires a client to a server over in-memory transports. The client
+// approves every elicitation, which is what most of these tests need: they
+// are about the call path, and a prompt nobody answers would make every
+// mutation test a test of the approval gate instead.
 func connect(t *testing.T, opts *mcpserver.Options) *mcp.ClientSession {
+	t.Helper()
+	return connectWith(t, opts, &mcp.ClientOptions{
+		ElicitationHandler: func(context.Context, *mcp.ElicitRequest) (*mcp.ElicitResult, error) {
+			return &mcp.ElicitResult{Action: "accept"}, nil
+		},
+	})
+}
+
+// connectWith is connect with the client's own options -- nil for a client
+// that declares no elicitation capability at all, which is the shape
+// criterion 6 is about.
+func connectWith(t *testing.T, opts *mcpserver.Options, clientOpts *mcp.ClientOptions) *mcp.ClientSession {
 	t.Helper()
 	ctx := t.Context()
 
@@ -34,7 +49,7 @@ func connect(t *testing.T, opts *mcpserver.Options) *mcp.ClientSession {
 	}
 	t.Cleanup(func() { _ = serverSession.Wait() })
 
-	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "v0"}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "v0"}, clientOpts)
 	clientSession, err := client.Connect(ctx, clientTransport, nil)
 	if err != nil {
 		t.Fatalf("client connect: %v", err)

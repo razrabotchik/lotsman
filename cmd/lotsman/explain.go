@@ -17,7 +17,6 @@ import (
 	"github.com/razrabotchik/lotsman/internal/domain"
 	"github.com/razrabotchik/lotsman/internal/egress"
 	"github.com/razrabotchik/lotsman/internal/errs"
-	"github.com/razrabotchik/lotsman/internal/policy"
 	"github.com/razrabotchik/lotsman/internal/redact"
 	"github.com/razrabotchik/lotsman/internal/requestbuild"
 )
@@ -54,7 +53,7 @@ func explainCall(ctx context.Context, args []string, stdout, stderr io.Writer) i
 		return exitCode(err)
 	}
 
-	runtime, err := resolveConfig(*configPath, fs, *allowMutations, false, *baseURL)
+	runtime, err := resolveConfig(*configPath, fs, *allowMutations, false, *baseURL, "")
 	if err != nil {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
 		return exitCode(err)
@@ -67,10 +66,12 @@ func explainCall(ctx context.Context, args []string, stdout, stderr io.Writer) i
 		return exitCode(err)
 	}
 
-	cat := catalog.Build(doc.digest, doc.Operations, catalog.Options{
-		Policy: policy.Config{AllowMutations: runtime.AllowMutations},
-		Auth:   auth.NewProfiles(runtime.AuthProfiles),
-	})
+	opts, err := catalogOptions(runtime, catalog.ModeTools, doc.Operations)
+	if err != nil {
+		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
+		return exitCode(err)
+	}
+	cat := catalog.Build(doc.digest, doc.Operations, opts)
 	tool := findTool(&cat, target)
 	if tool == nil {
 		fmt.Fprintf(stderr, "lotsman: no published operation matches %q (try `lotsman inspect %s`)\n", target, *specPath)
@@ -128,6 +129,7 @@ func explain(w io.Writer, tool *catalog.Tool, arguments requestbuild.Arguments, 
 	}
 
 	fmt.Fprintf(w, "policy      %s\n", policyLine(tool, runtime))
+	fmt.Fprintf(w, "approval    %s\n", approvalLine(tool, runtime))
 	fmt.Fprintf(w, "request     %s\n", requestLine(tool, arguments, runtime))
 	for _, line := range argumentLines(arguments) {
 		fmt.Fprintf(w, "            %s\n", line)
@@ -149,6 +151,25 @@ func policyLine(tool *catalog.Tool, runtime config.Runtime) string {
 		mode = "mutations enabled"
 	}
 	return fmt.Sprintf("ALLOW (%s: %s permitted)", mode, tool.Effect.Effect)
+}
+
+// approvalLine states whether a human will be asked before this call, which
+// is a fact an operator needs before the call rather than after it: a client
+// that cannot be asked turns a permitted mutation into a refusal (FR-45).
+func approvalLine(tool *catalog.Tool, runtime config.Runtime) string {
+	if tool.Effect.IsRead() {
+		return "not required (read)"
+	}
+	switch runtime.InteractiveApproval {
+	case config.ApprovalNever:
+		return "not required (execution.interactiveApproval=never)"
+	case config.ApprovalClientCapability:
+		return "requested when the client supports elicitation; skipped otherwise " +
+			"(execution.interactiveApproval=client-capability)"
+	default:
+		return "required before the call; a client that cannot be asked is refused " +
+			"(execution.interactiveApproval=always)"
+	}
 }
 
 // requestLine builds the request exactly as the runtime would, which is the

@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/razrabotchik/lotsman/internal/auth"
+	"github.com/razrabotchik/lotsman/internal/config"
 	"github.com/razrabotchik/lotsman/internal/domain"
 	"github.com/razrabotchik/lotsman/internal/policy"
 )
@@ -110,6 +111,15 @@ type Options struct {
 	// authenticated is a fact about the configuration, not about the
 	// document, which is why it is decided here rather than in the adapter.
 	Auth auth.Profiles
+
+	// IncludeTags publishes only the operations carrying at least one of
+	// these tags (docs/spec.md 5.1). Empty publishes everything.
+	IncludeTags []string
+	// Overrides are the operator's per-operation statements. Validate them
+	// against the document with ValidateOverrides before building: Build
+	// ignores one that matches nothing, and an unnoticed override is a
+	// control the operator believes is in force.
+	Overrides []config.OperationOverride
 }
 
 // mode is the requested mode, defaulting to auto.
@@ -137,6 +147,12 @@ func (o Options) maxSerializedBytes() int {
 // method, and callers (mcpserver) decide which of those they are prepared
 // to serve.
 func Build(specDigest string, operations []domain.Operation, opts Options) Catalog {
+	// The overlay runs first and on a copy: everything downstream -- tools,
+	// policy verdicts and the report alike -- must see one set of operations,
+	// the operator's, or the report would describe a catalog nobody served.
+	overlaid := Overlay(operations, opts)
+	operations = overlaid.Operations
+
 	supported := make([]domain.Operation, 0, len(operations))
 	for i := range operations {
 		if operations[i].Support.Level == domain.SupportSupported {
@@ -152,8 +168,21 @@ func Build(specDigest string, operations []domain.Operation, opts Options) Catal
 	tools := make([]Tool, 0, len(supported))
 	for i := range supported {
 		op := &supported[i]
-		verdict := opts.Policy.Evaluate(op.Effect)
-		credentials := auth.Select(op.Security, opts.Auth)
+
+		// Selection is decided before policy, and removes rather than
+		// refuses: `enabled: false` and includeTags say "this is not part of
+		// the surface", which is a different statement from "you may not call
+		// this" and deserves a different outcome.
+		if _, gone := overlaid.Excluded[op.Key]; gone {
+			continue
+		}
+
+		verdict := opts.Policy.Evaluate(policy.SubjectOf(op))
+		profiles := opts.Auth
+		if pinned := overlaid.authProfiles[op.Key]; pinned != "" {
+			profiles = profiles.Only(pinned)
+		}
+		credentials := auth.Select(op.Security, profiles)
 
 		tool := Tool{
 			Name:              toolName(op, seen),
@@ -192,7 +221,7 @@ func Build(specDigest string, operations []domain.Operation, opts Options) Catal
 		SpecDigest: specDigest,
 		Tools:      tools,
 		Digest:     catalogDigest,
-		Report:     buildReport(operations, tools, catalogDigest, opts),
+		Report:     buildReport(operations, tools, overlaid.Excluded, catalogDigest, opts),
 	}
 	// `auto` follows the measurement; an explicit mode is obeyed even when the
 	// measurement disagrees, and the report says both so a pinned choice is

@@ -126,7 +126,7 @@ func TestSuspiciousWarningNamesTheOperationAndVerb(t *testing.T) {
 func TestGateReadOnlyByDefault(t *testing.T) {
 	readOnly := Config{} // the zero value is the documented default
 
-	if v := readOnly.Evaluate(domain.EffectDecision{Effect: domain.EffectRead}); !v.Allowed {
+	if v := readOnly.Evaluate(Subject{Effect: domain.EffectDecision{Effect: domain.EffectRead}}); !v.Allowed {
 		t.Errorf("a read was blocked: %+v", v)
 	}
 	for _, tt := range []struct {
@@ -138,7 +138,7 @@ func TestGateReadOnlyByDefault(t *testing.T) {
 		{domain.EffectUnknown, domain.ReasonPolicyUnknownEffectBlocked},
 	} {
 		t.Run(string(tt.effect), func(t *testing.T) {
-			v := readOnly.Evaluate(domain.EffectDecision{Effect: tt.effect})
+			v := readOnly.Evaluate(Subject{Effect: domain.EffectDecision{Effect: tt.effect}})
 			if v.Allowed {
 				t.Fatalf("%s was allowed in read-only mode", tt.effect)
 			}
@@ -157,7 +157,7 @@ func TestGateAllowsMutationsWhenEnabled(t *testing.T) {
 	for _, effect := range []domain.Effect{
 		domain.EffectRead, domain.EffectWrite, domain.EffectDestructive, domain.EffectUnknown,
 	} {
-		if v := enabled.Evaluate(domain.EffectDecision{Effect: effect}); !v.Allowed {
+		if v := enabled.Evaluate(Subject{Effect: domain.EffectDecision{Effect: effect}}); !v.Allowed {
 			t.Errorf("%s blocked with mutations enabled: %+v", effect, v)
 		}
 	}
@@ -179,11 +179,88 @@ func TestAnnotationsAreConservative(t *testing.T) {
 // A zero EffectDecision means nobody classified the operation. That must fail
 // closed: forgetting to classify cannot be cheaper than classifying.
 func TestGateTreatsUnsetEffectAsUnknown(t *testing.T) {
-	v := Config{}.Evaluate(domain.EffectDecision{})
+	v := Config{}.Evaluate(Subject{})
 	if v.Allowed {
 		t.Fatal("an unclassified operation was allowed")
 	}
 	if v.Reason != domain.ReasonPolicyUnknownEffectBlocked {
 		t.Errorf("reason = %q, want %q", v.Reason, domain.ReasonPolicyUnknownEffectBlocked)
+	}
+}
+
+func subject(key domain.OperationKey, effect domain.Effect, tags ...string) Subject {
+	return Subject{Key: key, Tags: tags, Effect: domain.EffectDecision{Effect: effect}}
+}
+
+// FR-41: enabling mutations is not the same as enabling all of them.
+func TestDenyRuleRefusesWhateverElseWasAllowed(t *testing.T) {
+	gate := Config{AllowMutations: true, Deny: []Rule{{Tag: "billing"}}}
+
+	v := gate.Evaluate(subject("default:POST:/v2/invoices", domain.EffectWrite, "billing"))
+	if v.Allowed {
+		t.Fatal("a denied mutation was allowed with mutations enabled")
+	}
+	if v.Reason != domain.ReasonPolicyDeniedByRule {
+		t.Errorf("reason = %q, want %q", v.Reason, domain.ReasonPolicyDeniedByRule)
+	}
+	if !strings.Contains(v.Message, "tag=billing") {
+		t.Errorf("message = %q, want it to name the rule that decided", v.Message)
+	}
+	// A rule that names something else does not reach this operation.
+	if v := gate.Evaluate(subject("default:POST:/v2/droplets", domain.EffectWrite, "droplets")); !v.Allowed {
+		t.Errorf("an unrelated mutation was refused: %+v", v)
+	}
+}
+
+// A deny rule applies to reads too: refusing on request is never the unsafe
+// answer, and hiding an endpoint must not require enabling mutations first.
+func TestDenyRuleAppliesToReads(t *testing.T) {
+	gate := Config{Deny: []Rule{{OperationKey: "default:GET:/v2/account"}}}
+	if v := gate.Evaluate(subject("default:GET:/v2/account", domain.EffectRead)); v.Allowed {
+		t.Fatal("a denied read was allowed")
+	}
+	if v := gate.Evaluate(subject("default:GET:/v2/droplets", domain.EffectRead)); !v.Allowed {
+		t.Error("an unrelated read was refused")
+	}
+}
+
+func TestAllowListRefusesTheUnmatchedMutation(t *testing.T) {
+	gate := Config{AllowMutations: true, Allow: []Rule{{Effect: domain.EffectWrite}}}
+
+	if v := gate.Evaluate(subject("default:POST:/v2/droplets", domain.EffectWrite)); !v.Allowed {
+		t.Errorf("a listed mutation was refused: %+v", v)
+	}
+	v := gate.Evaluate(subject("default:DELETE:/v2/droplets/{id}", domain.EffectDestructive))
+	if v.Allowed {
+		t.Fatal("an unlisted mutation was allowed by a non-empty allow list")
+	}
+	if v.Reason != domain.ReasonPolicyNotAllowedByRule {
+		t.Errorf("reason = %q, want %q", v.Reason, domain.ReasonPolicyNotAllowedByRule)
+	}
+	// FR-41 gates mutations; a read needs no rule to license it, and only a
+	// deny rule can take one away.
+	if v := gate.Evaluate(subject("default:GET:/v2/droplets", domain.EffectRead)); !v.Allowed {
+		t.Errorf("a read was refused by a mutation allow list: %+v", v)
+	}
+}
+
+func TestRuleFieldsAreANDedWithinOneRule(t *testing.T) {
+	gate := Config{AllowMutations: true, Deny: []Rule{{Tag: "droplets", Effect: domain.EffectDestructive}}}
+
+	if v := gate.Evaluate(subject("default:DELETE:/v2/droplets/{id}", domain.EffectDestructive, "droplets")); v.Allowed {
+		t.Error("a rule matching on both axes did not apply")
+	}
+	if v := gate.Evaluate(subject("default:POST:/v2/droplets", domain.EffectWrite, "droplets")); !v.Allowed {
+		t.Error("a rule applied although only one of its two axes matched")
+	}
+}
+
+func TestRulesMatchOnNamespace(t *testing.T) {
+	gate := Config{AllowMutations: true, Deny: []Rule{{Namespace: "default"}}}
+	if v := gate.Evaluate(subject("default:POST:/pets", domain.EffectWrite)); v.Allowed {
+		t.Error("a namespace rule did not apply to an operation in that namespace")
+	}
+	if v := gate.Evaluate(subject("other:POST:/pets", domain.EffectWrite)); !v.Allowed {
+		t.Error("a namespace rule applied to another namespace")
 	}
 }

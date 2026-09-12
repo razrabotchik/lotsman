@@ -45,8 +45,13 @@ type Totals struct {
 	// CapabilityBlocked is supported but not runnable by this build.
 	CapabilityBlocked int `json:"capabilityBlocked"`
 	// PolicyBlocked is runnable but not permitted by the current policy.
-	PolicyBlocked int                   `json:"policyBlocked"`
-	ByEffect      map[domain.Effect]int `json:"byEffect,omitempty"`
+	PolicyBlocked int `json:"policyBlocked"`
+	// Excluded is supported and translatable, but removed from the surface by
+	// the operator: a disabled override or a tag filter. It is its own number
+	// because it is the only one of these a reader fixes by editing their own
+	// configuration rather than lotsman's.
+	Excluded int                   `json:"excluded"`
+	ByEffect map[domain.Effect]int `json:"byEffect,omitempty"`
 }
 
 // Estimate sizes the published catalog. serializedBytes is what the tool list
@@ -91,8 +96,12 @@ type OperationVerdict struct {
 	Support  domain.SupportLevel `json:"support"`
 	// Published means an MCP client can see the tool; Executable means a call
 	// would actually be attempted. The first never implies the second.
-	Published         bool                  `json:"published"`
-	Executable        bool                  `json:"executable"`
+	Published bool `json:"published"`
+	// Excluded means the operator removed it from the surface. It is not a
+	// refusal: the operation is supported, and publishing it again is one
+	// configuration line away.
+	Excluded   bool                  `json:"excluded,omitempty"`
+	Executable bool                  `json:"executable"`
 	Effect            domain.EffectDecision `json:"effect"`
 	ExecutionBlockers []domain.ReasonCode   `json:"executionBlockers,omitempty"`
 	PolicyBlockers    []domain.ReasonCode   `json:"policyBlockers,omitempty"`
@@ -112,7 +121,7 @@ type Reason struct {
 // buildReport assembles the report from every enumerated operation -- not
 // only the published ones, since the operations a reader most needs to see
 // are the ones that did not make it.
-func buildReport(operations []domain.Operation, tools []Tool, digest string, opts Options) Report {
+func buildReport(operations []domain.Operation, tools []Tool, excluded map[domain.OperationKey]domain.ReasonCode, digest string, opts Options) Report {
 	report := Report{
 		SchemaVersion: ReportSchemaVersion,
 		ByReason:      map[domain.ReasonCode]int{},
@@ -138,6 +147,10 @@ func buildReport(operations []domain.Operation, tools []Tool, digest string, opt
 			Effect:            op.Effect,
 			ExecutionBlockers: append([]domain.ReasonCode(nil), op.ExecutionBlockers...),
 			Reasons:           reasonsFor(op),
+		}
+		if reason, gone := excluded[op.Key]; gone {
+			verdict.Excluded = true
+			verdict.Reasons = append(verdict.Reasons, Reason{Code: reason})
 		}
 		if tool, published := byKey[op.Key]; published {
 			verdict.ToolName = tool.Name
@@ -168,6 +181,8 @@ func buildReport(operations []domain.Operation, tools []Tool, digest string, opt
 			report.Totals.Executable++
 		case len(verdict.PolicyBlockers) > 0:
 			report.Totals.PolicyBlocked++
+		case verdict.Excluded:
+			report.Totals.Excluded++
 		case verdict.Published:
 			report.Totals.CapabilityBlocked++
 		}

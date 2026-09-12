@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -235,7 +236,7 @@ func addCallOperation(srv *mcp.Server, runners []runner, kind callKind) {
 		}
 	}
 
-	mcp.AddTool(srv, tool, func(ctx context.Context, _ *mcp.CallToolRequest, in CallInput) (*mcp.CallToolResult, response.Result, error) {
+	mcp.AddTool(srv, tool, func(ctx context.Context, req *mcp.CallToolRequest, in CallInput) (*mcp.CallToolResult, response.Result, error) {
 		prepared := find(runners, in.ID)
 		if prepared == nil {
 			return nil, response.Result{}, unknownOperation(in.ID)
@@ -256,8 +257,12 @@ func addCallOperation(srv *mcp.Server, runners []runner, kind callKind) {
 				"lotsman: %s is a read; use call_read_operation", prepared.tool.OperationKey)
 		}
 
-		result, err := prepared.call(ctx, in.Arguments)
+		result, err := prepared.call(ctx, req, in.Arguments)
 		if err != nil {
+			var ask *pending
+			if errors.As(err, &ask) {
+				return ask.result, response.Result{}, nil
+			}
 			return nil, response.Result{}, err
 		}
 		var res *mcp.CallToolResult

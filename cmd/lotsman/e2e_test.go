@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/razrabotchik/lotsman/internal/domain"
 )
 
 // buildBinary compiles the CLI once per test binary and returns its path.
@@ -45,7 +47,7 @@ func TestStdioEndToEnd(t *testing.T) {
 	var stderr syncBuffer
 	cmd.Stderr = &stderr
 
-	client := mcp.NewClient(&mcp.Implementation{Name: "lotsman-e2e", Version: "v0"}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: "lotsman-e2e", Version: "v0"}, approving())
 	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: cmd, TerminateDuration: 5 * time.Second}, nil)
 	if err != nil {
 		t.Fatalf("connect over stdio: %v\nstderr:\n%s", err, stderr.String())
@@ -116,7 +118,7 @@ func TestServeWithSpecPublishesTools(t *testing.T) {
 	var stderr syncBuffer
 	cmd.Stderr = &stderr
 
-	client := mcp.NewClient(&mcp.Implementation{Name: "lotsman-e2e", Version: "v0"}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: "lotsman-e2e", Version: "v0"}, approving())
 	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: cmd, TerminateDuration: 5 * time.Second}, nil)
 	if err != nil {
 		t.Fatalf("connect over stdio: %v\nstderr:\n%s", err, stderr.String())
@@ -178,7 +180,7 @@ func TestServeExecutesParameterizedGETEndToEnd(t *testing.T) {
 	var stderr syncBuffer
 	cmd.Stderr = &stderr
 
-	client := mcp.NewClient(&mcp.Implementation{Name: "lotsman-e2e", Version: "v0"}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: "lotsman-e2e", Version: "v0"}, approving())
 	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: cmd, TerminateDuration: 5 * time.Second}, nil)
 	if err != nil {
 		t.Fatalf("connect over stdio: %v\nstderr:\n%s", err, stderr.String())
@@ -363,14 +365,14 @@ func TestServeMutationPolicyEndToEnd(t *testing.T) {
 	}))
 	defer api.Close()
 
-	call := func(t *testing.T, extraArgs ...string) *mcp.CallToolResult {
+	callAs := func(t *testing.T, clientOpts *mcp.ClientOptions, extraArgs ...string) *mcp.CallToolResult {
 		t.Helper()
 		args := append([]string{"serve", miniSpecPath(t), "--lax", "--base-url", api.URL, "--log-level", "debug"}, extraArgs...)
 		cmd := exec.Command(bin, args...)
 		var stderr syncBuffer
 		cmd.Stderr = &stderr
 
-		client := mcp.NewClient(&mcp.Implementation{Name: "lotsman-e2e", Version: "v0"}, nil)
+		client := mcp.NewClient(&mcp.Implementation{Name: "lotsman-e2e", Version: "v0"}, clientOpts)
 		session, err := client.Connect(ctx, &mcp.CommandTransport{Command: cmd, TerminateDuration: 5 * time.Second}, nil)
 		if err != nil {
 			t.Fatalf("connect over stdio: %v\nstderr:\n%s", err, stderr.String())
@@ -409,6 +411,10 @@ func TestServeMutationPolicyEndToEnd(t *testing.T) {
 		}
 		return res
 	}
+	call := func(t *testing.T, extraArgs ...string) *mcp.CallToolResult {
+		t.Helper()
+		return callAs(t, approving(), extraArgs...)
+	}
 
 	t.Run("blocked by default", func(t *testing.T) {
 		res := call(t)
@@ -436,6 +442,49 @@ func TestServeMutationPolicyEndToEnd(t *testing.T) {
 			t.Fatal("upstream received no request")
 		}
 	})
+
+	// Acceptance criterion 6 (FR-45): mutations enabled, approval required by
+	// default, and a client that never declared it can be asked. The refusal
+	// happens before the network, over the real transport, against the real
+	// binary.
+	t.Run("fails closed when the client cannot be asked", func(t *testing.T) {
+		res := callAs(t, nil, "--allow-mutations")
+		if !res.IsError {
+			t.Fatalf("a mutation ran without approval: %+v", res.StructuredContent)
+		}
+		if text := resultText(res); !strings.Contains(text, string(domain.ReasonApprovalUnavailable)) {
+			t.Errorf("refusal = %q, want it to name %s", text, domain.ReasonApprovalUnavailable)
+		}
+		select {
+		case got := <-requests:
+			t.Fatalf("upstream was called: %+v", got)
+		default:
+		}
+	})
+
+	// The operator can decide otherwise, and then the same call goes through.
+	t.Run("approval can be turned off", func(t *testing.T) {
+		res := callAs(t, nil, "--allow-mutations", "--approval", "never")
+		if res.IsError {
+			t.Fatalf("a mutation failed with approval disabled: %+v", res.Content)
+		}
+		select {
+		case <-requests:
+		default:
+			t.Fatal("upstream received no request")
+		}
+	})
+}
+
+// resultText is whatever the server put in the result's content blocks.
+func resultText(res *mcp.CallToolResult) string {
+	var text strings.Builder
+	for _, content := range res.Content {
+		if block, ok := content.(*mcp.TextContent); ok {
+			text.WriteString(block.Text)
+		}
+	}
+	return text.String()
 }
 
 // TestServeSearchModeEndToEnd is feature 002's checkpoint over the real
@@ -467,7 +516,7 @@ func TestServeSearchModeEndToEnd(t *testing.T) {
 		var stderr syncBuffer
 		cmd.Stderr = &stderr
 
-		client := mcp.NewClient(&mcp.Implementation{Name: "search-e2e", Version: "v0"}, nil)
+		client := mcp.NewClient(&mcp.Implementation{Name: "search-e2e", Version: "v0"}, approving())
 		session, err := client.Connect(ctx, &mcp.CommandTransport{Command: cmd, TerminateDuration: 5 * time.Second}, nil)
 		if err != nil {
 			t.Fatalf("connect: %v\nstderr:\n%s", err, stderr.String())
