@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -72,12 +71,14 @@ type Options struct {
 	// collide. The empty value means the single-spec default.
 	Namespace string
 
-	// Logger receives libopenapi's own error/warning logs. It must never be
-	// nil in a caller that also runs the stdio MCP transport: libopenapi's
-	// default configuration logs to stdout, which would corrupt the JSON-RPC
-	// stream. A nil logger falls back to stderr rather than to that upstream
-	// default, so misuse fails safe.
+	// Logger receives lotsman's own progress logging. It must never write to
+	// stdout: on stdio transport stdout carries protocol frames only.
 	Logger *slog.Logger
+
+	// ParserLog reinstates libopenapi's own log, which is discarded by
+	// default because everything in it reaches lotsman as a diagnostic with
+	// better provenance (see parserLogger). For debugging the adapter itself.
+	ParserLog *slog.Logger
 
 	// RootPath is the directory the document was loaded from
 	// (specsource.Source.RootPath), carried here as the confinement root for
@@ -86,14 +87,6 @@ type Options struct {
 
 	// Limits bounds parse time, operation count and the $ref closure.
 	Limits Limits
-}
-
-// resolveLogger applies the fail-safe default described on Options.Logger.
-func resolveLogger(logger *slog.Logger) *slog.Logger {
-	if logger != nil {
-		return logger
-	}
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 }
 
 // Parse builds the IR from raw OpenAPI 3.0/3.1 bytes: pipeline stage 1
@@ -124,7 +117,12 @@ func Parse(ctx context.Context, specBytes []byte, opts Options) (*Document, erro
 		return nil, versionErr
 	}
 
-	parsed, err := buildModel(ctx, specBytes, resolveLogger(opts.Logger), limits.parseTimeout())
+	parsed, err := buildModel(ctx, specBytes, parseConfig{
+		logger:   parserLogger(opts.ParserLog),
+		timeout:  limits.parseTimeout(),
+		rootPath: opts.RootPath,
+		files:    scan.files,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -153,6 +151,10 @@ func Parse(ctx context.Context, specBytes []byte, opts Options) (*Document, erro
 	}
 
 	rootServers := model.Model.Servers
+	var schemes *orderedmap.Map[string, *v3.SecurityScheme]
+	if model.Model.Components != nil {
+		schemes = model.Model.Components.SecuritySchemes
+	}
 	for _, path := range paths {
 		item, _ := model.Model.Paths.PathItems.Get(path)
 		for _, m := range methodOrder {
@@ -161,7 +163,7 @@ func Parse(ctx context.Context, specBytes []byte, opts Options) (*Document, erro
 				continue
 			}
 			out.Operations = append(out.Operations,
-				buildOperation(opts.Namespace, m.name, path, op, item.Parameters, item.Servers, rootServers, model.Model.Security))
+				buildOperation(opts.Namespace, m.name, path, op, item.Parameters, item.Servers, rootServers, model.Model.Security, schemes))
 		}
 	}
 	attachRefDiagnostics(out.Operations, scan.diagnostics)
@@ -199,7 +201,8 @@ func checkVersion(scan *refScan) error {
 //
 // A returned error is fatal; parsedModel.buildErr holds the structural errors
 // a partial model survives.
-func buildModel(ctx context.Context, specBytes []byte, logger *slog.Logger, timeout time.Duration) (*parsedModel, error) {
+func buildModel(ctx context.Context, specBytes []byte, cfg parseConfig) (*parsedModel, error) {
+	logger, timeout := cfg.logger, cfg.timeout
 	if err := ctx.Err(); err != nil {
 		// The caller is already gone; starting a parse nobody waits for would
 		// only burn CPU on an untrusted document.
@@ -217,14 +220,25 @@ func buildModel(ctx context.Context, specBytes []byte, logger *slog.Logger, time
 	go func() {
 		config := datamodel.NewDocumentConfiguration()
 		config.Logger = logger
-		// Fail closed on everything the document could reach outside itself.
-		// BasePath is deliberately left unset even though Options.RootPath is
-		// known: setting it switches libopenapi's rolodex into indexing every
-		// YAML and JSON file under that directory, which is precisely the
-		// arbitrary-file read that root confinement is meant to prevent.
-		// T025 turns file references on with an explicit policy instead.
-		config.AllowFileReferences = false
+		// Remote references are never fetched: a document must not be able to
+		// make lotsman issue a request of its choosing.
 		config.AllowRemoteReferences = false
+		// File references are enabled only for documents lotsman has already
+		// resolved, confined to the spec root and budgeted. BasePath alone
+		// would point the rolodex at a directory and trust it to stay inside;
+		// FileFilter narrows it to the exact list, so a file that is present
+		// but never referenced is still never read.
+		if len(cfg.files) > 0 {
+			config.BasePath = cfg.rootPath
+			config.AllowFileReferences = true
+			config.FileFilter = append([]string(nil), cfg.files...)
+		} else {
+			config.AllowFileReferences = false
+		}
+		// A circular reference is a legitimate shape now that references are
+		// published as references rather than inlined (ADR-0009).
+		config.IgnorePolymorphicCircularReferences = true
+		config.IgnoreArrayCircularReferences = true
 
 		doc, err := libopenapi.NewDocumentWithConfiguration(specBytes, config)
 		if err != nil {
@@ -256,6 +270,15 @@ func buildModel(ctx context.Context, specBytes []byte, logger *slog.Logger, time
 	}
 }
 
+// parseConfig is what buildModel needs from the caller: the logger and
+// deadline, plus the confined file allowlist the rolodex may read.
+type parseConfig struct {
+	logger   *slog.Logger
+	timeout  time.Duration
+	rootPath string
+	files    []string
+}
+
 // parsedModel is libopenapi's output crossing back into lotsman's control:
 // the model plus the structural errors it survived.
 type parsedModel struct {
@@ -281,7 +304,7 @@ func countOperations(model *libopenapi.DocumentModel[v3.Document], paths []strin
 	return count
 }
 
-func buildOperation(namespace, method, path string, op *v3.Operation, pathParams []*v3.Parameter, pathServers, rootServers []*v3.Server, rootSecurity []*base.SecurityRequirement) domain.Operation {
+func buildOperation(namespace, method, path string, op *v3.Operation, pathParams []*v3.Parameter, pathServers, rootServers []*v3.Server, rootSecurity []*base.SecurityRequirement, schemes *orderedmap.Map[string, *v3.SecurityScheme]) domain.Operation {
 	result := domain.Operation{
 		Key:               domain.NewOperationKey(namespace, method, path),
 		SourceOperationID: op.OperationId,
@@ -302,22 +325,42 @@ func buildOperation(namespace, method, path string, op *v3.Operation, pathParams
 		Summary:      op.Summary,
 	})
 
-	input := buildInput(merged, pointer)
+	// One bundle per operation: its parameters and its body share whatever
+	// components they both reference, and a tool's input schema is a
+	// standalone document that has to carry its own $defs.
+	defs := newBundle()
+	input := buildInput(merged, pointer, defs)
 	result.Input = input.model
 	result.Diagnostics = append(result.Diagnostics, input.diagnostics...)
 	result.ExecutionBlockers = append(result.ExecutionBlockers, input.blockers...)
 
-	body := buildBody(op.RequestBody, pointer)
+	body := buildBody(op.RequestBody, pointer, defs)
 	result.Input.Body = body.spec
+	if len(defs.defs) > 0 {
+		result.Input.Defs = defs.defs
+	}
 	result.Diagnostics = append(result.Diagnostics, body.diagnostics...)
 
-	if securityRequired(op.Security, rootSecurity) {
-		result.ExecutionBlockers = append(result.ExecutionBlockers, domain.ReasonAuthenticationNotImplemented)
-	}
+	// Whether the credentials an operation needs are *available* depends on
+	// configuration, not on the document, so that verdict belongs downstream
+	// (catalog, which knows the configured profiles). The IR states only what
+	// the document asks for.
+	result.Security = buildSecurity(op.Security, rootSecurity, schemes)
+	security := evaluateSecurity(result.Security)
 
 	rejections := input.rejections
 	for _, reason := range body.rejections {
 		rejections = appendReason(rejections, reason)
+	}
+	if security.unsatisfiable {
+		rejections = appendReason(rejections, domain.ReasonUnsupportedSecurityScheme)
+		result.Diagnostics = append(result.Diagnostics, domain.Diagnostic{
+			Severity: domain.SeverityError,
+			Code:     domain.ReasonUnsupportedSecurityScheme,
+			Pointer:  pointer + "/security",
+			Message: "every security alternative needs a credential lotsman cannot supply " +
+				"(only apiKey and HTTP basic/bearer are in this release), so the operation could never be called",
+		})
 	}
 	for _, name := range pathPlaceholder.FindAllStringSubmatch(path, -1) {
 		placeholder := name[1]
@@ -340,26 +383,6 @@ func buildOperation(namespace, method, path string, op *v3.Operation, pathParams
 		result.Support = domain.SupportStatus{Level: domain.SupportSupported}
 	}
 	return result
-}
-
-// securityRequired implements the OAS inheritance needed by the current
-// fail-closed execution boundary. nil operation security inherits the root;
-// an explicit [] or an empty alternative makes authentication optional. Full
-// OR/AND preservation in the IR lands in T026.
-func securityRequired(operation, root []*base.SecurityRequirement) bool {
-	effective := operation
-	if operation == nil {
-		effective = root
-	}
-	if len(effective) == 0 {
-		return false
-	}
-	for _, alternative := range effective {
-		if alternative == nil || alternative.ContainsEmptyRequirement || orderedmap.Len(alternative.Requirements) == 0 {
-			return false
-		}
-	}
-	return true
 }
 
 // effectiveServers implements the operation→path→root inheritance from

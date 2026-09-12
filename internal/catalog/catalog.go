@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/razrabotchik/lotsman/internal/auth"
 	"github.com/razrabotchik/lotsman/internal/domain"
 	"github.com/razrabotchik/lotsman/internal/policy"
 )
@@ -41,6 +42,12 @@ type Tool struct {
 	// Effect drives the published annotations and the runtime gate. It is
 	// carried on the tool so a report can show what was decided and why.
 	Effect domain.EffectDecision `json:"effect"`
+	// AuthProfiles names the credentials this tool presents. Names and secret
+	// references are safe to publish; values never appear anywhere.
+	AuthProfiles []string `json:"authProfiles,omitempty"`
+	// AuthBinding is how those credentials are applied at call time. It is not
+	// serialized: a report is about what lotsman will do, not how it holds it.
+	AuthBinding auth.Binding `json:"-"`
 	// Executable means every axis agrees: the operation is supported, the
 	// runtime can build the call, and policy permits it.
 	Executable bool `json:"executable"`
@@ -65,9 +72,13 @@ type Catalog struct {
 }
 
 // Options configures catalog derivation. The zero value is the documented
-// default: read-only execution (docs/spec.md 5.1).
+// default: read-only execution with no credentials (docs/spec.md 5.1).
 type Options struct {
 	Policy policy.Config
+	// Auth holds the configured credential profiles. Which operations can be
+	// authenticated is a fact about the configuration, not about the
+	// document, which is why it is decided here rather than in the adapter.
+	Auth auth.Profiles
 }
 
 // Build derives a deterministic tool catalog from parsed operations.
@@ -96,6 +107,7 @@ func Build(specDigest string, operations []domain.Operation, opts Options) Catal
 	for i := range supported {
 		op := &supported[i]
 		verdict := opts.Policy.Evaluate(op.Effect)
+		credentials := auth.Select(op.Security, opts.Auth)
 
 		tool := Tool{
 			Name:              toolName(op, seen),
@@ -107,8 +119,19 @@ func Build(specDigest string, operations []domain.Operation, opts Options) Catal
 			Input:             op.Input,
 			InputSchema:       inputSchema(op.Input),
 			Effect:            op.Effect,
-			Executable:        op.Executable() && verdict.Allowed,
+			Executable:        op.Executable() && verdict.Allowed && credentials.Bound(),
 			ExecutionBlockers: append([]domain.ReasonCode(nil), op.ExecutionBlockers...),
+		}
+		if !credentials.Bound() {
+			// Published, never executable: the operation is translatable and
+			// permitted, but lotsman has no way to authenticate it.
+			tool.ExecutionBlockers = append(tool.ExecutionBlockers, credentials.Reason)
+			tool.Executable = false
+		} else {
+			tool.AuthBinding = credentials.Binding
+			for i := range credentials.Binding.Credentials {
+				tool.AuthProfiles = append(tool.AuthProfiles, credentials.Binding.Credentials[i].Name)
+			}
 		}
 		if !verdict.Allowed {
 			tool.PolicyBlockers = []domain.ReasonCode{verdict.Reason}

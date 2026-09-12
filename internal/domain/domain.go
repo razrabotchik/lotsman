@@ -40,6 +40,11 @@ type Operation struct {
 	// the only thing the read-only gate consults: annotations are hints to a
 	// client, never an input to policy (data-model.md invariant 4).
 	Effect EffectDecision `json:"effect"`
+	// Security is the effective security after operation->root inheritance:
+	// alternatives are OR, requirements inside one alternative are AND
+	// (FR-55/56). An empty slice means the operation is public, which an
+	// explicit `security: []` on the operation is entitled to say.
+	Security []SecurityAlternative `json:"security,omitempty"`
 	// Input is the operation's argument surface after parameter merging and
 	// normalization; the tool's grouped input schema is derived from it.
 	Input   InputModel    `json:"input"`
@@ -102,6 +107,40 @@ type EffectDecision struct {
 // deliberately not "!= write": unknown is not read.
 func (d EffectDecision) IsRead() bool { return d.Effect == EffectRead }
 
+// SecurityAlternative is one way to authenticate a call. Every requirement
+// inside it must be satisfied together (AND); satisfying any one alternative
+// is enough (OR).
+type SecurityAlternative struct {
+	Requirements []SecurityRequirement `json:"requirements"`
+}
+
+// SecurityRequirement names a scheme and the scopes the operation asks for.
+type SecurityRequirement struct {
+	Scheme string   `json:"scheme"`
+	Type   string   `json:"type,omitempty"`       // apiKey | http | oauth2 | openIdConnect | mutualTLS
+	In     string   `json:"in,omitempty"`         // apiKey: header | query | cookie
+	Name   string   `json:"name,omitempty"`       // apiKey: the header/query/cookie name
+	HTTP   string   `json:"httpScheme,omitempty"` // http: basic | bearer | ...
+	Scopes []string `json:"scopes,omitempty"`
+	// Satisfiable reports whether lotsman has a provider that could ever meet
+	// this requirement. An OAuth2 flow cannot be satisfied by the core
+	// providers (FR-58), and an undefined scheme cannot be satisfied at all.
+	Satisfiable bool `json:"satisfiable"`
+}
+
+// Satisfiable reports whether every requirement in the alternative is one
+// lotsman could meet with an auth profile. An alternative with no
+// requirements is the OAS way of saying "no authentication", which is always
+// satisfiable.
+func (a SecurityAlternative) Satisfiable() bool {
+	for _, requirement := range a.Requirements {
+		if !requirement.Satisfiable {
+			return false
+		}
+	}
+	return true
+}
+
 // Severity classifies a Diagnostic.
 type Severity string
 
@@ -125,6 +164,10 @@ const (
 	ReasonAuthenticationNotImplemented ReasonCode = "authentication_not_implemented"
 	// ReasonExternalRefUnsupported marks a $ref that leaves the root document: resolving it would read a file or fetch a URL chosen by an untrusted spec.
 	ReasonExternalRefUnsupported ReasonCode = "external_ref_unsupported"
+	// ReasonRefOutsideRoot marks a file reference that leaves the directory the document was loaded from.
+	ReasonRefOutsideRoot ReasonCode = "ref_outside_root"
+	// ReasonRefUnresolvable marks a file reference inside the root that could not be read or parsed.
+	ReasonRefUnresolvable ReasonCode = "ref_unresolvable"
 	// ReasonUnsupportedParameterStyle marks a style/location combination lotsman will not serialize (docs/spec.md 4.5).
 	ReasonUnsupportedParameterStyle ReasonCode = "unsupported_parameter_style"
 	// ReasonUnsupportedParameterSchema marks a parameter schema outside the scalar/array-of-scalars shape a path or query value can carry.
@@ -137,6 +180,10 @@ const (
 	ReasonPolicyMutationBlocked ReasonCode = "policy_mutation_blocked"
 	// ReasonPolicyUnknownEffectBlocked marks an operation refused because its effect could not be determined.
 	ReasonPolicyUnknownEffectBlocked ReasonCode = "policy_unknown_effect_blocked"
+	// ReasonUnsupportedSecurityScheme marks an operation no configured provider could ever authenticate.
+	ReasonUnsupportedSecurityScheme ReasonCode = "unsupported_security_scheme"
+	// ReasonAmbiguousSecurity marks several satisfiable alternatives with nothing to choose between them (FR-57).
+	ReasonAmbiguousSecurity ReasonCode = "ambiguous_security"
 	// ReasonUnsupportedBodySchema marks a request body schema lotsman will not translate.
 	ReasonUnsupportedBodySchema ReasonCode = "unsupported_body_schema"
 	// ReasonInvalidSchema marks a schema that is not valid JSON Schema once normalized, so no argument can be validated against it.
@@ -315,7 +362,16 @@ func GroupOf(in ParameterLocation) string {
 type InputModel struct {
 	Parameters []Parameter `json:"parameters,omitempty"`
 	Body       *BodySpec   `json:"body,omitempty"`
+	// Defs holds the schemas that are referenced rather than inlined, keyed by
+	// the name a "#/$defs/<name>" pointer uses. Keeping references as
+	// references is what stops a schema that appears five times in one
+	// operation from being published five times -- and what lets a recursive
+	// schema be published at all.
+	Defs SchemaDefs `json:"defs,omitempty"`
 }
+
+// SchemaDefs is the `$defs` bundle of an input schema.
+type SchemaDefs map[string]Schema
 
 // BodySpec is the request body lotsman will send: exactly one media type,
 // chosen deterministically, with the schema the argument is validated

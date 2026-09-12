@@ -87,7 +87,9 @@ type OperationVerdict struct {
 	Effect            domain.EffectDecision `json:"effect"`
 	ExecutionBlockers []domain.ReasonCode   `json:"executionBlockers,omitempty"`
 	PolicyBlockers    []domain.ReasonCode   `json:"policyBlockers,omitempty"`
-	Reasons           []Reason              `json:"reasons,omitempty"`
+	// AuthProfiles names the configured credentials the operation would use.
+	AuthProfiles []string `json:"authProfiles,omitempty"`
+	Reasons      []Reason `json:"reasons,omitempty"`
 }
 
 // Reason is a machine-readable refusal with enough provenance to act on:
@@ -138,6 +140,11 @@ func buildReport(operations []domain.Operation, tools []Tool, digest string, opt
 			verdict.Published = true
 			verdict.Executable = tool.Executable
 			verdict.PolicyBlockers = append([]domain.ReasonCode(nil), tool.PolicyBlockers...)
+			verdict.AuthProfiles = append([]string(nil), tool.AuthProfiles...)
+			// The tool's blockers are the operation's plus the ones that could
+			// only be decided with the configuration in hand (auth), which is
+			// what a reader needs to see.
+			verdict.ExecutionBlockers = append([]domain.ReasonCode(nil), tool.ExecutionBlockers...)
 		}
 
 		report.Totals.ByEffect[op.Effect.Effect]++

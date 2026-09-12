@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/razrabotchik/lotsman/internal/policy"
+	"github.com/razrabotchik/lotsman/internal/catalog"
 )
 
 func TestParseWithTrailingSpecRejectsExtraPositionals(t *testing.T) {
@@ -39,7 +39,7 @@ paths:
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	if _, err := loadCatalog(context.Background(), path, logger, true, policy.Config{}); err == nil {
+	if _, err := loadCatalog(context.Background(), path, logger, true, catalog.Options{}); err == nil {
 		t.Fatal("loadCatalog accepted a document with error diagnostics")
 	}
 }
@@ -47,10 +47,10 @@ paths:
 func TestLoadCatalogStrictRejectsUnsupportedOperation(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	spec := filepath.Join("..", "..", "testdata", "mini", "basic.yaml")
-	if _, err := loadCatalog(context.Background(), spec, logger, false, policy.Config{}); err == nil {
+	if _, err := loadCatalog(context.Background(), spec, logger, false, catalog.Options{}); err == nil {
 		t.Fatal("strict loadCatalog accepted a rejected operation")
 	}
-	if _, err := loadCatalog(context.Background(), spec, logger, true, policy.Config{}); err != nil {
+	if _, err := loadCatalog(context.Background(), spec, logger, true, catalog.Options{}); err != nil {
 		t.Fatalf("lax loadCatalog rejected the supported subset: %v", err)
 	}
 }
@@ -62,7 +62,7 @@ func TestLoadCatalogRejectsZeroSupportedOperations(t *testing.T) {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	if _, err := loadCatalog(context.Background(), path, logger, true, policy.Config{}); err == nil {
+	if _, err := loadCatalog(context.Background(), path, logger, true, catalog.Options{}); err == nil {
 		t.Fatal("loadCatalog accepted a catalog with zero supported operations")
 	}
 }

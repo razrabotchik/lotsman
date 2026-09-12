@@ -24,10 +24,10 @@ type Limits struct {
 	MaxRefDepth int
 
 	// MaxRefDocuments and MaxRefBytes cap the ref closure: how many documents
-	// may be pulled in and their total size. Today the closure is always the
-	// single root document, because file and remote refs are refused
-	// (ReasonExternalRefUnsupported); the accounting exists so T025 extends a
-	// budget that is already enforced instead of adding one afterwards.
+	// may be pulled in and their total size. Exploded specifications are
+	// normal -- DigitalOcean's root is an index over roughly 700 sibling
+	// files -- so the document budget is set from that measurement rather
+	// than from intuition (docs/corpus.md).
 	MaxRefDocuments int
 	MaxRefBytes     int64
 }
@@ -37,7 +37,7 @@ const (
 	DefaultParseTimeout    = 30 * time.Second
 	DefaultMaxOperations   = 5_000
 	DefaultMaxRefDepth     = 32
-	DefaultMaxRefDocuments = 64
+	DefaultMaxRefDocuments = 4_096
 	DefaultMaxRefBytes     = 32 << 20 // 32 MiB across the whole ref closure
 )
 

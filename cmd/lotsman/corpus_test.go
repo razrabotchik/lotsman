@@ -17,13 +17,17 @@ type corpusSpec struct {
 	Name   string `json:"name"`
 	Vendor string `json:"vendor"`
 	Digest string `json:"digest"`
+	// Spec is set for an exploded specification: the path of the root
+	// document inside the checked-out repository.
+	Spec   string `json:"spec"`
 	Expect struct {
-		Outcome   string   `json:"outcome"` // reported | refused
-		Found     int      `json:"found"`
-		Supported int      `json:"supported"`
-		Rejected  int      `json:"rejected"`
-		ByReason  []string `json:"byReason"`
-		Message   string   `json:"message"`
+		Outcome               string   `json:"outcome"` // reported | refused
+		Found                 int      `json:"found"`
+		Supported             int      `json:"supported"`
+		Rejected              int      `json:"rejected"`
+		ByReason              []string `json:"byReason"`
+		Message               string   `json:"message"`
+		DocumentIssuesAtLeast int      `json:"documentIssuesAtLeast"`
 	} `json:"expect"`
 }
 
@@ -51,6 +55,9 @@ func TestCorpus(t *testing.T) {
 	for _, spec := range manifest.Specs {
 		t.Run(spec.Name, func(t *testing.T) {
 			path := filepath.Join(root, spec.Name)
+			if spec.Spec != "" {
+				path = filepath.Join(path, spec.Spec)
+			}
 			if _, err := os.Stat(path); err != nil {
 				t.Skipf("corpus document not fetched; run `make corpus`")
 			}
@@ -72,7 +79,7 @@ func TestCorpus(t *testing.T) {
 			}
 			report := decodeReport(t, stdout)
 
-			if report.Spec.Digest != spec.Digest {
+			if spec.Digest != "" && report.Spec.Digest != spec.Digest {
 				t.Fatalf("digest = %s, want the pinned %s (the fetched document is not the one measured)",
 					report.Spec.Digest, spec.Digest)
 			}
@@ -89,6 +96,9 @@ func TestCorpus(t *testing.T) {
 				if report.ByReason[reason] == 0 {
 					t.Errorf("byReason has no %s; the manifest records it as a known cause", reason)
 				}
+			}
+			if want := spec.Expect.DocumentIssuesAtLeast; want > 0 && len(report.DocumentIssues) < want {
+				t.Errorf("documentIssues = %d, want at least %d", len(report.DocumentIssues), want)
 			}
 		})
 	}

@@ -3,6 +3,8 @@ package openapi
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,7 +17,9 @@ const limitsHeader = `openapi: 3.0.3
 info: {title: Limits, version: "1.0"}
 `
 
-func TestParseRefusesExternalRefs(t *testing.T) {
+// A reference to a document that is not there is refused by name, with the
+// pointer and position of the reference that asked for it.
+func TestParseRefusesUnresolvableFileRef(t *testing.T) {
 	spec := limitsHeader + `paths:
   /pets:
     get:
@@ -27,28 +31,25 @@ func TestParseRefusesExternalRefs(t *testing.T) {
               schema:
                 $ref: './common.yaml#/components/schemas/Pet'
 `
-	doc, err := Parse(t.Context(), []byte(spec), Options{RootPath: "/srv/specs"})
+	doc, err := Parse(t.Context(), []byte(spec), Options{RootPath: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
 	if !doc.HasErrors() {
-		t.Fatal("an unresolvable external reference must be a document-level error")
+		t.Fatal("a reference to a missing document must be a document-level error")
 	}
 
 	var found *domain.Diagnostic
 	for i, d := range doc.Diagnostics {
-		if d.Code == domain.ReasonExternalRefUnsupported {
+		if d.Code == domain.ReasonRefUnresolvable {
 			found = &doc.Diagnostics[i]
 		}
 	}
 	if found == nil {
-		t.Fatalf("no %s diagnostic in %+v", domain.ReasonExternalRefUnsupported, doc.Diagnostics)
+		t.Fatalf("no %s diagnostic in %+v", domain.ReasonRefUnresolvable, doc.Diagnostics)
 	}
 	if found.Pointer == "" || found.Line == 0 {
 		t.Errorf("diagnostic lacks provenance: %+v", *found)
-	}
-	if !strings.Contains(found.Message, "root document") {
-		t.Errorf("message = %q, want it to name the root document", found.Message)
 	}
 }
 
@@ -179,16 +180,21 @@ components:
 }
 
 func TestParseRefusesTooManyDocumentsInClosure(t *testing.T) {
+	root := t.TempDir()
 	var b strings.Builder
 	b.WriteString(limitsHeader)
 	b.WriteString("paths:\n  /pets:\n    get:\n      parameters:\n")
 	for i := 0; i < 5; i++ {
-		fmt.Fprintf(&b, "        - $ref: 'part%d.yaml#/Param'\n", i)
+		name := fmt.Sprintf("part%d.yaml", i)
+		if err := os.WriteFile(filepath.Join(root, name), []byte("Param:\n  name: p\n  in: query\n  schema: {type: string}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintf(&b, "        - $ref: '%s#/Param'\n", name)
 	}
 	b.WriteString(`      responses: {"200": {description: ok}}
 `)
 
-	_, err := Parse(t.Context(), []byte(b.String()), Options{Limits: Limits{MaxRefDocuments: 3}})
+	_, err := Parse(t.Context(), []byte(b.String()), Options{RootPath: root, Limits: Limits{MaxRefDocuments: 3}})
 	if err == nil {
 		t.Fatal("want an error when the closure spans more documents than the limit")
 	}

@@ -213,17 +213,97 @@ Checkpoints match the tracer-bullet steps; stop at any checkpoint with working s
 ## Phase B — M1 hardening
 
 ### Step 8: Schema normalization for real
-- [ ] T023 openapi: OAS 3.0 branch — nullable→type array, bool exclusiveMin/Max→numeric, example→examples, strip OAS-only keys to metadata (pitfall #6)
-- [ ] T024 openapi: readOnly excluded from input, writeOnly handling (pitfall #7); empty `security: []` = public (pitfall #4)
-- [ ] T025 openapi: local $ref resolution policy — root confinement, cycle cut at depth N → partial + diagnostic (pitfall #8); keep $ref/$defs bundle for validator (no full inline)
-- [ ] T026 [P] domain: security OR/AND alternatives (FR-55–57); ambiguous_security → rejected
-- [ ] T027 [P] Fuzz: YAML alias bomb budget (pitfall #1), name normalization, path template mismatch (pitfall #3), duplicate operationId (pitfall #2)
-- [ ] T028 Corpus golden set: per-corpus expected report counts committed; CI smoke on corpus
+- [x] T023 openapi: OAS 3.0 branch — nullable→type array, bool exclusiveMin/Max→numeric, example→examples, strip OAS-only keys to metadata (pitfall #6)
+      → One normalizer with two targets (parameters, bodies) replaces the two code paths that
+        had been growing separate bugs. OAS 3.0's three near-misses are translated: nullable →
+        union type, boolean exclusive bounds → numeric keyword, `example` → `examples`.
+        OAS-only keys (xml, discriminator, externalDocs) are not copied: they say nothing about
+        whether an argument is valid, and a validation schema that carries them invites a client
+        to act on them.
+- [x] T024 openapi: readOnly excluded from input, writeOnly handling (pitfall #7); empty `security: []` = public (pitfall #4)
+      → readOnly properties are dropped from the input schema at every nesting level, and from
+        `required` with them — in OAS, required+readOnly means required *in the response*.
+        writeOnly survives and is marked. The empty `security: []` case was already covered by
+        the security work in T013a; T026 rebuilt it on a real model.
+- [x] T025 openapi: local $ref resolution policy — root confinement, cycle cut at depth N → partial + diagnostic (pitfall #8); keep $ref/$defs bundle for validator (no full inline)
+      → References are published as references into the tool's `$defs`, verified end to end:
+        the SDK resolves them, lotsman's validator compiles the same document, and a recursive
+        value is validated at depth. Kubernetes: 4.25 MB → 2.23 MB of tools/list (−47%).
+      → The planned "cycle cut at depth N → partial" is obsolete and was not implemented: a
+        cycle now closes in $defs exactly as the author wrote it. The cut existed to work around
+        inlining, and nothing needs working around (ADR-0009).
+      → File references are followed under confinement: each hop resolved relative to the
+        document containing it, symlinks expanded, checked to be inside the spec root, walked
+        transitively under document and byte budgets. The verified list becomes the parser's
+        allowlist, so an unreferenced file next to the spec is never read. Remote refs are still
+        never fetched; stdin has no root and so resolves nothing.
+      → **DigitalOcean went from "refused before parsing" to 631 of 659 operations in 0.3 s**,
+        743 KB catalog. MaxRefDocuments raised 64 → 4,096 from the measured closure (~2,900
+        documents), not from intuition.
+      → Found and fixed: libopenapi logs one line per unresolvable reference, so one exploded
+        spec produced 662 log lines next to our own 662 diagnostics. The parser's log is now
+        discarded by default (Options.ParserLog reinstates it) because everything in it reaches
+        us as a returned error with better provenance; serve/inspect also cap logged diagnostics.
+- [x] T026 [P] domain: security OR/AND alternatives (FR-55–57); ambiguous_security → rejected
+      → Alternatives are OR, requirements inside one are AND, each carrying the scheme definition
+        it names (type/in/name/http scheme/scopes) so an auth provider can act on it. Inheritance
+        replaces rather than merges; an explicit `security: []` is public.
+      → An operation whose every alternative needs a credential the core providers cannot supply
+        (OAuth2-only, or an undefined scheme) is rejected with `unsupported_security_scheme`
+        rather than published as a tool that always fails.
+      → `ambiguous_security` is defined in the vocabulary but not yet emitted: ambiguity means
+        *several satisfiable alternatives with no policy to choose between them*, and there are
+        no auth profiles to be satisfiable against until T029/T030. Noted rather than faked.
+- [x] T027 [P] Fuzz: YAML alias bomb budget (pitfall #1), name normalization, path template mismatch (pitfall #3), duplicate operationId (pitfall #2)
+      → FuzzLoadBudget (stage 0 refuses or accepts in bounded time, always classified),
+        FuzzToolName (portable charset and length for any operationId, deterministic),
+        FuzzDuplicateOperationIDs (two operations never collapse into one tool, and the catalog
+        does not depend on input order), FuzzPathTemplate (an operation is executable only if
+        every placeholder has a required path parameter). All four run in CI at 20s each.
+- [x] T028 Corpus golden set: per-corpus expected report counts committed; CI smoke on corpus
+      → Expected counts live in testdata/corpus/MANIFEST.json next to the pin, so a change to
+        translation support has to answer for the diff. Five entries now, including the exploded
+        DigitalOcean checkout pinned by commit (`make corpus` fetches it via a shallow clone).
+      → CI gained two jobs: corpus (fetch + smoke) and a short fuzz run.
 
 ### Step 9: Auth
-- [ ] T029 config: secretRef type (env:/file:), precedence model; literal-secret rejection in flags (`keyring:` deferred to 004 portability spike)
-- [ ] T030 auth: apikey(header/query/cookie)/basic/bearer providers as RoundTripper, applied last before wire; auth profile selection per security alternatives
-- [ ] T031 slog redaction handler + canary secret test suite (stdout, stderr, results, errors, report — pitfall #14)
+- [x] T029 config: secretRef type (env:/file:), precedence model; literal-secret rejection in flags (`keyring:` deferred to 004 portability spike)
+      → internal/config: SecretRef (env:/file:), a strictly-decoded configuration file with a
+        required apiVersion, and the documented precedence (defaults < file < environment <
+        flags) with pointer overrides so "not given" never overrides the file with a zero value.
+      → A literal secret is refused at load time and **the refusal does not echo it** — what was
+        given may be the secret; the message says how many characters were supplied.
+      → Deviation from plan.md: no koanf. The file lotsman needs today is a hundred lines of
+        typed YAML decode, and a YAML parser is already a dependency; Constitution VII's bar is
+        not met yet (ADR-0010). Direct dependencies stay at four.
+      → `lotsman config check|export` (FR-11 CLI list) is not implemented; it belongs with the
+        larger config surface.
+- [x] T030 auth: apikey(header/query/cookie)/basic/bearer providers as RoundTripper, applied last before wire; auth profile selection per security alternatives
+      → Credentials are applied by the *innermost* round tripper: every other layer has already
+        seen the request without the credential in it, so a token cannot reach a trace by
+        accident. The request is cloned first (the RoundTripper contract, and a credential
+        written onto a shared request outlives its call).
+      → Secrets resolve per call, not at startup: a rotated token takes effect on the next
+        request, and an idle process holds nothing.
+      → Selection matches scheme *type* and placement: an API key configured for a header cannot
+        satisfy a scheme the API reads from the query string. Ambiguity (FR-57) is now a real
+        refusal — and `ambiguous_security` fired on DigitalOcean, which turned out to be the same
+        credential written two ways, so identical bindings are collapsed rather than refused.
+      → The auth verdict moved from the adapter to the catalog: whether a credential is available
+        is a fact about the configuration, not about the document.
+      → **DigitalOcean with one bearer profile: 0 → 328 executable reads, 617 of 631 with
+        mutations.** The 14 that remain ask for a different scheme (`inference_bearer_auth`) and
+        are refused rather than given the wrong token.
+- [x] T031 slog redaction handler + canary secret test suite (stdout, stderr, results, errors, report — pitfall #14)
+      → internal/redact: a registry of resolved values, an slog handler wrapping the outermost
+        layer (messages, attributes, groups, errors), and error redaction that keeps the chain
+        intact so errors.Is and the class survive.
+      → Found by the canary test, not by reasoning: an upstream that echoes the credential back
+        in its response body puts it straight into a model's context. Response bodies, content
+        types and handler errors are redacted.
+      → The canary suite is end-to-end (a real credential, a real call) across four channels:
+        tool result, stderr at debug level, the JSON report, and an error path. Every unit-level
+        version of it would have passed while the response body leaked.
 
 ### Step 10: Limits & errors
 - [ ] T032 requestbuild/egress: expand the T013b floor with allowedOrigins/CIDR/DNS-rebinding checks, full timeout budgets and retry=off scaffolding per FR-32–34
