@@ -182,10 +182,9 @@ func TestModeIsRecommendedFromTheMeasuredCatalog(t *testing.T) {
 	if tight.Recommended != ModeSearch {
 		t.Errorf("recommended = %q, want search", tight.Recommended)
 	}
-	// Until search mode exists, the mode in force is still tools -- and the
-	// report says both, because hiding the gap would be the actual failure.
-	if tight.Mode != ModeTools {
-		t.Errorf("mode = %q, want tools until feature 002", tight.Mode)
+	// `auto` follows the measurement.
+	if tight.Mode != ModeSearch {
+		t.Errorf("mode = %q, want auto to follow the measurement", tight.Mode)
 	}
 }
 
@@ -200,9 +199,12 @@ func TestModeRequestDoesNotChangeTheMeasurement(t *testing.T) {
 	if auto != implicit {
 		t.Errorf("auto = %+v, implicit = %+v", auto, implicit)
 	}
-	// Pinning tools mode does not make the catalog fit: the recommendation is
-	// a measurement, not a preference.
+	// Pinning tools mode is obeyed, and does not make the catalog fit: the
+	// recommendation is a measurement, not a preference.
 	if !pinned.OverBudget || pinned.Recommended != ModeSearch {
 		t.Errorf("pinned = %+v, want the recommendation unchanged", pinned)
+	}
+	if pinned.Mode != ModeTools {
+		t.Errorf("mode = %q, want the explicit request obeyed", pinned.Mode)
 	}
 }

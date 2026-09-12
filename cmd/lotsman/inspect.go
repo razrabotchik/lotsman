@@ -169,8 +169,13 @@ func writeHumanReport(w io.Writer, report *inspectDocument) {
 		report.Catalog.Mode, report.Catalog.ToolCount, report.Catalog.SerializedBytes,
 		report.Catalog.ThresholdBytes, report.Catalog.Digest)
 	if report.Catalog.OverBudget {
-		fmt.Fprintf(w, "            OVER BUDGET by %d bytes — this catalog needs mode=%s, which arrives with feature 002\n",
-			report.Catalog.SerializedBytes-report.Catalog.ThresholdBytes, report.Catalog.Recommended)
+		over := report.Catalog.SerializedBytes - report.Catalog.ThresholdBytes
+		if report.Catalog.Mode == catalog.ModeSearch {
+			fmt.Fprintf(w, "            over the tools-mode budget by %d bytes, so search mode is in force\n", over)
+		} else {
+			fmt.Fprintf(w, "            OVER BUDGET by %d bytes — tools mode was requested anyway; "+
+				"a model may not fit this many tool definitions\n", over)
+		}
 	}
 	fmt.Fprintf(w, "security:   remote refs %s, redirects %s, unknown mutations %s\n\n",
 		enabledWord(report.Security.RemoteRefs), enabledWord(report.Security.Redirects),

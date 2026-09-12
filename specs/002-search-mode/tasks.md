@@ -63,14 +63,40 @@ which the work could stop and still be worth shipping.
 
 ## Step 3: The meta-tools  ✅ CHECKPOINT: an agent uses a 600-operation API through five tools
 
-- [ ] T107 mcpserver: `search_operations` and `list_tags` (no schemas in results)
-- [ ] T108 mcpserver: `describe_operation` with a per-response budget; `$defs` by reference
-- [ ] T109 mcpserver: `call_read_operation` — re-validates identity, effect, args, auth, policy;
+- [x] T107 mcpserver: `search_operations` and `list_tags` (no schemas in results)
+      → **The call path was extracted into `runner` first.** Tools mode and search mode are two
+        front doors onto one path: a meta-tool that built requests its own way would be a second
+        security boundary, and a second boundary disagrees with the first eventually — on the day
+        it matters.
+      → Search results carry identity, effect and one line of prose, never a schema; a test fails
+        if a schema ever leaks into them, because that is what would reintroduce the size problem.
+      → An empty result is *explained* ("no operation matches these words; 631 are published, try
+        list_tags") rather than filled with the nearest thing.
+- [x] T108 mcpserver: `describe_operation` with a per-response budget; `$defs` by reference
+      → The budget (24 KB) reduces by dropping prose — descriptions, titles, examples — and says
+        so with `descriptionsOmitted`. Validation is unaffected: every constraint stays, the schema
+        just stops explaining itself. `$defs` already deduplicate from feature 001.
+      → An id resolves by operation key or tool name, because those are the two identifiers a
+        reader has in hand.
+- [x] T109 mcpserver: `call_read_operation` — re-validates identity, effect, args, auth, policy;
       refuses any effect that is not `read` (FR-49, FR-50)
-- [ ] T110 mcpserver: `call_mutating_operation`, published only when mutations are enabled;
+      → The effect gate is re-applied on the operation the id actually resolved to, not on what
+        the search result claimed. Asserted with zero RoundTrips for a POST and a DELETE.
+- [x] T110 mcpserver: `call_mutating_operation`, published only when mutations are enabled;
       conservative annotations (FR-51)
-- [ ] T111 e2e: the same scenarios as tools mode, run in search mode, including the blocked and
+      → Two separate tools rather than one with a flag: a model that may only read must not be
+        holding a tool that can write. The mutating tool is absent when nothing may mutate —
+        advertising a tool whose every call is refused teaches a model only to keep trying — and
+        it refuses a read, so neither can do the other's job.
+      → Enabling mutations does not enable invalid arguments: the same validator runs.
+- [x] T111 e2e: the same scenarios as tools mode, run in search mode, including the blocked and
       allowed mutation
+      → Search → describe → call over the real binary, the path a model actually walks, plus the
+        blocked and allowed mutation. Search mode now resolves for real: `auto` follows the
+        measurement, an explicit `--mode` is obeyed and reported.
+      → **Live on DigitalOcean: 631 operations publish as a 5 492-byte `tools/list` instead of
+        743 204 — 135× smaller — and "list kubernetes clusters" ranks `GET /v2/kubernetes/clusters`
+        first.**
 
 ## Step 4: Honesty at scale
 

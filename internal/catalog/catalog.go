@@ -194,11 +194,14 @@ func Build(specDigest string, operations []domain.Operation, opts Options) Catal
 		Digest:     catalogDigest,
 		Report:     buildReport(operations, tools, catalogDigest, opts),
 	}
-	// Search mode is feature 002; until it exists, `auto` resolves to tools
-	// whatever the measurement says, and the report carries the
-	// recommendation so the gap is visible rather than silent.
-	built.Mode = ModeTools
-	built.Report.Estimate.Mode = ModeTools
+	// `auto` follows the measurement; an explicit mode is obeyed even when the
+	// measurement disagrees, and the report says both so a pinned choice is
+	// visible rather than silent.
+	built.Mode = built.Report.Estimate.Recommended
+	if requested := opts.mode(); requested != ModeAuto {
+		built.Mode = requested
+	}
+	built.Report.Estimate.Mode = built.Mode
 	return built
 }
 

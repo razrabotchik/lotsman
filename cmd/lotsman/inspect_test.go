@@ -289,16 +289,37 @@ func TestInspectReportsTheCatalogBudget(t *testing.T) {
 	}
 }
 
-func TestInspectRefusesAModeThatDoesNotExistYet(t *testing.T) {
-	_, stderr, code := runCLI(t, "inspect", miniSpecPath(t), "--mode=search")
-	if code != 4 {
-		t.Errorf("exit = %d, want 4 (valid request, unsupported capability)", code)
+// Search mode exists now; an unknown mode is still a usage error.
+func TestInspectAcceptsEveryKnownMode(t *testing.T) {
+	for _, mode := range []string{"tools", "search", "auto"} {
+		if _, stderr, code := runCLI(t, "inspect", miniSpecPath(t), "--mode="+mode); code != 0 {
+			t.Errorf("--mode=%s exited %d: %s", mode, code, stderr)
+		}
 	}
-	if !strings.Contains(stderr, "feature 002") {
-		t.Errorf("stderr = %q, want it to say where search mode is", stderr)
-	}
-
 	if _, _, code := runCLI(t, "inspect", miniSpecPath(t), "--mode=nonsense"); code != 2 {
 		t.Errorf("exit = %d for a bad mode, want 2", code)
+	}
+}
+
+// A pinned mode is obeyed and reported, even when the measurement disagrees.
+func TestInspectReportsAPinnedMode(t *testing.T) {
+	stdout, _, code := runCLI(t, "inspect", miniSpecPath(t), "--mode=search", "--json")
+	if code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	var report struct {
+		Catalog struct {
+			Mode        string `json:"mode"`
+			Recommended string `json:"recommendedMode"`
+		} `json:"catalog"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Catalog.Mode != "search" {
+		t.Errorf("mode = %q, want the request obeyed", report.Catalog.Mode)
+	}
+	if report.Catalog.Recommended != "tools" {
+		t.Errorf("recommended = %q, want the measurement unchanged by the request", report.Catalog.Recommended)
 	}
 }
