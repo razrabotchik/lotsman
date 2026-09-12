@@ -1,7 +1,6 @@
 package policy
 
 import (
-	"reflect"
 	"strings"
 	"testing"
 
@@ -121,26 +120,6 @@ func TestSuspiciousWarningNamesTheOperationAndVerb(t *testing.T) {
 		if !strings.Contains(got.Warnings[0], want) {
 			t.Errorf("warning %q does not mention %q", got.Warnings[0], want)
 		}
-	}
-}
-
-func TestTokenize(t *testing.T) {
-	for _, tt := range []struct {
-		in   string
-		want []string
-	}{
-		{"rebuildCache", []string{"rebuild", "cache"}},
-		{"rebuild_cache", []string{"rebuild", "cache"}},
-		{"/legacy/rebuild-cache", []string{"legacy", "rebuild", "cache"}},
-		{"/projects/{projectId}/members", []string{"projects", "project", "id", "members"}},
-		{"getAPIKey", []string{"get", "api", "key"}},
-		{"", nil},
-	} {
-		t.Run(tt.in, func(t *testing.T) {
-			if got := tokenize(tt.in); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("tokenize(%q) = %v, want %v", tt.in, got, tt.want)
-			}
-		})
 	}
 }
 

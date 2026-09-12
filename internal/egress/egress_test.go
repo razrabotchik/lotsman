@@ -35,24 +35,27 @@ func allowing(t *testing.T, baseURL string) Policy {
 // An empty policy authorizes nothing: a server URL authored by an untrusted
 // document is not permission to call it.
 func TestCheckTargetRequiresExplicitAuthorization(t *testing.T) {
-	err := Policy{}.CheckTarget(mustURL(t, "https://api.example.com/widgets"))
+	empty := Policy{}
+	err := empty.CheckTarget(mustURL(t, "https://api.example.com/widgets"))
 	if !errors.Is(err, ErrDenied) {
 		t.Fatalf("error = %v, want ErrDenied", err)
 	}
 }
 
 func TestCheckTargetMatchesNormalizedOrigin(t *testing.T) {
-	if err := allowing(t, "https://api.example.com:443/v1").CheckTarget(mustURL(t, "https://API.EXAMPLE.com/widgets")); err != nil {
+	broad := allowing(t, "https://api.example.com:443/v1")
+	if err := broad.CheckTarget(mustURL(t, "https://API.EXAMPLE.com/widgets")); err != nil {
 		t.Fatalf("CheckTarget: %v", err)
 	}
-	if err := allowing(t, "https://api.example.com").CheckTarget(mustURL(t, "https://other.example.com/widgets")); !errors.Is(err, ErrDenied) {
+	narrow := allowing(t, "https://api.example.com")
+	if err := narrow.CheckTarget(mustURL(t, "https://other.example.com/widgets")); !errors.Is(err, ErrDenied) {
 		t.Fatalf("cross-origin error = %v, want ErrDenied", err)
 	}
 }
 
 // Several origins may be allowed at once, and only those.
 func TestCheckTargetAllowsEveryConfiguredOrigin(t *testing.T) {
-	policy := Policy{AllowedOrigins: []string{"https://api.example.com", "https://cdn.example.com"}}
+	policy := &Policy{AllowedOrigins: []string{"https://api.example.com", "https://cdn.example.com"}}
 	for _, target := range []string{"https://api.example.com/x", "https://cdn.example.com/y"} {
 		if err := policy.CheckTarget(mustURL(t, target)); err != nil {
 			t.Errorf("CheckTarget(%q): %v", target, err)
@@ -79,7 +82,8 @@ func (t *redirectTransport) RoundTrip(req *http.Request) (*http.Response, error)
 
 func TestClientDeniesRedirects(t *testing.T) {
 	transport := &redirectTransport{}
-	client := Policy{}.Client(&http.Client{Transport: transport})
+	empty := Policy{}
+	client := empty.Client(&http.Client{Transport: transport})
 	resp, err := client.Get("https://api.example.com/widgets")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
@@ -94,7 +98,8 @@ func TestClientDeniesRedirects(t *testing.T) {
 }
 
 func TestClientDoesNotInheritProxyEnvironmentByDefault(t *testing.T) {
-	client := Policy{}.Client(&http.Client{})
+	empty := Policy{}
+	client := empty.Client(&http.Client{})
 	transport, ok := client.Transport.(*http.Transport)
 	if !ok {
 		t.Fatalf("Transport = %T, want *http.Transport", client.Transport)
@@ -104,62 +109,149 @@ func TestClientDoesNotInheritProxyEnvironmentByDefault(t *testing.T) {
 	}
 }
 
-// The origin check runs on a name; a name can resolve to anything, including
-// the cloud metadata endpoint. So the address is checked again at connect
-// time, on every connection (FR-32's neighbour: DNS rebinding).
-func TestPrivateAddressesAreRefusedForHostnameOrigins(t *testing.T) {
-	policy := Policy{AllowedOrigins: []string{"https://api.example.com"}}
+// fakeResolver answers with whatever a test says a name resolves to, which is
+// how "this hostname points at the metadata endpoint" can be asserted without
+// owning a DNS zone.
+type fakeResolver struct {
+	addresses []net.IPAddr
+	err       error
+}
 
-	for _, address := range []string{
-		"127.0.0.1:443",      // loopback
-		"169.254.169.254:80", // cloud metadata
-		"10.0.0.5:443",       // RFC 1918
-		"192.168.1.1:443",    // RFC 1918
-		"172.16.0.1:443",     // RFC 1918
-		"100.64.0.1:443",     // carrier-grade NAT
-		"[::1]:443",          // IPv6 loopback
-		"[fd00::1]:443",      // IPv6 unique local
-		"0.0.0.0:443",        // unspecified
-	} {
-		if err := policy.checkAddress(address); !errors.Is(err, ErrDenied) {
-			t.Errorf("checkAddress(%q) = %v, want ErrDenied", address, err)
+func (r fakeResolver) LookupIPAddr(context.Context, string) ([]net.IPAddr, error) {
+	return r.addresses, r.err
+}
+
+func resolving(t *testing.T, origin string, to ...string) Policy {
+	t.Helper()
+	addresses := make([]net.IPAddr, 0, len(to))
+	for _, address := range to {
+		ip := net.ParseIP(address)
+		if ip == nil {
+			t.Fatalf("bad test address %q", address)
 		}
+		addresses = append(addresses, net.IPAddr{IP: ip})
 	}
+	return Policy{
+		AllowedOrigins: []string{origin},
+		resolver:       fakeResolver{addresses: addresses},
+		// These addresses are not meant to answer: a short connect budget
+		// keeps "the policy allowed it" fast to observe.
+		Budget: Budget{Connect: 50 * time.Millisecond},
+	}
+}
 
-	if err := policy.checkAddress("93.184.216.34:443"); err != nil {
-		t.Errorf("a public address was refused: %v", err)
+// dialing exercises the real dial path: the transport hands the *hostname*
+// from the URL to DialContext, which is precisely why the check cannot be a
+// string comparison on "the address".
+func dialing(t *testing.T, policy *Policy, target string) error {
+	t.Helper()
+	client := policy.Client(nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, target, http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := client.Do(req)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	return err
+}
+
+// The origin check runs on a name; a name can resolve to anything, including
+// the cloud metadata endpoint. So the resolved address is checked before the
+// connection is made -- and the connection is then made to the address that
+// was checked, so no second lookup can change the answer.
+func TestHostnameResolvingIntoAPrivateRangeIsRefused(t *testing.T) {
+	for _, address := range []string{
+		"127.0.0.1",       // loopback
+		"169.254.169.254", // cloud metadata
+		"10.0.0.5",        // RFC 1918
+		"192.168.1.1",     // RFC 1918
+		"172.16.0.1",      // RFC 1918
+		"100.64.0.1",      // carrier-grade NAT
+		"::1",             // IPv6 loopback
+		"fd00::1",         // IPv6 unique local
+		"0.0.0.0",         // unspecified
+	} {
+		t.Run(address, func(t *testing.T) {
+			policy := resolving(t, "https://api.example.com", address)
+			err := dialing(t, &policy, "https://api.example.com/widgets")
+			if !errors.Is(err, ErrDenied) {
+				t.Fatalf("error = %v, want ErrDenied", err)
+			}
+			if !strings.Contains(err.Error(), address) {
+				t.Errorf("error = %q, want it to name the address it refused", err)
+			}
+		})
+	}
+}
+
+// A name that resolves to a public address is not refused (the connection then
+// fails for its own reasons, which is not a policy decision).
+func TestHostnameResolvingToAPublicAddressIsNotRefused(t *testing.T) {
+	policy := resolving(t, "http://api.example.com", "203.0.113.10")
+	if err := dialing(t, &policy, "http://api.example.com/widgets"); errors.Is(err, ErrDenied) {
+		t.Fatalf("a public address was refused: %v", err)
+	}
+}
+
+// Several answers, one of them private: the private one is skipped rather than
+// making the whole name unusable... but if *every* answer is private, the call
+// is refused.
+func TestEveryResolvedAddressIsChecked(t *testing.T) {
+	policy := resolving(t, "https://api.example.com", "10.0.0.1", "192.168.0.1")
+	if err := dialing(t, &policy, "https://api.example.com/x"); !errors.Is(err, ErrDenied) {
+		t.Fatalf("error = %v, want ErrDenied", err)
 	}
 }
 
 // Naming a private address is intent, not rebinding: an operator who points
 // lotsman at 127.0.0.1 meant it, and refusing would stop no attack.
 func TestLiteralPrivateOriginsAreAllowed(t *testing.T) {
-	for _, tt := range []struct{ origin, address string }{
-		{"http://127.0.0.1:8080", "127.0.0.1:8080"},
-		{"http://localhost:8080", "127.0.0.1:8080"},
-		{"http://[::1]:8080", "[::1]:8080"},
-	} {
-		policy := Policy{AllowedOrigins: []string{tt.origin}}
-		if err := policy.checkAddress(tt.address); err != nil {
-			t.Errorf("origin %q: %v", tt.origin, err)
-		}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	policy := &Policy{AllowedOrigins: []string{srv.URL}}
+	if err := dialing(t, policy, srv.URL+"/x"); err != nil {
+		t.Errorf("an origin named as a loopback address was refused: %v", err)
 	}
 
-	// Naming one private address does not allow another: an origin of
-	// [::1] is not permission to reach 127.0.0.1.
-	policy := Policy{AllowedOrigins: []string{"http://[::1]:8080"}}
-	if err := policy.checkAddress("127.0.0.1:8080"); !errors.Is(err, ErrDenied) {
-		t.Errorf("error = %v, want ErrDenied: a different private address was allowed", err)
+	// localhost is the same statement by name.
+	host := "http://localhost:" + portOf(t, srv.URL)
+	viaLocalhost := &Policy{AllowedOrigins: []string{host}}
+	if err := dialing(t, viaLocalhost, host+"/x"); err != nil {
+		t.Errorf("an origin named localhost was refused: %v", err)
+	}
+}
+
+// But a *hostname* is never literal, however innocent it looks: that is the
+// case the guard exists for.
+func TestHostnameIsNeverTreatedAsLiteral(t *testing.T) {
+	policy := resolving(t, "https://localtest.example", "127.0.0.1")
+	if err := dialing(t, &policy, "https://localtest.example/x"); !errors.Is(err, ErrDenied) {
+		t.Fatalf("error = %v, want ErrDenied", err)
 	}
 }
 
 // The opt-in exists for the case a hostname legitimately resolves inside a
 // private network -- an internal API behind a corporate DNS name.
 func TestPrivateNetworksCanBeOptedInto(t *testing.T) {
-	policy := Policy{AllowedOrigins: []string{"https://internal.corp"}, AllowPrivateNetworks: true}
-	if err := policy.checkAddress("10.1.2.3:443"); err != nil {
-		t.Errorf("opt-in did not take effect: %v", err)
+	policy := resolving(t, "https://internal.corp", "10.1.2.3")
+	policy.AllowPrivateNetworks = true
+	if err := dialing(t, &policy, "https://internal.corp/x"); errors.Is(err, ErrDenied) {
+		t.Fatalf("opt-in did not take effect: %v", err)
 	}
+}
+
+func portOf(t *testing.T, rawURL string) string {
+	t.Helper()
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed.Port()
 }
 
 // FR-32: one overall timeout is not enough. A server that accepts the
@@ -192,40 +284,9 @@ func TestClientAppliesEveryPhaseOfTheBudget(t *testing.T) {
 }
 
 func TestDefaultBudgetIsAppliedWhenUnset(t *testing.T) {
-	client := Policy{}.Client(nil)
+	empty := Policy{}
+	client := empty.Client(nil)
 	if client.Timeout != DefaultBudget().Total {
 		t.Errorf("timeout = %v, want the default budget", client.Timeout)
-	}
-}
-
-// The guard is in the dial path, so it stops a connection that the origin
-// check let through.
-func TestDialGuardRefusesRebindingEndToEnd(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		t.Error("the request reached a private address")
-	}))
-	defer srv.Close()
-
-	// An origin named by hostname, resolved (by the test's own dialer) to the
-	// loopback address the server listens on.
-	policy := Policy{AllowedOrigins: []string{"http://api.example.com"}}
-	client := policy.Client(nil)
-	transport, ok := client.Transport.(*http.Transport)
-	if !ok {
-		t.Fatalf("transport = %T", client.Transport)
-	}
-	transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
-		if err := policy.checkAddress(srv.Listener.Addr().String()); err != nil {
-			return nil, err
-		}
-		return (&net.Dialer{}).DialContext(ctx, network, srv.Listener.Addr().String())
-	}
-
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://api.example.com/x", http.NoBody)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := client.Do(req); !errors.Is(err, ErrDenied) {
-		t.Fatalf("error = %v, want ErrDenied", err)
 	}
 }

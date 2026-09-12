@@ -1,0 +1,345 @@
+{
+  "index": {
+    "documents": [
+      "default:GET:/pets",
+      "default:POST:/pets",
+      "default:GET:/pets/{petId}",
+      "default:DELETE:/pets/{petId}",
+      "default:GET:/orders",
+      "default:POST:/orders/{orderId}/refund"
+    ],
+    "postings": {
+      "a": [
+        "default:DELETE:/pets/{petId}",
+        "default:GET:/pets/{petId}",
+        "default:POST:/pets"
+      ],
+      "an": [
+        "default:POST:/orders/{orderId}/refund"
+      ],
+      "billing": [
+        "default:GET:/orders",
+        "default:POST:/orders/{orderId}/refund"
+      ],
+      "by": [
+        "default:DELETE:/pets/{petId}",
+        "default:GET:/pets/{petId}"
+      ],
+      "create": [
+        "default:POST:/pets"
+      ],
+      "current": [
+        "default:GET:/orders"
+      ],
+      "customer": [
+        "default:GET:/orders"
+      ],
+      "default": [
+        "default:DELETE:/pets/{petId}",
+        "default:GET:/orders",
+        "default:GET:/pets",
+        "default:GET:/pets/{petId}",
+        "default:POST:/orders/{orderId}/refund",
+        "default:POST:/pets"
+      ],
+      "delete": [
+        "default:DELETE:/pets/{petId}"
+      ],
+      "for": [
+        "default:GET:/orders"
+      ],
+      "get": [
+        "default:GET:/orders",
+        "default:GET:/pets",
+        "default:GET:/pets/{petId}"
+      ],
+      "id": [
+        "default:DELETE:/pets/{petId}",
+        "default:GET:/pets/{petId}",
+        "default:POST:/orders/{orderId}/refund"
+      ],
+      "list": [
+        "default:GET:/orders",
+        "default:GET:/pets"
+      ],
+      "order": [
+        "default:POST:/orders/{orderId}/refund"
+      ],
+      "orders": [
+        "default:GET:/orders",
+        "default:POST:/orders/{orderId}/refund"
+      ],
+      "pet": [
+        "default:DELETE:/pets/{petId}",
+        "default:GET:/pets/{petId}",
+        "default:POST:/pets"
+      ],
+      "pets": [
+        "default:DELETE:/pets/{petId}",
+        "default:GET:/pets",
+        "default:GET:/pets/{petId}",
+        "default:POST:/pets"
+      ],
+      "post": [
+        "default:POST:/orders/{orderId}/refund",
+        "default:POST:/pets"
+      ],
+      "refund": [
+        "default:POST:/orders/{orderId}/refund"
+      ],
+      "the": [
+        "default:GET:/orders"
+      ]
+    },
+    "lengths": {
+      "default:DELETE:/pets/{petId}": 37,
+      "default:GET:/orders": 28,
+      "default:GET:/pets": 24,
+      "default:GET:/pets/{petId}": 37,
+      "default:POST:/orders/{orderId}/refund": 40,
+      "default:POST:/pets": 25
+    },
+    "averageLength": 31.833333,
+    "tags": [
+      {
+        "tag": "pets",
+        "count": 4
+      },
+      {
+        "tag": "billing",
+        "count": 2
+      }
+    ]
+  },
+  "results": {
+    "": [
+      {
+        "key": "default:DELETE:/pets/{petId}",
+        "toolName": "delete_pet",
+        "method": "DELETE",
+        "pathTemplate": "/pets/{petId}",
+        "summary": "Delete a pet by ID",
+        "tags": [
+          "pets"
+        ],
+        "effect": "destructive",
+        "score": 0
+      },
+      {
+        "key": "default:GET:/orders",
+        "toolName": "list_orders",
+        "method": "GET",
+        "pathTemplate": "/orders",
+        "summary": "List orders for the current customer",
+        "tags": [
+          "billing"
+        ],
+        "effect": "read",
+        "score": 0
+      },
+      {
+        "key": "default:GET:/pets",
+        "toolName": "list_pets",
+        "method": "GET",
+        "pathTemplate": "/pets",
+        "summary": "List pets",
+        "tags": [
+          "pets"
+        ],
+        "effect": "read",
+        "score": 0
+      },
+      {
+        "key": "default:GET:/pets/{petId}",
+        "toolName": "get_pet",
+        "method": "GET",
+        "pathTemplate": "/pets/{petId}",
+        "summary": "Get a pet by ID",
+        "tags": [
+          "pets"
+        ],
+        "effect": "read",
+        "score": 0
+      },
+      {
+        "key": "default:POST:/orders/{orderId}/refund",
+        "toolName": "refund_order",
+        "method": "POST",
+        "pathTemplate": "/orders/{orderId}/refund",
+        "summary": "Refund an order",
+        "tags": [
+          "billing"
+        ],
+        "effect": "unknown",
+        "score": 0
+      },
+      {
+        "key": "default:POST:/pets",
+        "toolName": "create_pet",
+        "method": "POST",
+        "pathTemplate": "/pets",
+        "summary": "Create a pet",
+        "tags": [
+          "pets"
+        ],
+        "effect": "unknown",
+        "score": 0
+      }
+    ],
+    "customer": [
+      {
+        "key": "default:GET:/orders",
+        "toolName": "list_orders",
+        "method": "GET",
+        "pathTemplate": "/orders",
+        "summary": "List orders for the current customer",
+        "tags": [
+          "billing"
+        ],
+        "effect": "read",
+        "score": 1.620263
+      }
+    ],
+    "delete": [
+      {
+        "key": "default:DELETE:/pets/{petId}",
+        "toolName": "delete_pet",
+        "method": "DELETE",
+        "pathTemplate": "/pets/{petId}",
+        "summary": "Delete a pet by ID",
+        "tags": [
+          "pets"
+        ],
+        "effect": "destructive",
+        "score": 2.986918
+      }
+    ],
+    "kubernetes": [],
+    "list pets": [
+      {
+        "key": "default:GET:/pets",
+        "toolName": "list_pets",
+        "method": "GET",
+        "pathTemplate": "/pets",
+        "summary": "List pets",
+        "tags": [
+          "pets"
+        ],
+        "effect": "read",
+        "score": 2.71257
+      },
+      {
+        "key": "default:GET:/orders",
+        "toolName": "list_orders",
+        "method": "GET",
+        "pathTemplate": "/orders",
+        "summary": "List orders for the current customer",
+        "tags": [
+          "billing"
+        ],
+        "effect": "read",
+        "score": 1.779521
+      },
+      {
+        "key": "default:POST:/pets",
+        "toolName": "create_pet",
+        "method": "POST",
+        "pathTemplate": "/pets",
+        "summary": "Create a pet",
+        "tags": [
+          "pets"
+        ],
+        "effect": "unknown",
+        "score": 0.849805
+      },
+      {
+        "key": "default:DELETE:/pets/{petId}",
+        "toolName": "delete_pet",
+        "method": "DELETE",
+        "pathTemplate": "/pets/{petId}",
+        "summary": "Delete a pet by ID",
+        "tags": [
+          "pets"
+        ],
+        "effect": "destructive",
+        "score": 0.815261
+      },
+      {
+        "key": "default:GET:/pets/{petId}",
+        "toolName": "get_pet",
+        "method": "GET",
+        "pathTemplate": "/pets/{petId}",
+        "summary": "Get a pet by ID",
+        "tags": [
+          "pets"
+        ],
+        "effect": "read",
+        "score": 0.815261
+      }
+    ],
+    "orders refund": [
+      {
+        "key": "default:POST:/orders/{orderId}/refund",
+        "toolName": "refund_order",
+        "method": "POST",
+        "pathTemplate": "/orders/{orderId}/refund",
+        "summary": "Refund an order",
+        "tags": [
+          "billing"
+        ],
+        "effect": "unknown",
+        "score": 4.685243
+      },
+      {
+        "key": "default:GET:/orders",
+        "toolName": "list_orders",
+        "method": "GET",
+        "pathTemplate": "/orders",
+        "summary": "List orders for the current customer",
+        "tags": [
+          "billing"
+        ],
+        "effect": "read",
+        "score": 2.020137
+      }
+    ],
+    "pet": [
+      {
+        "key": "default:DELETE:/pets/{petId}",
+        "toolName": "delete_pet",
+        "method": "DELETE",
+        "pathTemplate": "/pets/{petId}",
+        "summary": "Delete a pet by ID",
+        "tags": [
+          "pets"
+        ],
+        "effect": "destructive",
+        "score": 1.326524
+      },
+      {
+        "key": "default:GET:/pets/{petId}",
+        "toolName": "get_pet",
+        "method": "GET",
+        "pathTemplate": "/pets/{petId}",
+        "summary": "Get a pet by ID",
+        "tags": [
+          "pets"
+        ],
+        "effect": "read",
+        "score": 1.326524
+      },
+      {
+        "key": "default:POST:/pets",
+        "toolName": "create_pet",
+        "method": "POST",
+        "pathTemplate": "/pets",
+        "summary": "Create a pet",
+        "tags": [
+          "pets"
+        ],
+        "effect": "unknown",
+        "score": 1.218281
+      }
+    ]
+  }
+}
