@@ -1,7 +1,8 @@
 # ADR-0004: MCP client field notes
 
-- **Status**: Draft (M0 spike, T004). Finalized at the M0 gate (T022) once the corpus run and
-  the desktop-client checks below are done.
+- **Status**: Accepted for the server-side profile at the M0 gate (T022); the desktop-client
+  table below stays open (it needs a human in front of the GUI) and does not block the gate --
+  see "Why the open table does not block the gate".
 - **Date**: 2026-09-11
 - **Context**: research.md open item 4 — "Claude Desktop name limits, schema strictness,
   tools/list size behavior → portable tool profile defaults (name ≤64, catalog budget)".
@@ -60,6 +61,35 @@ subprocess (`cmd/lotsman/e2e_test.go`), and hand-written JSON-RPC frames piped i
    table below still needs a human because its questions (name limits, schema strictness, a
    large `tools/list`, etc.) require more than one tool and larger schemas to exercise —
    revisit once T010/T011 publish a real catalog.
+
+## Verified at the M0 gate (T022)
+
+Measured with the official Go MCP client driving the real binary over stdio, serving the
+Kubernetes `apps/v1` corpus document (65 published tools with full grouped input schemas):
+
+10. **A multi-megabyte `tools/list` is not a transport problem.** The 4.26 MB response was
+    delivered in 146 ms over stdio, whole and well-formed. The constraint on catalog size is the
+    model's context window, not the protocol -- which is why `catalog.serializedBytesEstimate`
+    is a report field and why `--mode=search` (002) is a prerequisite for specs of this shape,
+    not an optimization. Question 3 below is therefore answered for the wire and still open for
+    what a client *does* with a payload that size.
+11. **Grouped schemas are accepted as published.** `additionalProperties:false` at every level,
+    nested objects, arrays of scalars, enums and the body group all survive the round trip, and
+    the SDK validates arguments against them before the handler runs. `format` is the exception:
+    JSON Schema treats it as an annotation and the SDK follows suit, which is why lotsman
+    validates as well (ADR-0002).
+12. **Annotations round-trip unchanged**: `readOnlyHint` and `destructiveHint` arrive as
+    published, and nothing in the server reads them back -- policy never depends on a hint
+    (Constitution III).
+
+## Why the open table does not block the gate
+
+Every assumption below is coded conservatively: a wrong guess costs a smaller catalog or a
+blunter name, never a broken session or an unsafe call. Name length and charset are already
+clamped to the strictest plausible client, the catalog budget is measured and reported rather
+than assumed, and policy never depends on annotations. The remaining questions change defaults,
+not behaviour, so they are answered when a human is in front of the application rather than
+holding up Phase B.
 
 ## Open — to confirm on a desktop client
 

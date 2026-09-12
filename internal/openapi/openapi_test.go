@@ -40,7 +40,7 @@ paths:
 `
 
 func TestParseEnumeratesInDeterministicOrder(t *testing.T) {
-	doc, err := Parse([]byte(basicSpec), "", nil)
+	doc, err := Parse(t.Context(), []byte(basicSpec), Options{})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestParseEnumeratesInDeterministicOrder(t *testing.T) {
 }
 
 func TestParseNamespaceScopesKey(t *testing.T) {
-	doc, err := Parse([]byte(basicSpec), "petstore", nil)
+	doc, err := Parse(t.Context(), []byte(basicSpec), Options{Namespace: "petstore"})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -97,7 +97,7 @@ paths:
       responses:
         "200": { description: ok }
 `
-	doc, err := Parse([]byte(spec), "", nil)
+	doc, err := Parse(t.Context(), []byte(spec), Options{})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -146,7 +146,7 @@ paths:
       responses:
         "200": { description: ok }
 `
-	doc, err := Parse([]byte(spec), "", nil)
+	doc, err := Parse(t.Context(), []byte(spec), Options{})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -179,7 +179,7 @@ paths:
       responses:
         "200": { description: ok }
 `
-	doc, err := Parse([]byte(spec), "", nil)
+	doc, err := Parse(t.Context(), []byte(spec), Options{})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -190,7 +190,7 @@ paths:
 
 func TestParseNoPaths(t *testing.T) {
 	const spec = "openapi: 3.0.3\ninfo: { title: x, version: '1.0' }\n"
-	doc, err := Parse([]byte(spec), "", nil)
+	doc, err := Parse(t.Context(), []byte(spec), Options{})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestParseInvalidBytesReturnsError(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := Parse([]byte(tt.spec), "", nil)
+			_, err := Parse(t.Context(), []byte(tt.spec), Options{})
 			if err == nil {
 				t.Fatal("want error")
 			}
@@ -238,12 +238,15 @@ paths:
       responses:
         "200": { description: ok }
 `
-	doc, err := Parse([]byte(spec), "", nil)
+	doc, err := Parse(t.Context(), []byte(spec), Options{})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
 	if len(doc.Diagnostics) == 0 {
 		t.Fatal("want at least one document-level diagnostic for the unresolved $ref")
+	}
+	if !doc.HasErrors() {
+		t.Fatal("document-level error diagnostics were not reflected by HasErrors")
 	}
 	for _, d := range doc.Diagnostics {
 		if d.Severity != domain.SeverityError {
@@ -252,6 +255,78 @@ paths:
 	}
 	if len(doc.Operations) != 1 || doc.Operations[0].SourceOperationID != "getWidget" {
 		t.Fatalf("Operations = %+v, want getWidget still enumerated", doc.Operations)
+	}
+}
+
+// Cookie parameters enumerate and publish a schema but cannot be written to
+// the wire yet, so they block execution; path, query and header parameters do
+// not. Authentication is still unimplemented and blocks on its own.
+func TestParseMarksUnsupportedRuntimeCapabilitiesAsExecutionBlockers(t *testing.T) {
+	const spec = `
+openapi: 3.0.3
+info: { title: X, version: "1.0" }
+security:
+  - bearerAuth: []
+paths:
+  /widgets:
+    get:
+      operationId: listWidgets
+      parameters:
+        - { name: session, in: cookie, schema: { type: string } }
+      responses:
+        "200": { description: ok }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer }
+`
+	doc, err := Parse(t.Context(), []byte(spec), Options{})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	op := doc.Operations[0]
+	if op.Support.Level != domain.SupportSupported {
+		t.Fatalf("Support = %+v", op.Support)
+	}
+	if op.Executable() {
+		t.Fatal("operation with unimplemented parameters/body/auth is executable")
+	}
+	want := []domain.ReasonCode{
+		domain.ReasonParametersNotImplemented,
+		domain.ReasonAuthenticationNotImplemented,
+	}
+	if len(op.ExecutionBlockers) != len(want) {
+		t.Fatalf("ExecutionBlockers = %v, want %v", op.ExecutionBlockers, want)
+	}
+	for i := range want {
+		if op.ExecutionBlockers[i] != want[i] {
+			t.Fatalf("ExecutionBlockers = %v, want %v", op.ExecutionBlockers, want)
+		}
+	}
+}
+
+func TestParseExplicitEmptySecurityOverridesRoot(t *testing.T) {
+	const spec = `
+openapi: 3.0.3
+info: { title: X, version: "1.0" }
+security:
+  - bearerAuth: []
+paths:
+  /public:
+    get:
+      operationId: public
+      security: []
+      responses:
+        "200": { description: ok }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer }
+`
+	doc, err := Parse(t.Context(), []byte(spec), Options{})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !doc.Operations[0].Executable() {
+		t.Fatalf("explicit public operation blockers = %v", doc.Operations[0].ExecutionBlockers)
 	}
 }
 
@@ -268,7 +343,7 @@ paths:
       responses:
         "200": { description: ok }
 `
-	doc, err := Parse([]byte(spec), "", nil)
+	doc, err := Parse(t.Context(), []byte(spec), Options{})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -293,7 +368,7 @@ paths:
       responses:
         "200": { description: ok }
 `
-	doc, err := Parse([]byte(spec), "", nil)
+	doc, err := Parse(t.Context(), []byte(spec), Options{})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -320,7 +395,7 @@ paths:
       responses:
         "200": { description: ok }
 `
-	doc, err := Parse([]byte(spec), "", nil)
+	doc, err := Parse(t.Context(), []byte(spec), Options{})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -341,7 +416,7 @@ paths:
       responses:
         "200": { description: ok }
 `
-	doc, err := Parse([]byte(spec), "", nil)
+	doc, err := Parse(t.Context(), []byte(spec), Options{})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -360,4 +435,137 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func TestParseImplementedParametersDoNotBlockExecution(t *testing.T) {
+	const spec = `
+openapi: 3.0.3
+info: { title: X, version: "1.0" }
+paths:
+  /widgets/{widgetId}:
+    get:
+      operationId: getWidget
+      parameters:
+        - { name: widgetId, in: path, required: true, schema: { type: string } }
+        - { name: tags, in: query, schema: { type: array, items: { type: string } } }
+      responses:
+        "200": { description: ok }
+`
+	doc, err := Parse(t.Context(), []byte(spec), Options{})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	op := doc.Operations[0]
+	if !op.Executable() {
+		t.Fatalf("path/query parameters must not block execution: %v", op.ExecutionBlockers)
+	}
+	if len(op.Input.Parameters) != 2 {
+		t.Fatalf("Input.Parameters = %+v, want 2", op.Input.Parameters)
+	}
+}
+
+// The IR carries an effect for every operation, with its provenance, because
+// the runtime gate reads it and a report has to explain it (spec 4.7).
+func TestParseAssignsEffectWithProvenance(t *testing.T) {
+	const spec = `
+openapi: 3.0.3
+info: { title: X, version: "1.0" }
+paths:
+  /pets:
+    get:
+      operationId: listPets
+      responses: { "200": { description: ok } }
+    post:
+      operationId: createPet
+      responses: { "201": { description: created } }
+  /pets/{petId}:
+    parameters:
+      - { name: petId, in: path, required: true, schema: { type: string } }
+    delete:
+      operationId: deletePet
+      responses: { "204": { description: gone } }
+  /cache/rebuild:
+    get:
+      operationId: rebuildCache
+      responses: { "200": { description: ok } }
+`
+	doc, err := Parse(t.Context(), []byte(spec), Options{})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	byID := map[string]domain.Operation{}
+	for _, op := range doc.Operations {
+		byID[op.SourceOperationID] = op
+	}
+	for id, want := range map[string]domain.Effect{
+		"listPets":  domain.EffectRead,
+		"createPet": domain.EffectUnknown,
+		"deletePet": domain.EffectDestructive,
+		// A read-looking method with a mutation-like verb is not a read.
+		"rebuildCache": domain.EffectUnknown,
+	} {
+		op, ok := byID[id]
+		if !ok {
+			t.Fatalf("%s missing from %+v", id, byID)
+		}
+		if op.Effect.Effect != want {
+			t.Errorf("%s effect = %q, want %q", id, op.Effect.Effect, want)
+		}
+		if op.Effect.Source != domain.EffectSourceHTTPMethod || op.Effect.Confidence != domain.ConfidenceInferred {
+			t.Errorf("%s provenance = %+v", id, op.Effect)
+		}
+	}
+	if len(byID["rebuildCache"].Effect.Warnings) == 0 {
+		t.Error("a suspicious GET must carry a warning explaining the raised effect")
+	}
+}
+
+// A spec may not hand a model the headers that carry credentials or control
+// the transport.
+func TestParseRejectsProtectedHeaderParameters(t *testing.T) {
+	const spec = `
+openapi: 3.0.3
+info: { title: X, version: "1.0" }
+paths:
+  /widgets:
+    get:
+      operationId: listWidgets
+      parameters:
+        - { name: Authorization, in: header, schema: { type: string } }
+      responses: { "200": { description: ok } }
+`
+	doc, err := Parse(t.Context(), []byte(spec), Options{})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	op := doc.Operations[0]
+	if op.Support.Level != domain.SupportRejected {
+		t.Fatalf("support = %q, want rejected", op.Support.Level)
+	}
+	if !hasReason(op.Support.Reasons, domain.ReasonInvalidParameter) {
+		t.Errorf("reasons = %v, want %s", op.Support.Reasons, domain.ReasonInvalidParameter)
+	}
+}
+
+// A header parameter is serializable now, so it must not block execution.
+func TestParseHeaderParametersDoNotBlockExecution(t *testing.T) {
+	const spec = `
+openapi: 3.0.3
+info: { title: X, version: "1.0" }
+paths:
+  /widgets:
+    get:
+      operationId: listWidgets
+      parameters:
+        - { name: X-Tenant, in: header, schema: { type: string } }
+      responses: { "200": { description: ok } }
+`
+	doc, err := Parse(t.Context(), []byte(spec), Options{})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !doc.Operations[0].Executable() {
+		t.Fatalf("header parameters blocked execution: %v", doc.Operations[0].ExecutionBlockers)
+	}
 }

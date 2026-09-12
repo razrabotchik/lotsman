@@ -2,8 +2,8 @@
 
 Динамический security-first MCP runtime из OpenAPI на Go.
 
-Версия документа: **1.1.3**
-Дата: **31 августа 2026 года**
+Версия документа: **1.1.4**
+Дата: **11 сентября 2026 года**
 Статус: proposal после архитектурного ревью версии 1.0 (правки — см. changelog в конце)
 Имя проекта: **lotsman** («лоцман» — морской проводник, который поднимается на борт и безопасно ведёт судно в порт). Проверено 31.08.2026: GitHub, пакетные реестры и софтверные товарные знаки чисты; одноимённые компании существуют только в морской отрасли.
 
@@ -108,7 +108,7 @@ Community recipes, multi-API gateway, RBAC и web admin являются отд�
 - **FR-5.** Remote `$ref` по умолчанию выключены. При включении разрешаются только HTTPS, same-origin или явные origins, с лимитами размера, количества документов, глубины и времени.
 - **FR-6.** Циклы обрабатываются без panic; нормализатор сохраняет ссылку/ограниченную рекурсию и сообщает о деградации.
 - **FR-7.** Валидация возвращает JSON Pointer/путь, line/column при наличии и категорию ошибки.
-- **FR-8.** `--lax` исключает неподдержанные операции и запускает оставшийся каталог. Он не ослабляет egress, auth или mutation policy.
+- **FR-8.** В strict-режиме (default) наличие хотя бы одной rejected/partial операции не даёт запустить `serve`; отчёт остаётся доступен через `inspect`. `--lax` исключает такие операции и запускает только supported subset. Document-level ошибки, при которых нельзя надёжно локализовать влияние на операции, фатальны в обоих режимах. `--lax` не ослабляет validation, egress, auth или mutation policy.
 - **FR-9.** Ограничения по умолчанию: размер root spec, суммарный размер refs, число документов, число операций, глубина schema/ref и время parse. Все лимиты конфигурируемы в безопасном диапазоне.
 
 ### 4.2 Нормализованная модель и capability report
@@ -130,6 +130,8 @@ Community recipes, multi-API gateway, RBAC и web admin являются отд�
 - **FR-12.** `lotsman inspect --json` имеет версионированную схему для CI.
 - **FR-12a.** Capability report — продуктовая сущность первого класса, не побочный вывод. Человекочитаемый отчёт группирует: операции (total/executable/read/mutation/rejected), причины отклонений с количеством, оценку каталога (вес tools-режима, выбранный режим), security-сводку (remote refs / redirects / unknown mutations). `lotsman inspect diff <old> <new>` (или diff двух `--json`-отчётов в CI) показывает: операции, потерявшие поддержку; изменения effect (`unknown → destructive`); новые внешние origins. Это делает lotsman полезным в PR-пайплайне владельца API ещё до всякого MCP.
 - **FR-13.** Никакая partially supported операция не исполняется приблизительно без конкретного documented fallback и явного opt-in.
+- **FR-13a.** `support`, `published` и `executable` — разные состояния. Supported операция может быть опубликована для discovery, но иметь `executionBlockers` из-за отсутствующей runtime capability, auth/config или policy. Только `executable=true` допускается к request builder; любой blocker завершает вызов до сети и виден в report/operations output.
+- **FR-13b.** `specDigest` имеет вид `sha256:<hex>`. Для exploded spec capability report дополнительно содержит детерминированный manifest root+refs с digest каждого документа; изменение любого разрешённого ref меняет manifest/catalog digest.
 
 ### 4.3 Portable tool profile
 
@@ -177,6 +179,7 @@ M1 поддерживает:
 - **FR-31.** До сети возможен `lotsman explain-call <operationKey> --args ...`, показывающий method, redacted origin/path template, выбранный auth profile, media type и policy decision.
 - **FR-32.** HTTP timeout включает connect/TLS/header/body budgets; context cancellation останавливает чтение ответа.
 - **FR-33.** Redirects по умолчанию отключены. При включении каждый hop повторно проходит egress policy; sensitive headers никогда не переходят на другой origin.
+- **FR-33a.** До появления полной `allowedOrigins` policy ранний tracer-bullet runtime требует явный `--base-url` для любого реального HTTP-вызова; spec-authored server сам по себе не является полномочием на egress. Разрешение проверяется до `RoundTrip`.
 - **FR-34.** Retry выключен по умолчанию. При включении он разрешён только для idempotent операций/явного override, ограниченных transient failures и `Retry-After`. Для mutation без idempotency key retry запрещён.
 - **FR-35.** На `401` допускается один refresh+retry только когда auth provider может доказуемо обновить token; событие отражается в audit metadata.
 - **FR-36.** Response body читается через hard byte limit. Усечение не должно возвращать сломанный JSON как валидный JSON.
@@ -221,7 +224,7 @@ type EffectDecision struct {
 - DELETE → `destructive`;
 - POST/PATCH/PUT → `unknown`, пока recipe/config не классифицирует точнее (source=recipe/local_override, confidence=explicit).
 
-Дополнительно работает suspicious-operation scanner: если имя/путь операции содержит mutation-глагол (`create`, `delete`, `send`, `publish`, `trigger`, `rebuild`, `refresh`, `execute`, `charge`, ...) при inferred-эффекте `read` — `inspect` выдаёт warning («GET /rebuild-cache: effect read по методу, но имя содержит mutation-like verb»). Это review-сигнал, не policy boundary.
+Дополнительно работает suspicious-operation scanner: если имя/путь операции содержит mutation-глагол (`create`, `delete`, `send`, `publish`, `trigger`, `rebuild`, `refresh`, `execute`, `charge`, ...) при методе GET/HEAD/OPTIONS, inferred-эффект повышается до `unknown`, а `inspect` выдаёт warning («GET /rebuild-cache: method выглядит read-only, но имя содержит mutation-like verb»). Вернуть `read` может только явный reviewed override. Scanner остаётся эвристикой; security boundary — fail-closed policy для `unknown`, а не сам warning.
 
 - **FR-40.** `--read-only` разрешает сеть только для `read`; `unknown` блокируется.
 - **FR-41.** Mutations требуют `execution.allowMutations=true` и прохождения allow/deny rules по namespace, operationKey, tag и effect.
@@ -400,6 +403,7 @@ server:
 - private/link-local/loopback/metadata ranges запрещены по умолчанию в remote/gateway profile;
 - self-hosted/private API разрешается явным CIDR/origin rule;
 - DNS rebinding учитывается при каждом новом соединении;
+- proxy environment (`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`) не наследуется без явной настройки;
 - cross-origin redirects не получают secrets.
 
 ### 6.3 Prompt injection
@@ -809,3 +813,11 @@ HTTP/OAuth критерии добавляются к stable gateway profile, н
 6. Вопрос №7 (§14) почти закрыт: `subscriptions/listen` подтверждён, на M0 — только пин сигнатуры.
 7. Добавлена формула проекта: «lotsman doesn't guess…» (§1.2).
 Спецификация объявляется замороженной до результатов M0 — дальнейшие изменения только через ADR спайка.
+
+## Changelog 1.1.3 → 1.1.4 (ADR-0005)
+
+1. Разделены translation support, publication и runtime executability; введены machine-readable `executionBlockers` (FR-13a).
+2. Зафиксирована строгая семантика strict/lax: strict не запускается при rejected/partial, document-level ошибки фатальны всегда (FR-8).
+3. Реальный egress больше не опережает security floor: redirects deny с первого HTTP-вызова, до полной origin policy требуется явный `--base-url` (FR-33a).
+4. Suspicious GET/HEAD/OPTIONS классифицируется `unknown` и блокируется до reviewed override, а не остаётся разрешённым `read` с одним warning.
+5. Формат digest унифицирован как `sha256:<hex>`; для exploded specs требуется manifest digest root+refs (FR-13b).

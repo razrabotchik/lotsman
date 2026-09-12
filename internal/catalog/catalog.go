@@ -7,12 +7,14 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/razrabotchik/lotsman/internal/domain"
+	"github.com/razrabotchik/lotsman/internal/policy"
 )
 
-// maxNameBytes is the portable tool-name ceiling confirmed against a real
-// desktop client (ADR-0004, FR-15).
+// maxNameBytes is the portable tool-name ceiling selected for the M0 client
+// compatibility matrix (ADR-0004, FR-15); broad desktop confirmation is still pending.
 const maxNameBytes = 64
 
 // descriptionByteBudget is the per-tool description ceiling (FR-19). No
@@ -30,6 +32,24 @@ type Tool struct {
 	// Servers is the operation's effective server URL list (v0: no
 	// variable substitution), passed through for request execution.
 	Servers []string `json:"servers,omitempty"`
+	// Input is the normalized argument surface the request builder serializes
+	// from; InputSchema is the published JSON Schema the model sees. They are
+	// two views of the same thing and must never disagree: one validates, the
+	// other writes the wire.
+	Input       domain.InputModel `json:"input"`
+	InputSchema map[string]any    `json:"inputSchema"`
+	// Effect drives the published annotations and the runtime gate. It is
+	// carried on the tool so a report can show what was decided and why.
+	Effect domain.EffectDecision `json:"effect"`
+	// Executable means every axis agrees: the operation is supported, the
+	// runtime can build the call, and policy permits it.
+	Executable bool `json:"executable"`
+	// ExecutionBlockers are lotsman's own gaps; PolicyBlockers are the
+	// operator's decisions. They are reported separately because they call
+	// for different actions: wait for a release, or change the configuration.
+	ExecutionBlockers []domain.ReasonCode `json:"executionBlockers,omitempty"`
+	PolicyBlockers    []domain.ReasonCode `json:"policyBlockers,omitempty"`
+	PolicyMessage     string              `json:"policyMessage,omitempty"`
 }
 
 // Catalog is the deterministic, immutable snapshot built from parsed
@@ -38,6 +58,16 @@ type Catalog struct {
 	SpecDigest string `json:"specDigest"`
 	Tools      []Tool `json:"tools"` // deterministic order
 	Digest     string `json:"digest"`
+	// Report accounts for every operation in the document, including the ones
+	// that never became tools. It is derived from the same pass, so it can
+	// never disagree with what was published.
+	Report Report `json:"report"`
+}
+
+// Options configures catalog derivation. The zero value is the documented
+// default: read-only execution (docs/spec.md 5.1).
+type Options struct {
+	Policy policy.Config
 }
 
 // Build derives a deterministic tool catalog from parsed operations.
@@ -49,11 +79,11 @@ type Catalog struct {
 // job: catalog.Build publishes every supported operation regardless of
 // method, and callers (mcpserver) decide which of those they are prepared
 // to serve.
-func Build(specDigest string, operations []domain.Operation) Catalog {
+func Build(specDigest string, operations []domain.Operation, opts Options) Catalog {
 	supported := make([]domain.Operation, 0, len(operations))
-	for _, op := range operations {
-		if op.Support.Level == domain.SupportSupported {
-			supported = append(supported, op)
+	for i := range operations {
+		if operations[i].Support.Level == domain.SupportSupported {
+			supported = append(supported, operations[i])
 		}
 	}
 	// operations is already deterministically ordered by the openapi adapter,
@@ -63,21 +93,36 @@ func Build(specDigest string, operations []domain.Operation) Catalog {
 
 	seen := make(map[string]domain.OperationKey, len(supported))
 	tools := make([]Tool, 0, len(supported))
-	for _, op := range supported {
-		tools = append(tools, Tool{
-			Name:         toolName(op, seen),
-			OperationKey: op.Key,
-			Method:       op.Method,
-			PathTemplate: op.PathTemplate,
-			Description:  description(op),
-			Servers:      op.Servers,
-		})
+	for i := range supported {
+		op := &supported[i]
+		verdict := opts.Policy.Evaluate(op.Effect)
+
+		tool := Tool{
+			Name:              toolName(op, seen),
+			OperationKey:      op.Key,
+			Method:            op.Method,
+			PathTemplate:      op.PathTemplate,
+			Description:       description(op),
+			Servers:           op.Servers,
+			Input:             op.Input,
+			InputSchema:       inputSchema(op.Input),
+			Effect:            op.Effect,
+			Executable:        op.Executable() && verdict.Allowed,
+			ExecutionBlockers: append([]domain.ReasonCode(nil), op.ExecutionBlockers...),
+		}
+		if !verdict.Allowed {
+			tool.PolicyBlockers = []domain.ReasonCode{verdict.Reason}
+			tool.PolicyMessage = verdict.Message
+		}
+		tools = append(tools, tool)
 	}
 
+	catalogDigest := digest(tools)
 	return Catalog{
 		SpecDigest: specDigest,
 		Tools:      tools,
-		Digest:     digest(tools),
+		Digest:     catalogDigest,
+		Report:     buildReport(operations, tools, catalogDigest, opts),
 	}
 }
 
@@ -88,10 +133,10 @@ var nameCharset = regexp.MustCompile(`[^A-Za-z0-9_.-]`)
 // toolName implements FR-14–17: operationId (or method+path as fallback),
 // sanitized to the portable charset and length, with collisions resolved by
 // a stable short hash of OperationKey rather than processing order.
-func toolName(op domain.Operation, seen map[string]domain.OperationKey) string {
+func toolName(op *domain.Operation, seen map[string]domain.OperationKey) string {
 	base := op.SourceOperationID
 	if base == "" {
-		base = op.Method + "_" + op.PathTemplate
+		base = fallbackName(op.Method, op.PathTemplate)
 	}
 	name := sanitizeName(base)
 
@@ -102,8 +147,17 @@ func toolName(op domain.Operation, seen map[string]domain.OperationKey) string {
 	return name
 }
 
+var (
+	camelBoundary   = regexp.MustCompile(`([a-z0-9])([A-Z])`)
+	acronymBoundary = regexp.MustCompile(`([A-Z])([A-Z][a-z])`)
+)
+
 func sanitizeName(s string) string {
+	s = acronymBoundary.ReplaceAllString(s, `${1}_${2}`)
+	s = camelBoundary.ReplaceAllString(s, `${1}_${2}`)
+	s = strings.ToLower(s)
 	name := nameCharset.ReplaceAllString(s, "_")
+	name = strings.Trim(name, "_")
 	if len(name) > maxNameBytes {
 		name = name[:maxNameBytes]
 	}
@@ -111,6 +165,17 @@ func sanitizeName(s string) string {
 		name = "op"
 	}
 	return name
+}
+
+func fallbackName(method, pathTemplate string) string {
+	parts := []string{strings.ToLower(method)}
+	for _, segment := range strings.Split(pathTemplate, "/") {
+		if segment == "" || (strings.HasPrefix(segment, "{") && strings.HasSuffix(segment, "}")) {
+			continue
+		}
+		parts = append(parts, segment)
+	}
+	return strings.Join(parts, "_")
 }
 
 // withCollisionSuffix appends a short stable hash of key, truncating base so
@@ -129,7 +194,7 @@ func withCollisionSuffix(base string, key domain.OperationKey) string {
 // characters are stripped, and the result is capped to the per-tool byte
 // budget. The source spec is untrusted text that reaches an LLM's context,
 // so this is a security control, not cosmetics.
-func description(op domain.Operation) string {
+func description(op *domain.Operation) string {
 	text := op.Summary
 	if text == "" {
 		text = op.Description
@@ -154,17 +219,19 @@ var htmlTag = regexp.MustCompile(`</?[A-Za-z][^>]*>`)
 
 // budgetBytes truncates s to at most n UTF-8 bytes without splitting a rune.
 func budgetBytes(s string, n int) string {
+	s = strings.ToValidUTF8(s, "")
+	if n <= 0 {
+		return ""
+	}
 	if len(s) <= n {
 		return s
 	}
-	b := []byte(s)[:n]
-	for len(b) > 0 && !isRuneStart(b[len(b)-1]) {
-		b = b[:len(b)-1]
+	end := n
+	for end > 0 && !utf8.RuneStart(s[end]) {
+		end--
 	}
-	return string(b)
+	return s[:end]
 }
-
-func isRuneStart(c byte) bool { return c&0xC0 != 0x80 }
 
 // digest is a content digest over the published tools: it changes only when
 // the catalog changes in a way that matters to a client (FR-17, pipeline.md

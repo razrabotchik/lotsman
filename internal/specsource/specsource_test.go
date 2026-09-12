@@ -32,7 +32,7 @@ func TestLoadFile(t *testing.T) {
 		t.Errorf("Origin = %q, want %q", src.Origin, path)
 	}
 	sum := sha256.Sum256(content)
-	if want := hex.EncodeToString(sum[:]); src.Digest != want {
+	if want := "sha256:" + hex.EncodeToString(sum[:]); src.Digest != want {
 		t.Errorf("Digest = %q, want %q", src.Digest, want)
 	}
 	if src.LoadedAt.IsZero() {
@@ -76,7 +76,7 @@ func TestLoadDeterministicDigest(t *testing.T) {
 
 func TestLoadTooLarge(t *testing.T) {
 	r := bytes.NewReader(bytes.Repeat([]byte("a"), 10))
-	_, err := load(context.Background(), "test", r, Options{MaxBytes: 5})
+	_, err := load(context.Background(), "test", "", r, Options{MaxBytes: 5})
 	if !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("err = %v, want ErrTooLarge", err)
 	}
@@ -85,7 +85,7 @@ func TestLoadTooLarge(t *testing.T) {
 func TestLoadExactlyMaxBytes(t *testing.T) {
 	data := bytes.Repeat([]byte("a"), 5)
 	r := bytes.NewReader(data)
-	src, err := load(context.Background(), "test", r, Options{MaxBytes: 5})
+	src, err := load(context.Background(), "test", "", r, Options{MaxBytes: 5})
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -103,7 +103,7 @@ func (blockingReader) Read([]byte) (int, error) {
 }
 
 func TestLoadTimeout(t *testing.T) {
-	_, err := load(context.Background(), "test", blockingReader{}, Options{Timeout: 20 * time.Millisecond})
+	_, err := load(context.Background(), "test", "", blockingReader{}, Options{Timeout: 20 * time.Millisecond})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
 	}
@@ -134,7 +134,7 @@ func TestLoadTimeoutClosesReader(t *testing.T) {
 	r := newCloseBlockingReader()
 	done := make(chan struct{})
 	go func() {
-		_, _ = load(context.Background(), "test", r, Options{Timeout: 20 * time.Millisecond})
+		_, _ = load(context.Background(), "test", "", r, Options{Timeout: 20 * time.Millisecond})
 		close(done)
 	}()
 

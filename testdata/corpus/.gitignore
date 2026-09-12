@@ -1,0 +1,4 @@
+# The corpus documents are fetched, never committed: see MANIFEST.json.
+*
+!.gitignore
+!MANIFEST.json

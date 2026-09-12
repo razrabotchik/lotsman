@@ -6,6 +6,8 @@ info:
     Handwritten fixture spec for the core-runtime tracer bullet (T008/T009).
     Five operations, deliberately including one that cannot be supported:
     GET /orders/{orderId} omits the path parameter for its own placeholder.
+    The parameters cover the serialization matrix lotsman implements: a path
+    scalar, a query scalar, a query array at the default explode, and an enum.
 paths:
   /pets:
     get:
@@ -15,9 +17,27 @@ paths:
         - name: limit
           in: query
           required: false
+          description: Maximum number of pets to return.
           schema:
             type: integer
             format: int32
+            minimum: 1
+            maximum: 100
+        - name: tags
+          in: query
+          required: false
+          description: Filter by tag; repeated, because form/explode defaults to true.
+          schema:
+            type: array
+            items:
+              type: string
+        - name: sort
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [name, -name, created]
+            default: name
       responses:
         "200":
           description: A page of pets.
@@ -47,6 +67,12 @@ paths:
     get:
       operationId: getPet
       summary: Get a pet by ID
+      parameters:
+        - name: verbose
+          in: query
+          required: false
+          schema:
+            type: boolean
       responses:
         "200":
           description: The pet.

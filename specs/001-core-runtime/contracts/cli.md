@@ -7,15 +7,25 @@ requires a version bump of the report schema.
 
 ```text
 lotsman serve SPEC [--config FILE] [--base-url URL] [--mode tools] [--lax]
-                   [--read-only] [--log-level info] [--transport stdio]
-lotsman inspect SPEC [--json] [--lax]
+                   [--read-only | --allow-mutations] [--log-level info] [--transport stdio]
+lotsman inspect SPEC [--json] [--allow-mutations] [--fail-on-rejected]
 lotsman validate SPEC
-lotsman operations SPEC [--supported|--rejected]
+lotsman operations SPEC [--supported|--rejected] [--allow-mutations]
 lotsman explain-call OPERATION_KEY --args FILE [--config FILE]
 lotsman version [--json]
 ```
 
 SPEC: file path or `-` (stdin). stdout of `serve` carries MCP protocol ONLY; humans read stderr.
+
+`serve` is read-only by default: only operations whose effect is `read` execute, and
+`--allow-mutations` is required for anything else (FR-40/41). Every *supported* operation is
+published whatever its effect -- publication is discovery, the gate decides execution -- with
+annotations derived conservatively from the effect. Rejected operations are not published.
+
+`serve` is strict by default: any rejected/partial operation prevents startup. `--lax` removes
+those operations and serves the supported subset, but never clears execution/auth/policy blockers.
+Document-level errors are fatal in both modes. During the M0 tracer bullet, real HTTP calls require
+an explicit `--base-url`; this is replaced by the configured `allowedOrigins` policy in M1.
 
 ## Exit codes
 
@@ -25,11 +35,14 @@ SPEC: file path or `-` (stdin). stdout of `serve` carries MCP protocol ONLY; hum
 | 1 | runtime error (I/O, internal) |
 | 2 | invalid usage / config error |
 | 3 | spec invalid (parse/validation errors) |
-| 4 | spec valid but zero supported operations (strict) |
+| 4 | spec valid but unsupported under the selected strictness policy |
 | 5 | auth/secret resolution error |
 
 `inspect` exits 0 even with rejected operations (report is the product); `--fail-on-rejected`
-(CI helper) exits 4 when rejected > 0.
+(CI helper) exits 4 when rejected > 0. It has no `--lax`: the report always accounts for every
+operation, including the ones no mode would serve. Document-level errors are reported in
+`documentIssues` rather than being fatal -- explaining a document `serve` refuses is what
+`inspect` is for. `--allow-mutations` reports under that policy without enabling anything.
 
 ## `inspect --json` (schemaVersion "1")
 
@@ -47,6 +60,9 @@ SPEC: file path or `-` (stdin). stdout of `serve` carries MCP protocol ONLY; hum
       "key": "default:GET:/projects/{id}",
       "toolName": "get_project",
       "support": "supported",
+      "published": true,
+      "executable": true,
+      "executionBlockers": [],
       "effect": { "value": "read", "source": "http_method", "confidence": "inferred", "warnings": [] },
       "reasons": []
     },

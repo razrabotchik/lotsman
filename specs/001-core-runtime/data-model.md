@@ -8,7 +8,8 @@ It does NOT mirror the OpenAPI AST.
 
 ```go
 // OperationKey: "{namespace}:{METHOD}:{normalizedPath}" — stable identity,
-// independent of operationId (real specs duplicate/omit it).
+// independent of operationId (real specs duplicate/omit it); an omitted
+// namespace canonicalizes to "default" rather than an empty key segment.
 type OperationKey string
 
 type Operation struct {
@@ -24,6 +25,7 @@ type Operation struct {
     Security          []SecurityAlternative // OR across; AND within
     Effect            EffectDecision
     Support           SupportStatus
+    ExecutionBlockers []ReasonCode // runtime capability/config/auth/policy blockers
     Diagnostics       []Diagnostic
     Doc               DocMeta     // sanitized summary/description + provenance
 }
@@ -79,7 +81,7 @@ type SupportStatus struct {
     Reasons []ReasonCode // machine-readable: unsupported_parameter_style,
                          // unsupported_media_type, ambiguous_security,
                          // invalid_schema, cyclic_schema_truncated,
-                         // path_parameter_mismatch, ...
+                         // path_parameter_mismatch, external_ref_unsupported, ...
 }
 
 type Diagnostic struct {
@@ -117,9 +119,11 @@ type Report struct {
 1. Two loads of identical spec+config ⇒ deep-equal Catalog and equal Digest (Constitution IV).
 2. `Support.Level != supported` ⇒ operation absent from Tools (strict) or absent unless
    documented fallback + opt-in (partial).
-3. `Effect == read` guaranteed side-effect-free routing: read-only gate checks Effect only,
+3. Only `Support.Level == supported && len(ExecutionBlockers) == 0` may enter requestbuild.
+   Publication for discovery never implies executability; every blocked call makes zero RoundTrip calls.
+4. `Effect == read` guaranteed side-effect-free routing: read-only gate checks Effect only,
    never annotations.
-4. Grouped input schema sets `additionalProperties:false` at every level; unknown argument
+5. Grouped input schema sets `additionalProperties:false` at every level; unknown argument
    fails validation, never silently dropped.
-5. Secrets never appear in any entity above — auth profiles hold `SecretRef` strings
+6. Secrets never appear in any entity above — auth profiles hold `SecretRef` strings
    (`env:NAME`, `file:/path`), resolved only inside providers at call time.

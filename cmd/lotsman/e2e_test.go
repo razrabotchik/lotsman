@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -102,15 +104,15 @@ func TestStdioEndToEnd(t *testing.T) {
 	}
 }
 
-// TestServeWithSpecPublishesGETTools covers Step 3's checkpoint end to end:
-// a real spec's GET operations must be visible to an agent over the same
-// stdio transport Claude Desktop uses. Calling one is not expected to work
-// yet -- that is T012.
-func TestServeWithSpecPublishesGETTools(t *testing.T) {
+// TestServeWithSpecPublishesTools covers Step 3's checkpoint end to end: a
+// real spec's operations must be visible to an agent over the same stdio
+// transport Claude Desktop uses. Since Step 6 that includes the mutating
+// ones -- publication is discovery, and the policy gate decides execution.
+func TestServeWithSpecPublishesTools(t *testing.T) {
 	bin := buildBinary(t)
 	ctx := t.Context()
 
-	cmd := exec.Command(bin, "serve", miniSpecPath(t), "--log-level", "debug")
+	cmd := exec.Command(bin, "serve", miniSpecPath(t), "--lax", "--log-level", "debug")
 	var stderr syncBuffer
 	cmd.Stderr = &stderr
 
@@ -134,26 +136,115 @@ func TestServeWithSpecPublishesGETTools(t *testing.T) {
 	for _, tool := range tools.Tools {
 		names[tool.Name] = true
 	}
-	// ping + the two GETs (listPets, getPet). createPet is a POST and
-	// deletePet a DELETE -- neither is published yet (T011: GET only).
-	// getOrder is rejected outright (missing path parameter).
-	for _, want := range []string{"ping", "listPets", "getPet"} {
+	// ping plus every supported operation, mutating ones included.
+	for _, want := range []string{"ping", "list_pets", "get_pet", "create_pet", "delete_pet"} {
 		if !names[want] {
 			t.Errorf("tools/list missing %q: got %v", want, names)
 		}
 	}
-	for _, unwanted := range []string{"createPet", "deletePet", "getOrder"} {
-		if names[unwanted] {
-			t.Errorf("tools/list published %q, want it withheld", unwanted)
-		}
+	// getOrder is rejected outright (its path placeholder has no parameter),
+	// and a rejected operation is never published at all.
+	if names["get_order"] {
+		t.Error(`tools/list published "get_order", want it withheld: it is rejected, not merely blocked`)
 	}
 
-	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "listPets"})
+	// Without an explicit --base-url a call is refused before the network:
+	// a server URL authored by the spec is not egress authorization (ADR-0005).
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "list_pets"})
 	if err != nil {
 		t.Fatalf("tools/call listPets: %v\nstderr:\n%s", err, stderr.String())
 	}
 	if !res.IsError {
-		t.Error("listPets succeeded, want isError: execution is not wired yet (T012)")
+		t.Error("list_pets succeeded without --base-url, want a refusal")
+	}
+}
+
+// TestServeExecutesParameterizedGETEndToEnd is Step 5's checkpoint over the
+// real transport: the agent calls a tool with a path and a query argument,
+// and a live HTTP server receives both, serialized per OAS.
+func TestServeExecutesParameterizedGETEndToEnd(t *testing.T) {
+	bin := buildBinary(t)
+	ctx := t.Context()
+
+	requests := make(chan string, 4)
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests <- r.URL.RequestURI()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"p-1","name":"Murka"}`))
+	}))
+	defer api.Close()
+
+	cmd := exec.Command(bin, "serve", miniSpecPath(t), "--lax", "--base-url", api.URL, "--log-level", "debug")
+	var stderr syncBuffer
+	cmd.Stderr = &stderr
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "lotsman-e2e", Version: "v0"}, nil)
+	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: cmd, TerminateDuration: 5 * time.Second}, nil)
+	if err != nil {
+		t.Fatalf("connect over stdio: %v\nstderr:\n%s", err, stderr.String())
+	}
+	defer func() {
+		if closeErr := session.Close(); closeErr != nil {
+			t.Errorf("close session: %v", closeErr)
+		}
+	}()
+
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "get_pet",
+		Arguments: map[string]any{
+			"path":  map[string]any{"petId": "p 1/2"},
+			"query": map[string]any{"verbose": true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("tools/call get_pet: %v\nstderr:\n%s", err, stderr.String())
+	}
+	if res.IsError {
+		t.Fatalf("get_pet returned an error result: %+v\nstderr:\n%s", res.Content, stderr.String())
+	}
+
+	select {
+	case got := <-requests:
+		if want := "/pets/p%201%2F2?verbose=true"; got != want {
+			t.Errorf("upstream received %q, want %q", got, want)
+		}
+	default:
+		t.Fatal("upstream received no request")
+	}
+
+	// A tool whose parameters are all optional must be callable with no
+	// arguments at all. Over the wire that arrives as an absent argument
+	// object, which is not the same thing as an empty Go map -- a distinction
+	// only the real transport exercises.
+	bare, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "list_pets"})
+	if err != nil {
+		t.Fatalf("tools/call list_pets: %v\nstderr:\n%s", err, stderr.String())
+	}
+	if bare.IsError {
+		t.Errorf("list_pets rejected a call with no arguments: %+v", bare.Content)
+	}
+	select {
+	case got := <-requests:
+		if got != "/pets" {
+			t.Errorf("upstream received %q, want /pets", got)
+		}
+	default:
+		t.Error("upstream received no request for the argument-less call")
+	}
+
+	// The same tool with an argument the schema does not allow must be
+	// refused, and the refusal must not reach the API.
+	bad, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "get_pet",
+		Arguments: map[string]any{"path": map[string]any{"petId": "p-1"}, "query": map[string]any{"admin": true}},
+	})
+	if err == nil && !bad.IsError {
+		t.Errorf("an undeclared argument was accepted: %+v", bad.StructuredContent)
+	}
+	select {
+	case got := <-requests:
+		t.Errorf("upstream was called with %q despite invalid arguments", got)
+	default:
 	}
 }
 
@@ -252,4 +343,97 @@ func TestClientClosesStdinExitsCleanly(t *testing.T) {
 	if strings.Contains(stderr.String(), "level=ERROR") {
 		t.Errorf("clean disconnect logged an error:\n%s", stderr.String())
 	}
+}
+
+// TestServeMutationPolicyEndToEnd is Step 6's checkpoint over the real
+// transport: the same POST, with the same arguments, is refused under the
+// default policy and executes when mutations are enabled.
+func TestServeMutationPolicyEndToEnd(t *testing.T) {
+	bin := buildBinary(t)
+	ctx := t.Context()
+
+	type received struct{ method, contentType, body string }
+	requests := make(chan received, 4)
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		requests <- received{method: r.Method, contentType: r.Header.Get("Content-Type"), body: string(body)}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":"p-1"}`))
+	}))
+	defer api.Close()
+
+	call := func(t *testing.T, extraArgs ...string) *mcp.CallToolResult {
+		t.Helper()
+		args := append([]string{"serve", miniSpecPath(t), "--lax", "--base-url", api.URL, "--log-level", "debug"}, extraArgs...)
+		cmd := exec.Command(bin, args...)
+		var stderr syncBuffer
+		cmd.Stderr = &stderr
+
+		client := mcp.NewClient(&mcp.Implementation{Name: "lotsman-e2e", Version: "v0"}, nil)
+		session, err := client.Connect(ctx, &mcp.CommandTransport{Command: cmd, TerminateDuration: 5 * time.Second}, nil)
+		if err != nil {
+			t.Fatalf("connect over stdio: %v\nstderr:\n%s", err, stderr.String())
+		}
+		defer func() {
+			if closeErr := session.Close(); closeErr != nil {
+				t.Errorf("close session: %v", closeErr)
+			}
+		}()
+
+		// The mutating tool is published either way: publication is
+		// discovery, policy decides execution.
+		tools, err := session.ListTools(ctx, nil)
+		if err != nil {
+			t.Fatalf("tools/list: %v\nstderr:\n%s", err, stderr.String())
+		}
+		var found bool
+		for _, tool := range tools.Tools {
+			if tool.Name == "create_pet" {
+				found = true
+				if tool.Annotations == nil || tool.Annotations.ReadOnlyHint {
+					t.Error("create_pet must not be advertised as read-only")
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("create_pet missing from tools/list: %+v", tools.Tools)
+		}
+
+		res, err := session.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "create_pet",
+			Arguments: map[string]any{"body": map[string]any{"name": "Murka"}},
+		})
+		if err != nil {
+			t.Fatalf("tools/call create_pet: %v\nstderr:\n%s", err, stderr.String())
+		}
+		return res
+	}
+
+	t.Run("blocked by default", func(t *testing.T) {
+		res := call(t)
+		if !res.IsError {
+			t.Fatalf("a mutation executed under the default policy: %+v", res.StructuredContent)
+		}
+		select {
+		case got := <-requests:
+			t.Fatalf("upstream was called: %+v", got)
+		default:
+		}
+	})
+
+	t.Run("executes when allowed", func(t *testing.T) {
+		res := call(t, "--allow-mutations")
+		if res.IsError {
+			t.Fatalf("an allowed mutation failed: %+v", res.Content)
+		}
+		select {
+		case got := <-requests:
+			if got.method != http.MethodPost || got.contentType != "application/json" || got.body != `{"name":"Murka"}` {
+				t.Errorf("upstream received %+v", got)
+			}
+		default:
+			t.Fatal("upstream received no request")
+		}
+	})
 }

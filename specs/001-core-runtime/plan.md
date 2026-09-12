@@ -44,6 +44,7 @@ internal/buildinfo version/commit/SDK/protocol revisions
 
 Runtime call order (docs/pipeline.md §5–8):
 policy → validate args → serialize → egress check → auth (last before wire) → bounded read → shape → audit.
+No tracer-bullet checkpoint may bypass an earlier security stage: missing stages are represented as execution blockers, not optimistic fallbacks.
 
 ## Milestone Mapping
 
@@ -54,7 +55,7 @@ policy → validate args → serialize → egress check → auth (last before wi
 
 ## Constitution Check
 
-- I/II: rejection verdicts + read-only default land before mutations are possible (T024 before T026). ✔
+- I/II: execution blockers and minimal egress/redirect floor precede every real call; effect policy lands before mutations are possible. ✔
 - IV: sorted traversal everywhere; determinism golden test T021. ✔
 - VI: secretRef type introduced with auth task, canary tests same task. ✔
 - VII: 5 direct deps planned. ✔  VIII/IX: all internal, no speculative interfaces. ✔

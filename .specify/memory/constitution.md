@@ -1,7 +1,7 @@
 # lotsman Constitution
 
 <!-- Governing principles. Every spec, plan, task and PR is checked against this document.
-     Full project specification: docs/spec.md (v1.1.3). Pipeline detail: docs/pipeline.md. -->
+     Full project specification: docs/spec.md (v1.1.4). Pipeline detail: docs/pipeline.md. -->
 
 ## Core Principles
 
@@ -66,7 +66,7 @@ is the test plan, not future work).
 ## Governance
 
 Constitution supersedes other practices. Amendments via PR with rationale; architectural
-decisions recorded as ADRs in docs/adr/. The frozen product spec (docs/spec.md v1.1.3) changes
+decisions recorded as ADRs in docs/adr/. The frozen product spec (docs/spec.md v1.1.4) changes
 only through ADRs produced by milestone spikes. Complexity must be justified against
 Principles VII and IX.
 

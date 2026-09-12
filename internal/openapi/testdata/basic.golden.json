@@ -1,11 +1,18 @@
 {
+  "version": "3.0.3",
   "operations": [
     {
-      "key": ":GET:/orders/{orderId}",
+      "key": "default:GET:/orders/{orderId}",
       "sourceOperationId": "getOrder",
       "method": "GET",
       "pathTemplate": "/orders/{orderId}",
       "summary": "Get an order by ID",
+      "effect": {
+        "effect": "read",
+        "source": "http_method",
+        "confidence": "inferred"
+      },
+      "input": {},
       "support": {
         "level": "rejected",
         "reasons": [
@@ -22,41 +29,164 @@
       ]
     },
     {
-      "key": ":GET:/pets",
+      "key": "default:GET:/pets",
       "sourceOperationId": "listPets",
       "method": "GET",
       "pathTemplate": "/pets",
       "summary": "List pets",
+      "effect": {
+        "effect": "read",
+        "source": "http_method",
+        "confidence": "inferred"
+      },
+      "input": {
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "style": "form",
+            "explode": true,
+            "description": "Maximum number of pets to return.",
+            "schema": {
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "default": "name",
+              "enum": [
+                "name",
+                "-name",
+                "created"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "tags",
+            "in": "query",
+            "required": false,
+            "style": "form",
+            "explode": true,
+            "description": "Filter by tag; repeated, because form/explode defaults to true.",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          }
+        ]
+      },
       "support": {
         "level": "supported"
       }
     },
     {
-      "key": ":POST:/pets",
+      "key": "default:POST:/pets",
       "sourceOperationId": "createPet",
       "method": "POST",
       "pathTemplate": "/pets",
       "summary": "Create a pet",
+      "effect": {
+        "effect": "unknown",
+        "source": "http_method",
+        "confidence": "inferred"
+      },
+      "input": {
+        "body": {
+          "mediaType": "application/json",
+          "required": true,
+          "schema": {
+            "properties": {
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          }
+        }
+      },
       "support": {
         "level": "supported"
       }
     },
     {
-      "key": ":GET:/pets/{petId}",
+      "key": "default:GET:/pets/{petId}",
       "sourceOperationId": "getPet",
       "method": "GET",
       "pathTemplate": "/pets/{petId}",
       "summary": "Get a pet by ID",
+      "effect": {
+        "effect": "read",
+        "source": "http_method",
+        "confidence": "inferred"
+      },
+      "input": {
+        "parameters": [
+          {
+            "name": "petId",
+            "in": "path",
+            "required": true,
+            "style": "simple",
+            "explode": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "verbose",
+            "in": "query",
+            "required": false,
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ]
+      },
       "support": {
         "level": "supported"
       }
     },
     {
-      "key": ":DELETE:/pets/{petId}",
+      "key": "default:DELETE:/pets/{petId}",
       "sourceOperationId": "deletePet",
       "method": "DELETE",
       "pathTemplate": "/pets/{petId}",
       "summary": "Delete a pet by ID",
+      "effect": {
+        "effect": "destructive",
+        "source": "http_method",
+        "confidence": "inferred"
+      },
+      "input": {
+        "parameters": [
+          {
+            "name": "petId",
+            "in": "path",
+            "required": true,
+            "style": "simple",
+            "explode": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
       "support": {
         "level": "supported"
       }

@@ -68,6 +68,21 @@ func TestOperationsRejectedFlag(t *testing.T) {
 	}
 }
 
+func TestOperationsSupportedFlag(t *testing.T) {
+	bin := buildBinary(t)
+	out, err := exec.Command(bin, "operations", miniSpecPath(t), "--supported").Output()
+	if err != nil {
+		t.Fatalf("lotsman operations --supported: %v\n%s", err, out)
+	}
+	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	if len(lines) != 5 { // header + four supported operations
+		t.Fatalf("got %d lines, want 5:\n%s", len(lines), out)
+	}
+	if strings.Contains(string(out), "getOrder") {
+		t.Errorf("supported output contains rejected operation:\n%s", out)
+	}
+}
+
 // TestOperationsMissingSpec guards the exit-code contract (FR-77).
 func TestOperationsMissingSpec(t *testing.T) {
 	bin := buildBinary(t)

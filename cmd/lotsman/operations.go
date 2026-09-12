@@ -10,6 +10,8 @@ import (
 	"text/tabwriter"
 
 	"github.com/razrabotchik/lotsman/internal/domain"
+	"github.com/razrabotchik/lotsman/internal/errs"
+	"github.com/razrabotchik/lotsman/internal/policy"
 )
 
 // operations implements `lotsman operations SPEC [--rejected]` (T008):
@@ -19,12 +21,18 @@ func operations(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	fs := flag.NewFlagSet("operations", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	rejectedOnly := fs.Bool("rejected", false, "show only rejected operations")
+	supportedOnly := fs.Bool("supported", false, "show only supported operations")
+	allowMutations := fs.Bool("allow-mutations", false, "evaluate as if mutations were enabled at serve time")
 	spec, err := parseWithTrailingSpec(fs, args)
 	if err != nil {
 		return exitUsage
 	}
 	if spec == "" {
 		fmt.Fprintf(stderr, "lotsman: operations requires SPEC\n\n%s", usage)
+		return exitUsage
+	}
+	if *rejectedOnly && *supportedOnly {
+		fmt.Fprintln(stderr, "lotsman: operations: --supported and --rejected are mutually exclusive")
 		return exitUsage
 	}
 
@@ -35,18 +43,38 @@ func operations(ctx context.Context, args []string, stdout, stderr io.Writer) in
 
 	doc, err := parseSpec(ctx, spec, logger)
 	if err != nil {
-		fmt.Fprintf(stderr, "lotsman: %v\n", err)
+		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
 		return exitError
 	}
 
+	// EXECUTABLE answers the operator's actual question -- would this run? --
+	// so it accounts for policy as well as capability, under the same default
+	// (read-only) the server uses.
+	policyConfig := policy.Config{AllowMutations: *allowMutations}
+
 	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "METHOD\tPATH\tOPERATION ID\tSUPPORT\tREASONS")
-	for _, op := range doc.Operations {
+	fmt.Fprintln(tw, "METHOD\tPATH\tOPERATION ID\tEFFECT\tSUPPORT\tEXECUTABLE\tREASONS")
+	for i := range doc.Operations {
+		op := &doc.Operations[i]
+		for _, warning := range op.Effect.Warnings {
+			// A suspicious verb is a warning an operator must see, not a
+			// silent demotion (spec 4.7).
+			fmt.Fprintf(stderr, "lotsman: warning: %s\n", warning)
+		}
 		if *rejectedOnly && op.Support.Level != domain.SupportRejected {
 			continue
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
-			op.Method, op.PathTemplate, orDash(op.SourceOperationID), op.Support.Level, joinReasons(op.Support.Reasons))
+		if *supportedOnly && op.Support.Level != domain.SupportSupported {
+			continue
+		}
+		reasons := append(append([]domain.ReasonCode(nil), op.Support.Reasons...), op.ExecutionBlockers...)
+		verdict := policyConfig.Evaluate(op.Effect)
+		if !verdict.Allowed {
+			reasons = append(reasons, verdict.Reason)
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%t\t%s\n",
+			op.Method, op.PathTemplate, orDash(op.SourceOperationID), op.Effect.Effect,
+			op.Support.Level, op.Executable() && verdict.Allowed, joinReasons(reasons))
 	}
 	if err := tw.Flush(); err != nil {
 		fmt.Fprintf(stderr, "lotsman: %v\n", err)
