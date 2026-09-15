@@ -88,6 +88,8 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: govulncheck
+        # Pinned, not @latest: setup-go pins GOTOOLCHAIN to the go.mod floor (1.25),
+        # and govulncheck >= v1.8.0 requires Go 1.26 to build. Bump together with the floor.
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
           govulncheck ./...
