@@ -58,10 +58,11 @@ the change is from "a catalog" to "the catalog as of when this call started" (§
 
 ## Proposed decisions on the spec's open questions
 
-These are proposals. Questions 1 and 4 change the size of the feature and should be confirmed
-before tasks.md exists.
+Question 1 was confirmed by the operator before tasks.md was written; the rest stand as decisions
+unless someone objects to one.
 
 1. **Split inbound auth: `none` and `static-bearer` here, `oauth` as its own feature (005).**
+   *Confirmed.*
    FR-79 already ranks them that way, and the checkpoint convention (X) says a step must be
    shippable. A deployment behind an ingress that terminates OAuth is a real deployment, and
    static-bearer serves it honestly. The cost is that M3's exit criterion — *auth tests green* — is
