@@ -9,14 +9,21 @@ import (
 	"github.com/razrabotchik/lotsman/internal/domain"
 )
 
-// explodedSpec writes a small multi-file specification and returns its root.
+// explodedSpec writes a small multi-file specification into a fresh directory
+// and returns its resolved root.
 func explodedSpec(t *testing.T) (root, spec string) {
 	t.Helper()
 	root = t.TempDir()
 	if resolved, err := filepath.EvalSymlinks(root); err == nil {
 		root = resolved
 	}
+	return root, writeExplodedSpec(t, root)
+}
 
+// writeExplodedSpec writes the referenced files into root and returns the root
+// document, so a test can choose the path by which the root arrives.
+func writeExplodedSpec(t *testing.T, root string) string {
+	t.Helper()
 	if err := os.MkdirAll(filepath.Join(root, "resources"), 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +47,7 @@ properties:
   name: { type: string }
 `)
 
-	spec = `openapi: 3.0.3
+	return `openapi: 3.0.3
 info: { title: Exploded, version: "1.0" }
 paths:
   /pets:
@@ -52,7 +59,6 @@ paths:
             schema: { $ref: './resources/pet.yaml' }
       responses: { "201": { description: created } }
 `
-	return root, spec
 }
 
 // A spec split across files is translated, as long as every file it reaches
@@ -137,6 +143,75 @@ paths:
 			}
 		})
 	}
+}
+
+// The root a caller hands in is not always the path the filesystem reports for
+// the files under it: a macOS temporary directory reaches /private/var through
+// /var, and a Windows one through an 8.3 short name. Confinement resolves
+// symlinks on the candidate, so it has to resolve the root as well. Comparing a
+// resolved candidate against an unresolved root refuses every legitimate $ref --
+// safe, and wrong -- and resolving the root must not buy that back by letting a
+// reference out of it.
+func TestRootReachedThroughASymlink(t *testing.T) {
+	base := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(base); err == nil {
+		base = resolved
+	}
+	inside := filepath.Join(base, "spec")
+	if err := os.MkdirAll(inside, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	spec := writeExplodedSpec(t, inside)
+	root := filepath.Join(base, "link")
+	if err := os.Symlink(inside, root); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	t.Run("its references still resolve", func(t *testing.T) {
+		doc, err := Parse(t.Context(), []byte(spec), Options{RootPath: root})
+		if err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		if doc.HasErrors() {
+			t.Fatalf("a root reached through a symlink refused its own files: %+v", doc.Diagnostics)
+		}
+		properties, _ := doc.Operations[0].Input.Body.Schema["properties"].(map[string]any)
+		if _, ok := properties["owner"]; !ok {
+			t.Errorf("the transitive reference did not resolve: %+v", doc.Operations[0].Input.Body.Schema)
+		}
+	})
+
+	t.Run("an escape from it is still refused", func(t *testing.T) {
+		outside := filepath.Join(base, "outside.yaml")
+		if err := os.WriteFile(outside, []byte("type: object\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		escaping := `openapi: 3.0.3
+info: { title: Symlinked root, version: "1.0" }
+paths:
+  /pets:
+    post:
+      operationId: createPet
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '../outside.yaml' }
+      responses: { "201": { description: created } }
+`
+		doc, err := Parse(t.Context(), []byte(escaping), Options{RootPath: root})
+		if err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		var found bool
+		for _, d := range doc.Diagnostics {
+			if d.Code == domain.ReasonRefOutsideRoot {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("resolving the root let a reference out of it: %+v", doc.Diagnostics)
+		}
+	})
 }
 
 // A symlink is the oldest way out of a directory check, so the check resolves
