@@ -112,6 +112,7 @@ func applyAPIKey(req *http.Request, credential *Credential, key string) error {
 		query.Set(name, key)
 		req.URL.RawQuery = query.Encode()
 	case config.InCookie:
+		//nolint:gosec // G124: Secure, HttpOnly and SameSite are Set-Cookie attributes a server sends to a browser; this is a request cookie carrying an API key upstream.
 		req.AddCookie(&http.Cookie{Name: name, Value: key})
 	default:
 		return errs.Errorf(errs.ClassAuth, "auth: profile %q does not say where the API key goes", credential.Name)

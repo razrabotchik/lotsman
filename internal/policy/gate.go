@@ -9,6 +9,8 @@ import (
 )
 
 // anyMatch reports whether any rule in the list names this operation.
+//
+//nolint:gocritic // hugeParam: Subject is one call's immutable description; a pointer would let a rule edit the thing it was asked to judge.
 func anyMatch(rules []Rule, subject Subject) bool {
 	for _, rule := range rules {
 		if rule.matches(subject) {
@@ -43,6 +45,8 @@ type Rule struct {
 }
 
 // matches reports whether the rule names this operation.
+//
+//nolint:gocritic // hugeParam: Subject is one call's immutable description; a pointer would let a rule edit the thing it was asked to judge.
 func (r Rule) matches(subject Subject) bool {
 	if r.Namespace != "" && r.Namespace != subject.Key.Namespace() {
 		return false
@@ -108,6 +112,8 @@ type Verdict struct {
 // `unknown` is not a third state that gets the benefit of the doubt -- it is refused with its own reason code, because
 // "we could not tell" and "we know it writes" are different things to an
 // operator reading a report, even though both are blocked.
+//
+//nolint:gocritic // hugeParam: Subject is one call's immutable description; a pointer would let a rule edit the thing it was asked to judge.
 func (c Config) Evaluate(subject Subject) Verdict {
 	// A deny rule is the operator saying "not this one", and it applies
 	// whatever the effect: refusing a read on request can never be the unsafe

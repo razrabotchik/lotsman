@@ -217,6 +217,8 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 
 // loadCatalog runs pipeline stages 0-4 (specsource, openapi, catalog) for
 // `serve SPEC`.
+//
+//nolint:gocritic // hugeParam: Runtime is resolved configuration, copied per call so no callee holds a pointer to the decision its caller already made.
 func loadCatalog(ctx context.Context, spec string, logger *slog.Logger, lax bool, runtime config.Runtime, mode catalog.Mode) (*catalog.Catalog, error) {
 	doc, err := parseSpec(ctx, spec, logger)
 	if err != nil {
@@ -320,6 +322,8 @@ func resolveConfig(path string, fs *flag.FlagSet, allowMutations, readOnly bool,
 // matches nothing is not a smaller catalog, it is a control the operator
 // believes is in force. `lotsman validate` and `serve` should fail on the
 // same typo.
+//
+//nolint:gocritic // hugeParam: Runtime is resolved configuration, copied per call so no callee holds a pointer to the decision its caller already made.
 func catalogOptions(runtime config.Runtime, mode catalog.Mode, operations []domain.Operation) (catalog.Options, error) {
 	if err := catalog.ValidateOverrides(operations, runtime.Overrides); err != nil {
 		return catalog.Options{}, err
@@ -334,6 +338,8 @@ func catalogOptions(runtime config.Runtime, mode catalog.Mode, operations []doma
 }
 
 // policyConfig is the execution policy the runtime configuration describes.
+//
+//nolint:gocritic // hugeParam: Runtime is resolved configuration, copied per call so no callee holds a pointer to the decision its caller already made.
 func policyConfig(runtime config.Runtime) policy.Config {
 	return policy.Config{
 		AllowMutations: runtime.AllowMutations,

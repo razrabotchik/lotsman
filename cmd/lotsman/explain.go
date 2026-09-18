@@ -120,6 +120,8 @@ func readArguments(path string) (requestbuild.Arguments, error) {
 
 // explain prints the decision trail. Every line is a fact lotsman would act
 // on, in the order it would act on it.
+//
+//nolint:gocritic // hugeParam: Runtime is resolved configuration, copied per call so no callee holds a pointer to the decision its caller already made.
 func explain(w io.Writer, tool *catalog.Tool, arguments requestbuild.Arguments, runtime config.Runtime) {
 	fmt.Fprintf(w, "operation   %s\n", tool.OperationKey)
 	fmt.Fprintf(w, "tool        %s\n", tool.Name)
@@ -139,6 +141,7 @@ func explain(w io.Writer, tool *catalog.Tool, arguments requestbuild.Arguments, 
 	fmt.Fprintln(w, "NO network request was made.")
 }
 
+//nolint:gocritic // hugeParam: Runtime is resolved configuration, copied per call so no callee holds a pointer to the decision its caller already made.
 func policyLine(tool *catalog.Tool, runtime config.Runtime) string {
 	if len(tool.PolicyBlockers) > 0 {
 		return fmt.Sprintf("DENY (%s: %s)", joinReasons(tool.PolicyBlockers), tool.PolicyMessage)
@@ -156,6 +159,8 @@ func policyLine(tool *catalog.Tool, runtime config.Runtime) string {
 // approvalLine states whether a human will be asked before this call, which
 // is a fact an operator needs before the call rather than after it: a client
 // that cannot be asked turns a permitted mutation into a refusal (FR-45).
+//
+//nolint:gocritic // hugeParam: Runtime is resolved configuration, copied per call so no callee holds a pointer to the decision its caller already made.
 func approvalLine(tool *catalog.Tool, runtime config.Runtime) string {
 	if tool.Effect.IsRead() {
 		return "not required (read)"
@@ -175,6 +180,8 @@ func approvalLine(tool *catalog.Tool, runtime config.Runtime) string {
 // requestLine builds the request exactly as the runtime would, which is the
 // only way the answer can be trusted: a re-implementation would be a
 // description of a different call.
+//
+//nolint:gocritic // hugeParam: Runtime is resolved configuration, copied per call so no callee holds a pointer to the decision its caller already made.
 func requestLine(tool *catalog.Tool, arguments requestbuild.Arguments, runtime config.Runtime) string {
 	op := requestbuild.Operation{
 		Method:       tool.Method,

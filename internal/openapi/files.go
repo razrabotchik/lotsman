@@ -46,6 +46,16 @@ func resolveClosure(rootBytes []byte, rootPath string, refs []refSite, limits Li
 		return result, nil // stdin: no directory to resolve anything against
 	}
 
+	// confine resolves symlinks on the candidate, so the root has to be
+	// resolved too: a macOS temporary directory reaches /private/var through
+	// /var, and a Windows one through an 8.3 short name. Comparing a resolved
+	// path against an unresolved root refuses every legitimate $ref — safe,
+	// and wrong. Callers going through specsource arrive resolved already;
+	// this makes the comparison hold for the ones that do not.
+	if resolved, err := filepath.EvalSymlinks(rootPath); err == nil {
+		rootPath = resolved
+	}
+
 	type pending struct {
 		abs  string
 		refs []refSite
