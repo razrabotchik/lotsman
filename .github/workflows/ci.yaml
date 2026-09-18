@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GOLANGCI_LINT_VERSION: v2.13.2 # keep in sync with the version contributors run locally
+  GOLANGCI_LINT_VERSION: v2.13.2 # keep in sync with GOLANGCI_VERSION in the Makefile, which `make tools` installs
   # CI does not read its Go from go.mod. That floor is the oldest release this
   # code claims to compile with; building on it means shipping and scanning a
   # standard library whose line has stopped taking security fixes. CI follows

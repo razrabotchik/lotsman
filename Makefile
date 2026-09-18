@@ -13,7 +13,12 @@ LDFLAGS         := -s -w \
                    -X '$(BUILDINFO).version=$(VERSION)' \
                    -X '$(BUILDINFO).commit=$(COMMIT)' \
                    -X '$(BUILDINFO).date=$(DATE)'
-GOLANGCI        ?= golangci-lint
+# The pinned linter, installed by `make tools` into bin/ and preferred when it
+# is there: `make check` is the gate CI runs, and a gate that means a different
+# thing on a contributor's machine than in CI is not a gate.
+# Keep in sync with GOLANGCI_LINT_VERSION in .github/workflows/ci.yaml.
+GOLANGCI_VERSION ?= v2.13.2
+GOLANGCI        ?= $(if $(wildcard bin/golangci-lint),bin/golangci-lint,golangci-lint)
 FUZZTIME        ?= 30s
 # SPEC/ARGS feed `make run`: make run SPEC=testdata/mini/basic.yaml
 SPEC            ?=
@@ -68,8 +73,12 @@ bench: ## Run benchmarks (needs `make corpus` for the vendor documents)
 corpus: ## Fetch the vendor corpus into testdata/corpus (verifies pinned digests)
 	@python3 scripts/fetch_corpus.py
 
+.PHONY: tools
+tools: ## Install the pinned golangci-lint into bin/
+	GOBIN=$(CURDIR)/bin $(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
+
 .PHONY: lint
-lint: ## Run golangci-lint
+lint: ## Run golangci-lint (`make tools` installs the pinned version)
 	$(GOLANGCI) run
 
 .PHONY: fmt
