@@ -123,6 +123,8 @@ type Options struct {
 }
 
 // mode is the requested mode, defaulting to auto.
+//
+//nolint:gocritic // hugeParam: Options is configuration read once per build; a pointer would let a callee change what the report describes.
 func (o Options) mode() Mode {
 	if o.Mode == "" {
 		return ModeAuto
@@ -130,6 +132,7 @@ func (o Options) mode() Mode {
 	return o.Mode
 }
 
+//nolint:gocritic // hugeParam: Options is configuration read once per build; a pointer would let a callee change what the report describes.
 func (o Options) maxSerializedBytes() int {
 	if o.MaxSerializedBytes <= 0 {
 		return DefaultMaxSerializedBytes
@@ -146,6 +149,8 @@ func (o Options) maxSerializedBytes() int {
 // job: catalog.Build publishes every supported operation regardless of
 // method, and callers (mcpserver) decide which of those they are prepared
 // to serve.
+//
+//nolint:gocritic // hugeParam: Options is configuration read once per build; a pointer would let a callee change what the report describes.
 func Build(specDigest string, operations []domain.Operation, opts Options) Catalog {
 	// The overlay runs first and on a copy: everything downstream -- tools,
 	// policy verdicts and the report alike -- must see one set of operations,

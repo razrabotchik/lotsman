@@ -100,8 +100,8 @@ type OperationVerdict struct {
 	// Excluded means the operator removed it from the surface. It is not a
 	// refusal: the operation is supported, and publishing it again is one
 	// configuration line away.
-	Excluded   bool                  `json:"excluded,omitempty"`
-	Executable bool                  `json:"executable"`
+	Excluded          bool                  `json:"excluded,omitempty"`
+	Executable        bool                  `json:"executable"`
 	Effect            domain.EffectDecision `json:"effect"`
 	ExecutionBlockers []domain.ReasonCode   `json:"executionBlockers,omitempty"`
 	PolicyBlockers    []domain.ReasonCode   `json:"policyBlockers,omitempty"`
@@ -121,6 +121,8 @@ type Reason struct {
 // buildReport assembles the report from every enumerated operation -- not
 // only the published ones, since the operations a reader most needs to see
 // are the ones that did not make it.
+//
+//nolint:gocritic // hugeParam: Options is configuration read once per build; a pointer would let a callee change what the report describes.
 func buildReport(operations []domain.Operation, tools []Tool, excluded map[domain.OperationKey]domain.ReasonCode, digest string, opts Options) Report {
 	report := Report{
 		SchemaVersion: ReportSchemaVersion,
@@ -228,6 +230,8 @@ func reasonsFor(op *domain.Operation) []Reason {
 }
 
 // estimate measures the published catalog and states which mode it needs.
+//
+//nolint:gocritic // hugeParam: Options is configuration read once per build; a pointer would let a callee change what the report describes.
 func estimate(tools []Tool, digest string, opts Options) Estimate {
 	bytes := serializedBytes(tools)
 	threshold := opts.maxSerializedBytes()

@@ -205,7 +205,7 @@ func percentEncode(s string, allowReserved bool) string {
 		case allowReserved && strings.IndexByte(reservedKept, c) >= 0:
 			out.WriteByte(c)
 		default:
-			out.WriteString(fmt.Sprintf("%%%02X", c))
+			fmt.Fprintf(&out, "%%%02X", c)
 		}
 	}
 	return out.String()

@@ -44,6 +44,8 @@ type Overlaid struct {
 // Overlay applies the operator's overrides and selection. Build calls it, and
 // so can a command that reports on a document without publishing one: the two
 // must not disagree about what the configuration means.
+//
+//nolint:gocritic // hugeParam: Options is configuration read once per build; a pointer would let a callee change what the report describes.
 func Overlay(operations []domain.Operation, opts Options) Overlaid {
 	effective, decisions := applyOverrides(operations, opts.Overrides)
 	filter := newSelection(opts.IncludeTags)
@@ -122,19 +124,22 @@ func ValidateOverrides(operations []domain.Operation, overrides []config.Operati
 //
 // Unmatched or ambiguous overrides are ignored here; ValidateOverrides is
 // where they are refused, before anything is served.
-func applyOverrides(operations []domain.Operation, overrides []config.OperationOverride) ([]domain.Operation, map[domain.OperationKey]overlayDecision) {
+func applyOverrides(operations []domain.Operation, overrides []config.OperationOverride) (
+	overlaid []domain.Operation,
+	decisions map[domain.OperationKey]overlayDecision,
+) {
 	if len(overrides) == 0 {
 		return operations, nil
 	}
 
-	out := make([]domain.Operation, len(operations))
-	copy(out, operations)
-	decisions := make(map[domain.OperationKey]overlayDecision, len(overrides))
+	overlaid = make([]domain.Operation, len(operations))
+	copy(overlaid, operations)
+	decisions = make(map[domain.OperationKey]overlayDecision, len(overrides))
 
 	for i := range overrides {
 		override := &overrides[i]
-		for j := range out {
-			op := &out[j]
+		for j := range overlaid {
+			op := &overlaid[j]
 			if !matches(override.Match, op) {
 				continue
 			}
@@ -161,7 +166,7 @@ func applyOverrides(operations []domain.Operation, overrides []config.OperationO
 			decisions[op.Key] = decision
 		}
 	}
-	return out, decisions
+	return overlaid, decisions
 }
 
 // matches reports whether one match specification names this operation.

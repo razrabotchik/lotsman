@@ -259,6 +259,7 @@ func large(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
+	//nolint:gosec // G705: nothing from the request is echoed. size is a bounded integer and the body is a run of "x" served as text/plain.
 	_, _ = w.Write([]byte(strings.Repeat("x", size)))
 }
 

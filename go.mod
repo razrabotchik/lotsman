@@ -1,6 +1,10 @@
 module github.com/razrabotchik/lotsman
 
-// Go floor 1.25: required by modelcontextprotocol/go-sdk (Constitution, Constraints).
+// Go floor 1.25: the highest floor among dependencies (libopenapi v0.38.7 asks
+// for 1.25.7; the MCP go-sdk asks for 1.25.0) — Constitution, Constraints.
+// This is a compatibility claim, not the toolchain CI builds with: that one
+// is pinned in the workflows, because an end-of-life line stops taking
+// security fixes while this number keeps looking fine.
 go 1.25.7
 
 require (
