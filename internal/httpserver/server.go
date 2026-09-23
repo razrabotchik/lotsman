@@ -127,13 +127,14 @@ func newHandler(opts *Options) (http.Handler, error) {
 			// DisableLocalhostProtection is deliberately left false.
 			PropagateRequestCancellation: true,
 		})
-	if opts.Metrics == nil {
-		return guard(mcpHandler, opts)
+	protected := http.Handler(mcpHandler)
+	if opts.Metrics != nil {
+		mux := http.NewServeMux()
+		mux.Handle(metricsPath, opts.Metrics)
+		mux.Handle("/", mcpHandler)
+		protected = mux
 	}
-	mux := http.NewServeMux()
-	mux.Handle(metricsPath, opts.Metrics)
-	mux.Handle("/", mcpHandler)
-	return guard(mux, opts)
+	return guard(protected, opts)
 }
 
 // metricsPath is where an operator's scraper looks (§7.4).
@@ -149,6 +150,18 @@ func guard(next http.Handler, opts *Options) (http.Handler, error) {
 	// that a request which fails one of them never reaches the code that
 	// knows what the credential is.
 	handler := opts.Guard.Middleware(next)
+
+	// The metadata document is the single exception, and it is mounted here
+	// rather than further out on purpose: it skips authentication, which is
+	// the point, and nothing else. The Host and Origin checks below still
+	// apply to it.
+	if opts.Guard.Metadata != nil {
+		mux := http.NewServeMux()
+		mux.Handle(inbound.MetadataPath, opts.Guard.Metadata)
+		mux.Handle(inbound.MetadataPath+"/", opts.Guard.Metadata)
+		mux.Handle("/", handler)
+		handler = mux
+	}
 
 	protection := http.NewCrossOriginProtection()
 	for _, origin := range opts.AllowedOrigins {

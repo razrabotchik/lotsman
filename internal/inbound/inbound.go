@@ -23,6 +23,11 @@ import (
 type Guard struct {
 	// Required reports whether a caller must prove anything.
 	Required bool
+	// Metadata, when set, is the Protected Resource Metadata document and
+	// must be served *outside* the guard: a client reads it in order to find
+	// out how to authenticate, so requiring authentication to read it would
+	// be a loop with no way in.
+	Metadata http.Handler
 	// middleware wraps a handler when Required; nil otherwise.
 	middleware func(http.Handler) http.Handler
 }
