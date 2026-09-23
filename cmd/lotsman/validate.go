@@ -49,7 +49,7 @@ func validate(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	// publish.
 	overlay := catalog.Overlaid{Operations: doc.Operations}
 	if *configPath != "" {
-		runtime, err := resolveConfig(*configPath, fs, false, false, "", "")
+		runtime, err := resolveConfig(*configPath, fs, &flagValues{})
 		if err == nil {
 			var opts catalog.Options
 			opts, err = catalogOptions(runtime, catalog.ModeTools, doc.Operations)

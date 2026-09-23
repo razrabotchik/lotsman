@@ -88,7 +88,7 @@ func inspect(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return exitCode(err)
 	}
 
-	runtime, err := resolveConfig(*configPath, fs, *allowMutations, false, "", "")
+	runtime, err := resolveConfig(*configPath, fs, &flagValues{allowMutations: *allowMutations})
 	if err != nil {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
 		return exitUsage
