@@ -93,6 +93,27 @@ tidy: ## Tidy go.mod/go.sum
 .PHONY: check
 check: lint test ## Lint + test (what CI gates on)
 
+IMAGE ?= lotsman:dev
+
+.PHONY: image
+image: ## Build the container image
+	docker build \
+	  --build-arg VERSION=$(VERSION) \
+	  --build-arg COMMIT=$(COMMIT) \
+	  --build-arg DATE=$(DATE) \
+	  -t $(IMAGE) .
+
+.PHONY: image-check
+image-check: ## Prove the image runs nonroot on a read-only filesystem (criterion 11)
+	@test "$$(docker inspect -f '{{.Config.User}}' $(IMAGE))" = "nonroot:nonroot" \
+	  || { echo "image does not declare a nonroot user"; exit 1; }
+	@docker run --rm --read-only --network none $(IMAGE) version --json \
+	  | grep -q '"version"' || { echo "the image did not report its build"; exit 1; }
+	@docker run --rm --read-only --network none -v "$(CURDIR)/testdata/mini:/spec:ro" \
+	  $(IMAGE) inspect /spec/basic.yaml >/dev/null \
+	  || { echo "the image could not inspect a mounted document"; exit 1; }
+	@echo "image ok: nonroot, read-only root filesystem, no network needed to inspect"
+
 .PHONY: clean
 clean: ## Remove build and coverage artifacts
 	rm -rf bin coverage.out

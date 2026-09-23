@@ -106,3 +106,16 @@ jobs:
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
+
+  image:
+    # The image is built and exercised on every change, not only at a tag.
+    # Acceptance criterion 11 is about what an operator runs, and an image
+    # that is only assembled during a release is one whose first run is the
+    # release.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build
+        run: make image VERSION=ci COMMIT=${{ github.sha }}
+      - name: The image is nonroot, read-only and reports its build
+        run: make image-check

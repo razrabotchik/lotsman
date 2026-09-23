@@ -186,14 +186,49 @@ the criterion down to what shipped.
 
 ## Step 5: Image and conformance  ✅ CHECKPOINT: criteria 10 and 11, and with them all eleven
 
-- [ ] T318 distroless nonroot image on a read-only root filesystem, built in CI, reporting its
+- [x] T318 distroless nonroot image on a read-only root filesystem, built in CI, reporting its
       injected version
-- [ ] T319 release wiring: the image joins the checksums and SBOM `.goreleaser.yaml` already
+      → No shell, no package manager, no libc. Not minimalism for its own sake: this process holds
+        credentials and talks to an API on an agent's behalf, so the cost of anything else being
+        in the image is that it is available to whoever gets in.
+      → The builder tracks the workflows' Go, not the go.mod floor — same reason as CI.
+      → 27.4 MB, verified running `--read-only --network none` and inspecting a mounted document.
+      → The loopback default means nothing outside a container can connect, so a containerised
+        endpoint is a deliberate `0.0.0.0` bind and therefore needs inbound auth. The container
+        boundary is not a boundary lotsman can see; the Dockerfile says so where an operator will
+        read it.
+- [x] T319 release wiring: the image joins the checksums and SBOM `.goreleaser.yaml` already
       produces
-- [ ] T320 the SDK's `conformance/` suite against the real binary, over both transports
-      → Run this early rather than at the end: it tests the protocol, not lotsman's policy, and a
-        refusal this codebase considers correct could still be a conformance failure. Discovering
-        that in the last task of the last step is the expensive way (plan risk 4).
-- [ ] T321 [P] docs: ADR for the transport and its bind rules, ADR for the reload model, README,
-      and criteria 9/10/11 updated in docs/release-v0.1.0-alpha.md with the evidence that makes
-      each one checkable
+      → Changed on contact, and the change is the honest half of this task. The image is built and
+        exercised by CI on *every* change (`make image`, `make image-check`), because an image
+        only assembled during a release is one whose first run is the release. Nothing is pushed
+        to a registry: publishing needs a registry, a signing story and a retention policy, and
+        none of those is a decision to take quietly inside a checkpoint. Criterion 11 stays
+        *partial* and says which half is missing.
+- [x] T320 a JSON-level conformance suite against the real binary, over both transports
+      → The task named the wrong thing. The SDK's `conformance/` directory is fixtures for the
+        cross-SDK runner in the modelcontextprotocol project, plus reference implementations; its
+        own conformance test is internal to the SDK package and cannot be pointed at another
+        server. So this is a suite of ours that speaks JSON-RPC to the binary — which is the
+        point either way: every other e2e test here shows the Go client and the Go server
+        agreeing, and two halves of one SDK agreeing is not evidence about the wire. The external
+        runner has still not been run and criterion 10 says so.
+      → It found things on the first run, which is what risk 4 was about. **The sessionless
+        `2026-07-28` profile is real**: `server/discover` reports it among its supported versions
+        and `tools/list` succeeds with no handshake at all. Nothing had ever checked that —
+        "stateless" was an option we set, not a behaviour anyone observed.
+      → **A legacy `initialize` negotiates `2025-11-25`**, by design: `initialize` is the
+        handshake the new revision removed, so a client using it is not speaking it.
+        `buildinfo.MCPProtocolVersion` is what this build targets and serves, not what every
+        client ends up on — now written down rather than implied.
+      → **An unknown method over stateless HTTP is a 400 with a plain-text body**, where JSON-RPC
+        asks for `-32601`. That is the SDK's transport layer. The test asserts only that the
+        refusal is safe and the server stays up, so it will not have to be rewritten as a failure
+        the day the SDK conforms; the deviation is recorded in the release review.
+- [x] T321 [P] docs: ADR-0014 (transport, guards, inbound auth), ADR-0015 (reload), README, and
+      criteria 9/10/11 in docs/release-v0.1.0-alpha.md with the evidence that makes each checkable
+      → Criterion 9 is **met**. 10 and 11 stay **partial**, and each says which half is missing
+        rather than being read down to what shipped.
+      → Six known limits added to the release review, including the three this feature created:
+        reload is an HTTP property, the watcher compares size and mtime, and `/metrics` has no
+        authentication of its own beyond the endpoint's.

@@ -163,6 +163,45 @@ An override that matches no operation is a startup error, not a smaller catalog:
 believe is in force has to be in force. An override cannot publish something lotsman refused to
 translate — it classifies, hides or binds, and support is not a matter of opinion.
 
+### Serving it over HTTP
+
+`serve --transport=http` publishes the stateless Streamable HTTP profile of MCP `2026-07-28`. No
+protocol sessions, so no sticky routing: two replicas behind a round robin are indistinguishable
+from one.
+
+```yaml
+server:
+  transport: http
+  listen: 0.0.0.0:8080            # a decision; the default is 127.0.0.1:8080
+  allowedOrigins: [https://console.example.com]
+  drainTimeout: 30s
+  inboundAuth:
+    mode: static-bearer           # none | static-bearer (oauth is feature 005)
+    tokenRef: env:LOTSMAN_INBOUND_TOKEN
+    trustedProxies: ["10.0.0.0/8"]
+```
+
+**A public bind with nothing authenticating it does not start.** Not a warning, not a 403 on the
+first call — exit 2, before the socket opens. A deployment that comes up and then denies
+everything looks like an outage; one that will not come up looks like what it is. If you mean it,
+`--allow-unauthenticated-public-bind` says so out loud and warns on every start.
+
+An inbound token is permission to talk to lotsman and nothing else. It is never forwarded upstream
+and never widens what you configured.
+
+The catalog can be replaced under a running server — `SIGHUP`, or `--watch` to poll the document.
+A candidate that fails to parse leaves the working catalog serving and says why. `/metrics`
+answers in the Prometheus text format, behind the same inbound authorization as everything else,
+because the list of operations your agent calls is not public information.
+
+In a container, remember the loopback default means nothing outside can connect: reaching the
+endpoint is a deliberate `listen: 0.0.0.0:8080`, which then needs `inboundAuth`. The container
+boundary is not a boundary lotsman can see.
+
+```bash
+make image && make image-check    # distroless, nonroot, read-only root filesystem
+```
+
 ## What it supports today
 
 Honest matrix. "Refused" means the operation is reported with a machine-readable reason and never
@@ -205,6 +244,8 @@ These are not gaps. They are the product.
 lotsman serve SPEC [--config FILE] [--base-url URL] [--lax] [--mode tools|search|auto]
                    [--read-only | --allow-mutations] [--allow-private-network]
                    [--approval always|client-capability|never]
+                   [--transport stdio|http] [--listen HOST:PORT] [--watch]
+                   [--drain-timeout D] [--allow-unauthenticated-public-bind]
 lotsman inspect SPEC [--json] [--fail-on-rejected] [--config FILE] [--mode MODE]
 lotsman validate SPEC [--quiet]
 lotsman operations SPEC [--supported | --rejected] [--config FILE]
@@ -218,8 +259,14 @@ resolved.
 
 ## What is not here yet
 
-Streamable HTTP transport, OAuth2, recipes, hot reload, cookie parameters, form-urlencoded
-bodies, Swagger 2.0.
+OAuth2 — inbound (feature 005) and upstream (M4) — recipes, multi-API namespaces, cookie
+parameters, form-urlencoded bodies, Swagger 2.0. No container image is published to a registry:
+one is built and tested, but publishing needs a registry, a signing story and a retention policy.
+
+`tools/list_changed` is not sent. Reload swaps the server a transport resolves per request, which
+a stdio session never does — so the transport that reloads has nowhere to push a notification and
+the one that could has nothing to announce ([ADR-0015](docs/adr/0015-catalog-reload.md)).
+`tools/list` carries a TTL hint and the catalog digest instead.
 
 Search mode ranks lexically (BM25 over names, paths, tags and summaries). Its recall is measured
 rather than claimed: **Kubernetes Recall@5 1.00 / MRR 0.53, DigitalOcean 0.75 / 0.65**
