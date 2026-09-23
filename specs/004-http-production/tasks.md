@@ -10,33 +10,52 @@ the criterion down to what shipped.
 
 ## Step 1: Transport and its guards  ✅ CHECKPOINT: an MCP client reaches lotsman over HTTP, and a stranger does not
 
-- [ ] T301 httpserver: `serve --transport=stdio|http` (default stdio) and `--listen`
+- [x] T301 httpserver: `serve --transport=stdio|http` (default stdio) and `--listen`
       (default `127.0.0.1:8080`), serving `mcp.NewStreamableHTTPHandler` with
       `StreamableHTTPOptions{Stateless: true}` — the sessionless `2026-07-28` profile of FR-69
       → The same `mcpserver.Server` instance backs both transports. A behaviour that differs by
         transport is a bug, so there must be nowhere for one to be written.
       → `--transport=http` without a spec is a usage error, not an empty catalog on a socket
         (plan decision 6).
-- [ ] T302 bind guard (FR-70): a non-loopback `--listen` with `inboundAuth.mode: none` refuses at
+      → The `server:` section of docs/spec.md §5.1 is read for the first time, `logLevel`
+        included — which meant resolving configuration *before* building the logger, since the
+        file is now one of the places the level can be stated. A documented example that does not
+        parse is a document that lies, and strict decoding leaves no third option.
+- [x] T302 bind guard (FR-70): a non-loopback `--listen` with `inboundAuth.mode: none` refuses at
       startup with exit 2, before the socket is opened
       → The opt-in that FR-70 permits is a flag whose name states what it does
         (`--allow-unauthenticated-public-bind`), and it logs a warning on every start, not once.
       → Refusing at startup rather than per request: a deployment that comes up and then denies
         everything looks like an outage; one that will not come up looks like a mistake.
-- [ ] T303 header guards (FR-71): `Origin` and `Host` are checked before any handler runs, against
+      → A hostname that is not literally `localhost` counts as public even if it resolves to
+        127.0.0.1 today. Reading DNS at startup would make the safety of a configuration depend
+        on an answer that can change afterwards without the process noticing.
+- [x] T303 header guards (FR-71): `Origin` and `Host` are checked before any handler runs, against
       a configured allowlist that defaults to the bind address
       → This is the DNS-rebinding defence on the *inbound* side, and it must not borrow
         `internal/egress`: the two guards protect opposite directions and sharing code would let
         a change to one silently move the other.
-- [ ] T304 graceful shutdown (FR-75): stop accepting, drain in-flight calls within a timeout,
+      → Two of the three guards are somebody else's implementation: the SDK already rejects a
+        request that arrived over loopback carrying a non-loopback Host, and `net/http`'s
+        `CrossOriginProtection` already implements cross-origin rejection. A second opinion about
+        either would be a second thing to keep correct, and the one that drifted would be the one
+        nobody noticed.
+      → An allowed origin the operator wrote down wrong is a startup error, not an origin quietly
+        dropped from a list they believe is in force.
+- [x] T304 graceful shutdown (FR-75): stop accepting, drain in-flight calls within a timeout,
       cancel what remains, close cleanly
       → A drain that outlives its budget is a hung deployment; a drain of zero is a dropped
-        mutation. Both are configurable and both are logged with the count.
-- [ ] T305 [P] the stdio end-to-end suite runs over both transports from one table, unchanged
+        mutation. The budget is detached from the cancelled context it was granted under — a
+        drain whose deadline has already passed is not a drain.
+- [x] T305 [P] the stdio end-to-end suite runs over both transports from one table, unchanged
       → Including the zero-RoundTrip refusals and the approval round trip. 003's approval keeps no
         state between round trips (`internal/mcpserver/approval.go` never reads the SDK's
-        client-supplied `RequestState`), which is what makes it correct here; a test must fail if
-        that ever changes.
+        client-supplied `RequestState`), which is what makes it correct here; the test asserts the
+        prompt actually ran, because one that only checked the POST arrived would pass just as
+        happily if approval had quietly stopped running over this transport.
+      → US-5 came for free and is asserted now rather than at the end of step 3: two processes
+        behind an alternating proxy answer one session's worth of traffic
+        (`TestHTTPIsStatelessAcrossReplicas`). §7.7's deployment is a test rather than a diagram.
 
 ## Step 2: Inbound authorization  ✅ CHECKPOINT: a deployed endpoint refuses an unauthenticated caller
 

@@ -54,7 +54,7 @@ func operations(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	// EXECUTABLE answers the operator's actual question -- would this run? --
 	// so it accounts for policy as well as capability, under the same default
 	// (read-only) the server uses.
-	runtime, err := resolveConfig(*configPath, fs, *allowMutations, false, "", "")
+	runtime, err := resolveConfig(*configPath, fs, &flagValues{allowMutations: *allowMutations})
 	if err != nil {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
 		return exitUsage

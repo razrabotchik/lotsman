@@ -53,7 +53,7 @@ func explainCall(ctx context.Context, args []string, stdout, stderr io.Writer) i
 		return exitCode(err)
 	}
 
-	runtime, err := resolveConfig(*configPath, fs, *allowMutations, false, *baseURL, "")
+	runtime, err := resolveConfig(*configPath, fs, &flagValues{allowMutations: *allowMutations, baseURL: *baseURL})
 	if err != nil {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
 		return exitCode(err)

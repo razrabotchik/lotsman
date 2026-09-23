@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/razrabotchik/lotsman/internal/auth"
 	"github.com/razrabotchik/lotsman/internal/buildinfo"
@@ -22,6 +23,7 @@ import (
 	"github.com/razrabotchik/lotsman/internal/domain"
 	"github.com/razrabotchik/lotsman/internal/egress"
 	"github.com/razrabotchik/lotsman/internal/errs"
+	"github.com/razrabotchik/lotsman/internal/httpserver"
 	"github.com/razrabotchik/lotsman/internal/mcpserver"
 	"github.com/razrabotchik/lotsman/internal/openapi"
 	"github.com/razrabotchik/lotsman/internal/policy"
@@ -70,7 +72,7 @@ func exitCode(err error) int {
 const usage = `lotsman — security-first OpenAPI → MCP runtime. Lotsman doesn't guess.
 
 Usage:
-  lotsman serve SPEC       Serve an OpenAPI document as MCP tools over stdio
+  lotsman serve SPEC       Serve an OpenAPI document as MCP tools (stdio, or --transport=http)
   lotsman inspect SPEC     What lotsman makes of a document, and why (--json for CI)
   lotsman validate SPEC    Is this document usable? The exit code is the answer
   lotsman operations SPEC  One line per operation: effect, support, executable
@@ -99,6 +101,9 @@ Flags:
   --read-only              state the default explicitly: only read operations execute
   --allow-mutations        serve, inspect, operations: permit non-read effects
   --allow-private-network  serve: allow an origin that resolves into a private range
+  --transport stdio|http   serve: stdio (default) or the stateless Streamable HTTP profile
+  --listen HOST:PORT       serve --transport=http: bind address (default 127.0.0.1:8080)
+  --drain-timeout D        serve --transport=http: how long shutdown waits for calls in flight
   --json                   inspect, version: machine-readable output
   --fail-on-rejected       inspect: exit 4 when any operation is rejected
   --supported|--rejected   operations: filter by translation support
@@ -150,7 +155,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 func serve(ctx context.Context, args []string, stderr io.Writer) int {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	level := fs.String("log-level", envOr("LOTSMAN_LOG_LEVEL", "info"), "debug|info|warn|error")
+	level := fs.String("log-level", "", "debug|info|warn|error (default info, env LOTSMAN_LOG_LEVEL)")
 	baseURL := fs.String("base-url", "", "override every tool's server (FR-30)")
 	lax := fs.Bool("lax", false, "serve the supported subset when individual operations are rejected")
 	allowMutations := fs.Bool("allow-mutations", false, "allow non-read operations to execute (FR-41)")
@@ -161,6 +166,13 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 	mode := fs.String("mode", string(catalog.ModeAuto), "catalog mode: tools|search|auto")
 	approval := fs.String("approval", "",
 		"ask before a mutating call: always|client-capability|never (default always, FR-44)")
+	transport := fs.String("transport", "",
+		"stdio|http (default stdio; http serves the stateless Streamable HTTP profile, FR-69)")
+	listen := fs.String("listen", "", "bind address for --transport=http (default "+config.DefaultListen+", FR-70)")
+	drainTimeout := fs.String("drain-timeout", "",
+		"how long shutdown waits for calls in flight (default 10s, FR-75)")
+	publicBind := fs.Bool("allow-unauthenticated-public-bind", false,
+		"permit a non-loopback bind with nothing authenticating the endpoint (FR-70)")
 	spec, err := parseWithTrailingSpec(fs, args)
 	if err != nil {
 		return exitUsage
@@ -170,16 +182,37 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 		return exitUsage
 	}
 
-	logger, err := newLogger(stderr, *level)
+	// The configuration is resolved before the logger exists, because the
+	// file may be where the log level was stated (docs/spec.md 5.1). Errors
+	// until then go to stderr directly, which is where they went anyway.
+	runtime, err := resolveConfig(*configPath, fs, &flagValues{
+		allowMutations:  *allowMutations,
+		readOnly:        *readOnly,
+		baseURL:         *baseURL,
+		approval:        *approval,
+		transport:       *transport,
+		listen:          *listen,
+		drainTimeout:    *drainTimeout,
+		allowPublicBind: *publicBind,
+		logLevel:        *level,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
+		return exitUsage
+	}
+	runtime.AllowPrivateNetworks = runtime.AllowPrivateNetworks || *allowPrivate
+
+	logger, err := newLogger(stderr, runtime.Server.LogLevel)
 	if err != nil {
 		fmt.Fprintf(stderr, "lotsman: %v\n", err)
 		return exitUsage
 	}
 
-	runtime, err := resolveConfig(*configPath, fs, *allowMutations, *readOnly, *baseURL, *approval)
-	runtime.AllowPrivateNetworks = runtime.AllowPrivateNetworks || *allowPrivate
-	if err != nil {
-		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
+	// An HTTP endpoint with no catalog is a socket that answers tools/list
+	// with nothing, which is indistinguishable from a broken deployment. Over
+	// stdio the same state is a developer convenience with one user.
+	if runtime.Server.Transport == config.TransportHTTP && spec == "" {
+		fmt.Fprintln(stderr, "lotsman: serve --transport=http needs a specification to serve")
 		return exitUsage
 	}
 	catalogMode, err := parseMode(*mode)
@@ -208,11 +241,40 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 		opts.Catalog = cat
 	}
 
-	if err := mcpserver.ServeStdio(ctx, &opts); err != nil {
+	if err := runTransport(ctx, runtime, &opts); err != nil {
 		logger.Error("serve failed", "class", string(errs.ClassOf(err)), "error", err)
 		return exitCode(err)
 	}
 	return exitOK
+}
+
+// runTransport serves the catalog over the configured transport.
+//
+// Both branches are handed the same `mcpserver.Options`, and the HTTP one is
+// handed the server those options build. There is deliberately nowhere to
+// write a behaviour that applies to one transport and not the other: a
+// refusal that holds over stdio and not over HTTP would be a bug in the
+// server, not a property of the protocol.
+//
+//nolint:gocritic // hugeParam: Runtime is resolved configuration, copied per call so no callee holds a pointer to the decision its caller already made.
+func runTransport(ctx context.Context, runtime config.Runtime, opts *mcpserver.Options) error {
+	if runtime.Server.Transport != config.TransportHTTP {
+		return mcpserver.ServeStdio(ctx, opts)
+	}
+	return httpserver.Serve(ctx, &httpserver.Options{
+		Server:         mcpserver.New(opts),
+		Logger:         opts.Logger,
+		Listen:         runtime.Server.Listen,
+		AllowedOrigins: runtime.Server.AllowedOrigins,
+		AllowedHosts:   runtime.Server.AllowedHosts,
+		DrainTimeout:   runtime.Server.DrainTimeout,
+		// Authenticated stays false until step 2 of feature 004 gives the
+		// endpoint an inbound authorization mode. Until then FR-70's opt-in
+		// is the only way onto a public interface, which is the honest state
+		// of affairs rather than a placeholder.
+		Authenticated:                  false,
+		AllowUnauthenticatedPublicBind: runtime.Server.AllowUnauthenticatedPublicBind,
+	})
 }
 
 // loadCatalog runs pipeline stages 0-4 (specsource, openapi, catalog) for
@@ -284,7 +346,7 @@ func reportMode(logger *slog.Logger, cat *catalog.Catalog) {
 // resolveConfig applies the documented precedence: defaults < file <
 // environment < flags (FR-62). A flag that was not given must not override the
 // file with its zero value, which is why the overrides carry pointers.
-func resolveConfig(path string, fs *flag.FlagSet, allowMutations, readOnly bool, baseURL, approval string) (config.Runtime, error) {
+func resolveConfig(path string, fs *flag.FlagSet, given *flagValues) (config.Runtime, error) {
 	var file *config.File
 	if path != "" {
 		loaded, err := config.Load(path)
@@ -296,23 +358,78 @@ func resolveConfig(path string, fs *flag.FlagSet, allowMutations, readOnly bool,
 
 	overrides := config.Overrides{}
 	if wasSet(fs, "allow-mutations") || wasSet(fs, "read-only") {
-		effective := allowMutations && !readOnly
+		effective := given.allowMutations && !given.readOnly
 		overrides.AllowMutations = &effective
 	}
 	if wasSet(fs, "base-url") {
-		overrides.BaseURL = &baseURL
+		overrides.BaseURL = &given.baseURL
 	}
 	if wasSet(fs, "approval") {
-		mode := config.Approval(approval)
+		mode := config.Approval(given.approval)
 		if !mode.Valid() {
 			return config.Runtime{}, errs.Errorf(errs.ClassUsage,
-				"--approval %q is not always, client-capability or never", approval)
+				"--approval %q is not always, client-capability or never", given.approval)
 		}
 		overrides.Approval = &mode
 	}
+	if err := serverOverrides(fs, given, &overrides); err != nil {
+		return config.Runtime{}, err
+	}
 
-	environment := config.Environment{BaseURL: os.Getenv("LOTSMAN_BASE_URL")}
+	environment := config.Environment{
+		BaseURL:  os.Getenv("LOTSMAN_BASE_URL"),
+		LogLevel: os.Getenv("LOTSMAN_LOG_LEVEL"),
+	}
 	return config.Resolve(file, environment, overrides), nil
+}
+
+// flagValues is the command-line layer of FR-62's precedence, collected in one
+// place so that adding a setting does not add a positional argument nobody can
+// read at the call site.
+type flagValues struct {
+	allowMutations  bool
+	readOnly        bool
+	baseURL         string
+	approval        string
+	transport       string
+	listen          string
+	drainTimeout    string
+	allowPublicBind bool
+	logLevel        string
+}
+
+// serverOverrides folds the transport flags into the override layer. Each is
+// applied only when it was actually given, so a flag left alone cannot
+// silently overwrite a configuration file that stated something.
+func serverOverrides(fs *flag.FlagSet, given *flagValues, overrides *config.Overrides) error {
+	if wasSet(fs, "transport") {
+		transport := config.Transport(given.transport)
+		if !transport.Valid() {
+			return errs.Errorf(errs.ClassUsage, "--transport %q is not stdio or http", given.transport)
+		}
+		overrides.Transport = &transport
+	}
+	if wasSet(fs, "listen") {
+		overrides.Listen = &given.listen
+	}
+	if wasSet(fs, "drain-timeout") {
+		drain, err := time.ParseDuration(given.drainTimeout)
+		if err != nil {
+			return errs.Errorf(errs.ClassUsage,
+				"--drain-timeout %q is not a duration (for example \"10s\")", given.drainTimeout)
+		}
+		if drain < 0 {
+			return errs.Errorf(errs.ClassUsage, "--drain-timeout %q is negative", given.drainTimeout)
+		}
+		overrides.DrainTimeout = &drain
+	}
+	if wasSet(fs, "allow-unauthenticated-public-bind") {
+		overrides.AllowUnauthenticatedPublicBind = &given.allowPublicBind
+	}
+	if wasSet(fs, "log-level") {
+		overrides.LogLevel = &given.logLevel
+	}
+	return nil
 }
 
 // catalogOptions turns the resolved configuration into catalog options,
@@ -471,13 +588,6 @@ func newLogger(stderr io.Writer, level string) (*slog.Logger, error) {
 	// however it got there, the bytes leaving the process pass through it
 	// (FR-61).
 	return slog.New(redact.NewHandler(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: lvl}))), nil
-}
-
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
 }
 
 // parseWithTrailingSpec parses args against fs and returns the single

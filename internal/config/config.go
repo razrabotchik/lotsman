@@ -4,6 +4,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	yaml "go.yaml.in/yaml/v4"
 
@@ -111,6 +112,61 @@ type Execution struct {
 	AllowPrivateNetworks bool `yaml:"allowPrivateNetworks,omitempty"`
 }
 
+// Transport is how a client reaches lotsman (docs/spec.md 5.1).
+type Transport string
+
+// Transports. stdio is the local one and the default: one client, one
+// process, stdout reserved for protocol frames (FR-68). http is the
+// stateless Streamable HTTP profile of MCP 2026-07-28 (FR-69) — sessionless,
+// which is why the deployment it enables needs no sticky routing.
+const (
+	TransportStdio Transport = "stdio"
+	TransportHTTP  Transport = "http"
+)
+
+// Valid reports whether the transport is one this build serves.
+func (t Transport) Valid() bool {
+	switch t {
+	case TransportStdio, TransportHTTP:
+		return true
+	default:
+		return false
+	}
+}
+
+// Server mirrors the server section of the configuration file: how lotsman is
+// reached, as distinct from what it may do once reached. Nothing in here can
+// widen a policy; the two questions are answered by different sections on
+// purpose.
+type Server struct {
+	// Transport is stdio unless stated. A default that opens a socket would
+	// be a default that changes the threat model.
+	Transport Transport `yaml:"transport,omitempty"`
+	// Listen is the bind address of the HTTP transport, loopback by default
+	// (FR-70). A runtime whose targets are named by an untrusted document
+	// does not reach a public interface by omission.
+	Listen string `yaml:"listen,omitempty"`
+	// LogLevel is the file layer of the same setting --log-level carries.
+	LogLevel string `yaml:"logLevel,omitempty"`
+	// AllowedOrigins are the browser origins permitted to reach the endpoint
+	// (FR-71). A request carrying no Origin at all is not a browser request
+	// and is judged by the other guards instead.
+	AllowedOrigins []string `yaml:"allowedOrigins,omitempty"`
+	// AllowedHosts, when set, is the exact set of Host headers accepted. Left
+	// empty, the transport keeps the SDK's rebinding protection and nothing
+	// more, which is the right answer for a loopback bind and not a claim
+	// about a deployment behind a proxy.
+	AllowedHosts []string `yaml:"allowedHosts,omitempty"`
+	// DrainTimeout bounds graceful shutdown (FR-75), written as a Go duration
+	// ("10s"). A drain that outlives its budget is a hung deployment; a drain
+	// of zero is a dropped mutation.
+	DrainTimeout string `yaml:"drainTimeout,omitempty"`
+	// AllowUnauthenticatedPublicBind is the explicitly dangerous opt-in FR-70
+	// permits, spelled out rather than abbreviated: it is the only way to put
+	// an endpoint nothing authenticates on a public interface.
+	AllowUnauthenticatedPublicBind bool `yaml:"allowUnauthenticatedPublicBind,omitempty"`
+}
+
 // Catalog mirrors the catalog section: what gets published, before any
 // question of what may be called.
 type Catalog struct {
@@ -155,6 +211,7 @@ type File struct {
 	Kind               string              `yaml:"kind,omitempty"`
 	Catalog            Catalog             `yaml:"catalog,omitempty"`
 	Execution          Execution           `yaml:"execution,omitempty"`
+	Server             Server              `yaml:"server,omitempty"`
 	AuthProfiles       map[string]Profile  `yaml:"authProfiles,omitempty"`
 	OperationOverrides []OperationOverride `yaml:"operationOverrides,omitempty"`
 }
@@ -206,6 +263,9 @@ func (f *File) validate() error {
 	if err := validateApproval(f.Execution.InteractiveApproval); err != nil {
 		return err
 	}
+	if err := validateServer(&f.Server); err != nil {
+		return err
+	}
 	for _, list := range []struct {
 		name  string
 		rules []Rule
@@ -219,6 +279,28 @@ func (f *File) validate() error {
 	for i := range f.OperationOverrides {
 		if err := f.validateOverride(i, &f.OperationOverrides[i]); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// validateServer refuses a server section this build cannot honour. A
+// transport named but not implemented must fail here rather than fall back to
+// stdio: an operator who wrote `transport: http` and got a pipe would learn
+// about it from the absence of a socket.
+func validateServer(server *Server) error {
+	if server.Transport != "" && !server.Transport.Valid() {
+		return errs.Errorf(errs.ClassUsage,
+			"config: server.transport %q is not stdio or http", server.Transport)
+	}
+	if server.DrainTimeout != "" {
+		d, err := time.ParseDuration(server.DrainTimeout)
+		if err != nil {
+			return errs.Errorf(errs.ClassUsage,
+				"config: server.drainTimeout %q is not a duration (for example \"10s\")", server.DrainTimeout)
+		}
+		if d < 0 {
+			return errs.Errorf(errs.ClassUsage, "config: server.drainTimeout %q is negative", server.DrainTimeout)
 		}
 	}
 	return nil
