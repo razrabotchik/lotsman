@@ -61,6 +61,13 @@ type Options struct {
 	// (FR-85).
 	TrustedProxies []string
 
+	// Metrics, when set, is served at /metrics -- behind every guard the MCP
+	// endpoint is behind, including inbound authorization. A list of which
+	// operations an agent has been calling is not public information, and an
+	// endpoint that is unauthenticated because nobody thought about it is the
+	// failure this whole package exists to avoid.
+	Metrics http.Handler
+
 	// AllowUnauthenticatedPublicBind is FR-70's explicitly dangerous opt-in.
 	AllowUnauthenticatedPublicBind bool
 }
@@ -120,8 +127,17 @@ func newHandler(opts *Options) (http.Handler, error) {
 			// DisableLocalhostProtection is deliberately left false.
 			PropagateRequestCancellation: true,
 		})
-	return guard(mcpHandler, opts)
+	if opts.Metrics == nil {
+		return guard(mcpHandler, opts)
+	}
+	mux := http.NewServeMux()
+	mux.Handle(metricsPath, opts.Metrics)
+	mux.Handle("/", mcpHandler)
+	return guard(mux, opts)
 }
+
+// metricsPath is where an operator's scraper looks (§7.4).
+const metricsPath = "/metrics"
 
 // guard is the chain every request passes before it becomes a tool call. It
 // takes the handler it protects as an argument so that a test can put a spy

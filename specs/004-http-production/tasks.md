@@ -146,17 +146,43 @@ the criterion down to what shipped.
 
 ## Step 4: Audit and metrics  ✅ CHECKPOINT: an executed call leaves a record, and no record leaks
 
-- [ ] T314 audit: the event type — schema version, operation key, effect, decision, origin without
+- [x] T314 audit: the event type — schema version, operation key, effect, decision, origin without
       query, status, timing, sizes (§7.4) — written at the last stage of the pipeline (§7.5)
       → The version ships with the first event, on the report's precedent: anything anyone may
         parse is a promise, and versions are cheap before there are readers.
       → `internal/audit` has been a `doc.go` since 001 and gets its type now, with a sink, rather
         than earlier without one.
-- [ ] T315 sink: structured JSON on stderr, never stdout (FR-68 does not lapse because a second
-      transport exists)
-- [ ] T316 the canary test grows a fifth channel — the audit sink — with the live credential
-- [ ] T317 [P] `/metrics` in the Prometheus text format, served in the HTTP profile only and on the
+      → The record wraps the call rather than living inside it, so there is no return path out of
+        a call that skips it — including the ones added later.
+      → `input_required` is its own decision, not a refusal: waiting for a human means nothing
+        reached the network and nothing was denied either, and a reader chasing an incident needs
+        to tell those apart.
+      → The path is the *template*, never the expansion. An expanded path carries the caller's
+        arguments, and an argument is data lotsman was trusted with rather than data it may write
+        down.
+- [x] T315 sink: structured records through the process logger, never stdout (FR-68 does not
+      lapse because a second transport exists)
+      → Through the logger rather than beside it. Its outermost handler is the redaction filter
+        (FR-61) and it is bound to stderr, so an audit record inherits both properties instead of
+        re-deriving them — and a sink that opened its own writer would eventually get one wrong.
+        That is also why the records are slog attributes rather than the JSON this task first
+        said: the format follows the channel, and the channel is the one that redacts.
+- [x] T316 the canary test grows a fifth channel — the audit sink — with the live credential
+      → The record is checked for existence before it is checked for the canary: a channel nothing
+        was written to is a channel nothing can leak through, and asserting against one proves
+        nothing.
+- [x] T317 [P] `/metrics` in the Prometheus text format, served in the HTTP profile only and on the
       operator's chosen bind, with no client library (plan decision 4, Constitution VII)
+      → Counted from the same events the audit log records. A metric and a log line that disagree
+        about how many calls were refused are worse than either alone.
+      → Behind every guard the MCP endpoint is behind, inbound authorization included. A list of
+        which operations an agent has been calling is not public information, and an endpoint left
+        open because nobody thought about it is the failure this transport exists to avoid.
+      → Statuses are counted by class. An API with a hundred distinct codes would otherwise turn
+        one counter into a hundred time series to answer "are calls failing".
+      → Two scrapes that saw the same events are byte-identical, and label values are escaped:
+        every value today is build metadata or a digest, but a value that came from somewhere else
+        one day must not be able to forge a sample line.
 
 ## Step 5: Image and conformance  ✅ CHECKPOINT: criteria 10 and 11, and with them all eleven
 

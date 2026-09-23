@@ -125,4 +125,29 @@ authProfiles:
 	if strings.Contains(missingErr, canarySecret) {
 		t.Error("the credential reached an error path")
 	}
+
+	// 5. The audit record, which is written for the very call that carried
+	// the credential (§7.4). Checked for existence first: a channel nothing
+	// was written to is a channel nothing can leak through, and asserting
+	// against it proves nothing.
+	auditLine := findAudit(stderr.String())
+	if auditLine == "" {
+		t.Fatalf("no audit record was written for an executed call:\n%s", stderr.String())
+	}
+	if strings.Contains(auditLine, canarySecret) {
+		t.Errorf("the credential reached the audit record:\n%s", auditLine)
+	}
+	if !strings.Contains(auditLine, "decision=executed") {
+		t.Errorf("the audit record does not say how the call ended:\n%s", auditLine)
+	}
+}
+
+// findAudit returns the first audit record in a server's stderr.
+func findAudit(log string) string {
+	for _, line := range strings.Split(log, "\n") {
+		if strings.Contains(line, "msg=audit") {
+			return line
+		}
+	}
+	return ""
 }

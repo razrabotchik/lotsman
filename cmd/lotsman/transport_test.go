@@ -117,6 +117,20 @@ func serveHTTPProcess(t *testing.T, env []string, args ...string) (endpoint stri
 	return "", stderr, nil
 }
 
+// newJSONAPI is an upstream that answers every request the same way and
+// reports that it was called.
+func newJSONAPI(t *testing.T, called chan<- struct{}) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		select {
+		case called <- struct{}{}:
+		default:
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"p-1","name":"Murka"}`))
+	}))
+}
+
 // TestServeOverEveryTransport is the checkpoint of step 1: the scenarios that
 // defined correct behaviour over stdio define it over HTTP too, unchanged.
 func TestServeOverEveryTransport(t *testing.T) {
