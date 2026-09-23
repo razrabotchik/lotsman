@@ -8,9 +8,9 @@ The frozen specification lists eleven acceptance criteria for "the first stable 
 alpha, and where the evidence is. A criterion is not marked met because someone remembers
 implementing it; it is marked met because a test fails when it stops being true.
 
-Scope of this review: features 001 (core runtime), 002 (search mode) and 003 (selection,
-overrides and interactive approval — the M2 tail), all complete — 45, 14 and 12 tasks
-respectively.
+Scope of this review: features 001 (core runtime), 002 (search mode), 003 (selection, overrides
+and interactive approval — the M2 tail) and 004 (the production HTTP profile — M3), all complete
+— 45, 14, 12 and 21 tasks respectively.
 
 | # | Criterion | Status | Evidence |
 |---|---|---|---|
@@ -22,9 +22,9 @@ respectively.
 | 6 | Interactive approval fails closed without client capability | **met** | `TestServeMutationPolicyEndToEnd/fails_closed_when_the_client_cannot_be_asked` (real binary over stdio, zero upstream requests), `TestApprovalFailsClosedWithoutClientCapability`, `TestApprovalFailsClosedInSearchMode`, `TestDeclinedApprovalRefusesBeforeTheNetwork` |
 | 7 | A canary secret appears in no stdout, stderr, result, error or report | **met** | `TestCanarySecretNeverLeaks` (four channels, live credential), `internal/redact` |
 | 8 | A redirect to another origin or a private address is blocked; Authorization is not forwarded | **met** | `TestClientDeniesRedirects`, `TestHostnameResolvingIntoAPrivateRangeIsRefused`, `TestHostnameIsNeverTreatedAsLiteral`, `TestResolvedSecretsAreRegisteredForRedaction` (the credential is applied by the innermost round tripper, so no layer above a refused hop ever holds it) |
-| 9 | Hot reload does not drop a working catalog on an invalid candidate | **out of scope** | hot reload is not implemented; a catalog is built once per snapshot |
-| 10 | MCP conformance for the selected protocol revisions is green | **partial** | the official Go client drives the real binary over stdio in every e2e test; a separate conformance suite has not been run |
-| 11 | The release carries checksums and an SBOM; the container runs nonroot | **partial** | `.goreleaser.yaml` produces checksums and SBOMs, verified with `goreleaser check` and a snapshot build whose binary reports the injected version; no container image is built |
+| 9 | Hot reload does not drop a working catalog on an invalid candidate | **met** | `TestABrokenDocumentDoesNotDisturbAServingCatalog` (a running server is handed a document that is not a document; the next call is served by the catalog that was already working), `TestABrokenCandidateLeavesTheWorkingCatalogServing`, `TestWatchRepublishesAChangedDocument`, `TestSIGHUPReloads` |
+| 10 | MCP conformance for the selected protocol revisions is green | **partial** | `TestHTTPConformance` and `TestStdioConformance` speak JSON-RPC to the real binary on both transports — the sessionless `2026-07-28` profile, the legacy handshake, method and header rules, unknown methods, malformed input. The cross-SDK conformance runner from the modelcontextprotocol project is external tooling and has still not been run |
+| 11 | The release carries checksums and an SBOM; the container runs nonroot | **partial** | `.goreleaser.yaml` produces checksums and SBOMs, verified with `goreleaser check` and a snapshot build whose binary reports the injected version. The image is built and exercised on every change (`make image-check`, CI `image` job): distroless, `nonroot:nonroot`, running under `--read-only --network none`. Nothing is published to a registry — see below |
 
 ## What this would release
 
@@ -44,11 +44,30 @@ operation, tag and effect, and a confirmation prompt before every mutating call 
 the client cannot be asked. Every one of them is accounted for in the report: an operation
 excluded by a filter is *reported* as excluded, never quietly absent.
 
+## What 004 added
+
+An HTTP deployment. `serve --transport=http` publishes the stateless Streamable HTTP profile of
+MCP `2026-07-28`, and "stateless" is a tested property rather than a flag: two processes behind an
+alternating proxy serve one session's worth of traffic, approval round trip included. The endpoint
+binds loopback unless told otherwise, refuses to start on a public interface with nothing
+authenticating it, and checks `Origin` and `Host` before a request reaches a handler. Inbound
+authorization is `none` or a static bearer; the OAuth resource server is feature 005 and a config
+asking for it is refused by name rather than read as `none`.
+
+The catalog can be replaced under a running server, by signal or by watching the document, and a
+candidate that fails leaves the working catalog serving. Every completed call leaves an audit
+record — operation, effect, decision, origin without its query, status, timing, sizes — and the
+same events feed a `/metrics` endpoint in the Prometheus text format, behind the same inbound
+authorization as everything else.
+
 ## What it is not
 
-No HTTP transport, no OAuth, no recipes, no hot reload. Cookie parameters, form-urlencoded bodies
-and Swagger 2.0 are refused with reason codes rather than half-supported. Search ranking is
-lexical; semantic retrieval would need the same benchmark to earn a claim.
+No OAuth — neither inbound (feature 005) nor upstream (M4) — no recipes, no multi-API namespaces.
+Cookie parameters, form-urlencoded bodies and Swagger 2.0 are refused with reason codes rather
+than half-supported. Search ranking is lexical; semantic retrieval would need the same benchmark
+to earn a claim. No container image is pushed anywhere: building one is done and tested, but
+publishing it needs a registry, a signing story and a retention policy, and none of those has been
+decided.
 
 Every test named above exists and is run by `make test`; the names are checkable on purpose, since a
 review that cites a test nobody can find is a review nobody can trust. Two of them had to be
@@ -80,6 +99,24 @@ resolve names itself, and the document still pointed at the old ones.
 - **Approval is a prompt, not a permission.** The protocol cannot promise a human saw it: a client
   may answer on its own, and lotsman cannot tell (FR-44a). It can only subtract from what the
   policy already allowed, and the gate stands whether or not anyone was asked.
+- **A legacy `initialize` handshake negotiates `2025-11-25`, not `2026-07-28`.** This is correct
+  rather than a shortfall — `initialize` is the handshake the new revision removed, so a client
+  using it is by definition not speaking the new one — but it means `mcpProtocolVersion` in
+  `lotsman version` is the revision this build *targets and serves*, not the one every client will
+  end up on. The sessionless path is proven separately (`TestHTTPConformance`).
+- **An unknown method over stateless HTTP is answered with a 400 and a plain-text body**, where
+  JSON-RPC 2.0 §5.1 asks for a `-32601` frame. The refusal is safe and the server stays up; the
+  behaviour is the SDK's transport layer, not lotsman's, and the conformance test asserts only the
+  safe property so that it does not have to be rewritten as a failure the day the SDK conforms.
+- **Reload is an HTTP property.** A stdio session resolves its server once and cannot be handed
+  another, so `--watch` over stdio is refused rather than silently ignored — and `tools/list_changed`
+  is not implemented at all, because no transport in this build both reloads and has a connection
+  to push to (ADR-0015).
+- **The reload watcher compares size and modification time.** An edit that changes neither is
+  missed; `SIGHUP` covers the operator who needs more than that.
+- **Metrics have no authentication of their own.** `/metrics` sits behind whatever inbound
+  authorization the MCP endpoint has, which means an unauthenticated loopback deployment exposes
+  it to anything on the machine — the same trust boundary the MCP endpoint already has there.
 - **The desktop-client profile is assumed, not fully measured.** Name length, charset and catalog
   budget are coded conservatively; the open questions and why they do not block are in
   docs/adr/0004-mcp-client-notes.md.

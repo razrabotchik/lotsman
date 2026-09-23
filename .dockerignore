@@ -1,0 +1,9 @@
+.git
+.github
+.idea
+bin
+dist
+coverage.out
+testdata/corpus
+specs
+docs
