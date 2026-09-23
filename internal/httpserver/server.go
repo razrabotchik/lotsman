@@ -23,10 +23,15 @@ const readHeaderTimeout = 10 * time.Second
 
 // Options configures the HTTP transport.
 type Options struct {
-	// Server is the MCP server to serve; mcpserver.New builds it. The same
-	// instance backs stdio, which is what makes "the transport changes
-	// nothing" a structural fact rather than a promise.
-	Server *mcp.Server
+	// Server resolves the server to answer a request with. It is a function
+	// rather than a value because that is what makes reload possible: the
+	// handler asks once per request, so a published catalog can be replaced
+	// between requests without any request seeing half of it (FR-72).
+	//
+	// Whatever it returns is built by mcpserver.New, the same way stdio's is,
+	// which keeps "the transport changes nothing" a structural fact rather
+	// than a promise.
+	Server func() *mcp.Server
 
 	// Logger receives transport activity. stdout stays protocol-only even
 	// here: a binary that may still be launched over stdio cannot have a code
@@ -105,7 +110,7 @@ func Serve(ctx context.Context, opts *Options) error {
 // noticed.
 func newHandler(opts *Options) (http.Handler, error) {
 	mcpHandler := mcp.NewStreamableHTTPHandler(
-		func(*http.Request) *mcp.Server { return opts.Server },
+		func(*http.Request) *mcp.Server { return opts.Server() },
 		&mcp.StreamableHTTPOptions{
 			// The sessionless profile of FR-69: each POST gets a temporary
 			// session, and GET and DELETE answer 405. This is what makes two

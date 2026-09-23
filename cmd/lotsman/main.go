@@ -16,6 +16,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/razrabotchik/lotsman/internal/auth"
 	"github.com/razrabotchik/lotsman/internal/buildinfo"
 	"github.com/razrabotchik/lotsman/internal/catalog"
@@ -29,6 +31,7 @@ import (
 	"github.com/razrabotchik/lotsman/internal/openapi"
 	"github.com/razrabotchik/lotsman/internal/policy"
 	"github.com/razrabotchik/lotsman/internal/redact"
+	"github.com/razrabotchik/lotsman/internal/reload"
 	"github.com/razrabotchik/lotsman/internal/specsource"
 )
 
@@ -105,6 +108,7 @@ Flags:
   --transport stdio|http   serve: stdio (default) or the stateless Streamable HTTP profile
   --listen HOST:PORT       serve --transport=http: bind address (default 127.0.0.1:8080)
   --drain-timeout D        serve --transport=http: how long shutdown waits for calls in flight
+  --watch                  serve --transport=http: republish when the document changes (also SIGHUP)
   --json                   inspect, version: machine-readable output
   --fail-on-rejected       inspect: exit 4 when any operation is rejected
   --supported|--rejected   operations: filter by translation support
@@ -174,6 +178,8 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 		"how long shutdown waits for calls in flight (default 10s, FR-75)")
 	publicBind := fs.Bool("allow-unauthenticated-public-bind", false,
 		"permit a non-loopback bind with nothing authenticating the endpoint (FR-70)")
+	watch := fs.Bool("watch", false,
+		"serve --transport=http: rebuild and republish the catalog when the document changes (FR-72)")
 	spec, err := parseWithTrailingSpec(fs, args)
 	if err != nil {
 		return exitUsage
@@ -216,6 +222,14 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "lotsman: serve --transport=http needs a specification to serve")
 		return exitUsage
 	}
+	if *watch && runtime.Server.Transport != config.TransportHTTP {
+		// Reload replaces the server a transport looks up per request, and a
+		// stdio session resolves one for its whole life. Saying so is better
+		// than accepting a flag that would quietly do nothing.
+		fmt.Fprintln(stderr, "lotsman: --watch applies to --transport=http; "+
+			"a stdio session serves one client from one process")
+		return exitUsage
+	}
 	catalogMode, err := parseMode(*mode)
 	if err != nil {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
@@ -242,7 +256,10 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 		opts.Catalog = cat
 	}
 
-	if err := runTransport(ctx, runtime, &opts); err != nil {
+	source := func(ctx context.Context) (*catalog.Catalog, error) {
+		return loadCatalog(ctx, spec, logger, *lax, runtime, catalogMode)
+	}
+	if err := runTransport(ctx, runtime, &opts, source, reloadTriggers(spec, *watch)); err != nil {
 		logger.Error("serve failed", "class", string(errs.ClassOf(err)), "error", err)
 		return exitCode(err)
 	}
@@ -258,7 +275,8 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 // server, not a property of the protocol.
 //
 //nolint:gocritic // hugeParam: Runtime is resolved configuration, copied per call so no callee holds a pointer to the decision its caller already made.
-func runTransport(ctx context.Context, runtime config.Runtime, opts *mcpserver.Options) error {
+func runTransport(ctx context.Context, runtime config.Runtime, opts *mcpserver.Options,
+	source reload.Source, triggers reload.Triggers) error {
 	if runtime.Server.Transport != config.TransportHTTP {
 		return mcpserver.ServeStdio(ctx, opts)
 	}
@@ -269,8 +287,18 @@ func runTransport(ctx context.Context, runtime config.Runtime, opts *mcpserver.O
 	if err != nil {
 		return err
 	}
+	// Every published catalog goes through the same builder the startup one
+	// did, with the same options: a reload that could produce a differently
+	// configured server would be a second way to decide policy.
+	holder := reload.New(opts.Catalog, source, func(cat *catalog.Catalog) *mcp.Server {
+		published := *opts
+		published.Catalog = cat
+		return mcpserver.New(&published)
+	}, opts.Logger)
+	reload.Start(ctx, holder, triggers)
+
 	return httpserver.Serve(ctx, &httpserver.Options{
-		Server:                         mcpserver.New(opts),
+		Server:                         holder.Server,
 		Logger:                         opts.Logger,
 		Listen:                         runtime.Server.Listen,
 		AllowedOrigins:                 runtime.Server.AllowedOrigins,
@@ -280,6 +308,20 @@ func runTransport(ctx context.Context, runtime config.Runtime, opts *mcpserver.O
 		TrustedProxies:                 runtime.Server.InboundAuth.TrustedProxies,
 		AllowUnauthenticatedPublicBind: runtime.Server.AllowUnauthenticatedPublicBind,
 	})
+}
+
+// reloadTriggers is what may republish the catalog.
+//
+// SIGHUP is always listened for: it costs nothing, has no surface, and is
+// what a sidecar or a config-map reloader already sends. Watching is opt-in
+// because it is a poll, and it needs a file to poll -- a document read from
+// stdin was consumed at startup and there is nothing left to watch.
+func reloadTriggers(spec string, watch bool) reload.Triggers {
+	triggers := reload.Triggers{Signal: true}
+	if watch && spec != "" && spec != "-" {
+		triggers.Watch = spec
+	}
+	return triggers
 }
 
 // loadCatalog runs pipeline stages 0-4 (specsource, openapi, catalog) for

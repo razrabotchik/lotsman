@@ -156,6 +156,7 @@ func New(opts *Options) *mcp.Server {
 		Logger:       sdkLogger(opts.logger()),
 	})
 	addPing(srv, opts.clock())
+	addCacheHints(srv, opts.catalogDigest())
 
 	outbound := opts.egressPolicy()
 	runners := newRunners(catalogTools(opts.Catalog), opts.httpClient(), opts.BaseURL, &outbound,
