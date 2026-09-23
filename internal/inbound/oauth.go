@@ -107,16 +107,11 @@ func scopesFrom(claims jwt.MapClaims) []string {
 
 // oauthGuard builds the resource-server guard.
 func oauthGuard(oauth *config.InboundOAuth, log *slog.Logger, client *http.Client) (Guard, error) {
-	ttl := config.DefaultJWKSTTL
-	if oauth.JWKSTTL != "" {
-		parsed, err := time.ParseDuration(oauth.JWKSTTL)
-		if err != nil {
-			return Guard{}, errs.Errorf(errs.ClassUsage, "inbound: jwksTTL %q is not a duration", oauth.JWKSTTL)
-		}
-		ttl = parsed
+	verifier, err := oauthTokenVerifier(oauth, log, client)
+	if err != nil {
+		return Guard{}, err
 	}
-	keys := newKeySet(oauth.JWKSURI, ttl, client)
-	verify := auth.RequireBearerToken(oauthVerifier(oauth, keys, log), &auth.RequireBearerTokenOptions{
+	verify := auth.RequireBearerToken(verifier, &auth.RequireBearerTokenOptions{
 		Scopes: oauth.RequiredScopes,
 		// So that a 401 tells a client where to get a token instead of
 		// leaving it to guess (RFC 9728 §5.1, FR-84).
@@ -128,4 +123,28 @@ func oauthGuard(oauth *config.InboundOAuth, log *slog.Logger, client *http.Clien
 		Metadata:   metadataHandler(oauth),
 		middleware: func(next http.Handler) http.Handler { return challenge(verify(next)) },
 	}, nil
+}
+
+// oauthTokenVerifier picks how a token is checked: against the issuer's
+// published keys, or by asking the issuer. The configuration has already
+// refused to name both (config.validateTokenValidation), so this is a
+// two-branch decision rather than a precedence rule.
+func oauthTokenVerifier(oauth *config.InboundOAuth, log *slog.Logger, client *http.Client) (auth.TokenVerifier, error) {
+	if oauth.Introspection.URL != "" {
+		introspector, err := newIntrospection(oauth, log, client)
+		if err != nil {
+			return nil, err
+		}
+		return introspector.verifier(), nil
+	}
+
+	ttl := config.DefaultJWKSTTL
+	if oauth.JWKSTTL != "" {
+		parsed, err := time.ParseDuration(oauth.JWKSTTL)
+		if err != nil {
+			return nil, errs.Errorf(errs.ClassUsage, "inbound: jwksTTL %q is not a duration", oauth.JWKSTTL)
+		}
+		ttl = parsed
+	}
+	return oauthVerifier(oauth, newKeySet(oauth.JWKSURI, ttl, client), log), nil
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/razrabotchik/lotsman/internal/argvalidate"
@@ -67,14 +68,14 @@ func (r *runner) call(ctx context.Context, invocation *mcp.CallToolRequest, args
 	// below, including the ones added later, passes through here.
 	started := time.Now()
 	result, err := r.execute(ctx, invocation, args)
-	r.record(started, result, err)
+	r.record(ctx, started, result, err)
 	return result, err
 }
 
 // record writes what happened (§7.4). It never fails a call: a runtime that
 // stops working because it cannot describe itself has its priorities
 // backwards.
-func (r *runner) record(started time.Time, result response.Result, err error) {
+func (r *runner) record(ctx context.Context, started time.Time, result response.Result, err error) {
 	if r.audit == nil {
 		return
 	}
@@ -84,6 +85,7 @@ func (r *runner) record(started time.Time, result response.Result, err error) {
 		Operation:     string(r.tool.OperationKey),
 		Tool:          r.tool.Name,
 		Effect:        string(r.tool.Effect.Effect),
+		Subject:       subjectOf(ctx),
 		Decision:      audit.DecisionExecuted,
 		Origin:        origin(r.tool),
 		Method:        r.tool.Method,
@@ -166,6 +168,20 @@ func (r *runner) execute(ctx context.Context, invocation *mcp.CallToolRequest, a
 		return response.Result{}, redact.Error(err)
 	}
 	return result, nil
+}
+
+// subjectOf reports who the transport authenticated, or empty when nothing
+// did.
+//
+// Read from the context the SDK carries rather than passed down from the
+// transport: a value that had to be threaded through every caller would be a
+// value some caller eventually forgets, and the record would quietly stop
+// saying who asked.
+func subjectOf(ctx context.Context) string {
+	if info := sdkauth.TokenInfoFromContext(ctx); info != nil {
+		return info.UserID
+	}
+	return ""
 }
 
 // newRunners prepares one runner per published tool, in catalog order.

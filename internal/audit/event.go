@@ -40,6 +40,15 @@ type Event struct {
 	Tool      string `json:"tool"`
 	Effect    string `json:"effect"`
 
+	// Subject is who asked, when the transport authenticated them (FR-81).
+	// It is recorded and never enforced: matching policy on a subject is
+	// RBAC, and §8 defers RBAC to the gateway layer. An operator who saw a
+	// subject in a rule would reasonably assume the rest of it exists.
+	//
+	// The subject, never the token. One identifies a caller in a record
+	// somebody may read months later; the other is a credential.
+	Subject string `json:"subject,omitempty"`
+
 	Decision Decision `json:"decision"`
 	// Reason is the machine-readable class of a refusal, empty otherwise.
 	Reason string `json:"reason,omitempty"`

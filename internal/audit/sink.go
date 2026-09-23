@@ -37,6 +37,7 @@ func (s LogSink) Record(event Event) {
 		"operation", event.Operation,
 		"tool", event.Tool,
 		"effect", event.Effect,
+		"subject", event.Subject,
 		"decision", string(event.Decision),
 		"reason", event.Reason,
 		"origin", event.Origin,

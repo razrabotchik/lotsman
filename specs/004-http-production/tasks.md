@@ -6,7 +6,7 @@ which the work could stop and still be worth shipping.
 **Scope decision**: inbound auth is split — `none` and `static-bearer` land here, the OAuth
 resource server (FR-80–82) becomes feature 005. M3's exit criterion *auth tests green* is
 therefore only fully met at the end of 005, and the release review says so rather than reading
-the criterion down to what shipped.
+the criterion down to what shipped. *(005 is complete; the criterion is answered there.)*
 
 ## Step 1: Transport and its guards  ✅ CHECKPOINT: an MCP client reaches lotsman over HTTP, and a stranger does not
 

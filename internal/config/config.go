@@ -236,6 +236,35 @@ type InboundOAuth struct {
 	// ScopesSupported is advertised in the metadata so a client can ask for
 	// the right thing the first time. It defaults to RequiredScopes.
 	ScopesSupported []string `yaml:"scopesSupported,omitempty"`
+	// Introspection is the alternative to a key set, for an authorization
+	// server that issues opaque tokens (RFC 7662). It is configured
+	// *instead of* `jwksURI`, never alongside: two ways to validate one
+	// token are two answers waiting to disagree.
+	Introspection Introspection `yaml:"introspection,omitempty"`
+}
+
+// DefaultIntrospectionTimeout bounds the call to the authorization server.
+//
+// Short, because it is on the hot path of every request: a provider that
+// takes longer than this to answer is a provider that has turned the endpoint
+// into its own availability.
+const DefaultIntrospectionTimeout = 5 * time.Second
+
+// Introspection asks the authorization server whether a token is good
+// (RFC 7662), which is the only way to validate one that carries no claims of
+// its own.
+type Introspection struct {
+	// URL is the introspection endpoint.
+	URL string `yaml:"url,omitempty"`
+	// ClientID identifies lotsman to the authorization server. Introspection
+	// is an authenticated call: an endpoint that answered anonymously would
+	// let anyone test tokens against it.
+	ClientID string `yaml:"clientID,omitempty"`
+	// ClientSecretRef is the secret half, as a reference like every other
+	// credential (FR-59).
+	ClientSecretRef SecretRef `yaml:"clientSecretRef,omitempty"`
+	// Timeout overrides DefaultIntrospectionTimeout.
+	Timeout string `yaml:"timeout,omitempty"`
 }
 
 // Server mirrors the server section of the configuration file: how lotsman is
@@ -475,7 +504,7 @@ func validateInboundOAuth(oauth *InboundOAuth) error {
 		return errs.Errorf(errs.ClassUsage,
 			"config: server.inboundAuth.oauth.resource %q is not an absolute URI", oauth.Resource)
 	}
-	if err := requireHTTPS("jwksURI", oauth.JWKSURI); err != nil {
+	if err := validateTokenValidation(oauth); err != nil {
 		return err
 	}
 	for i, algorithm := range oauth.Algorithms {
@@ -495,6 +524,60 @@ func validateInboundOAuth(oauth *InboundOAuth) error {
 	for i, server := range oauth.AuthorizationServers {
 		if err := requireHTTPS(fmt.Sprintf("authorizationServers[%d]", i), server); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// validateTokenValidation insists on exactly one way to decide whether a
+// token is good.
+//
+// Both configured would be two answers waiting to disagree, and the
+// disagreement would be resolved by whichever code path ran first. Neither
+// configured is an endpoint that refuses every caller for a reason nobody can
+// see from the outside.
+func validateTokenValidation(oauth *InboundOAuth) error {
+	hasKeys := oauth.JWKSURI != ""
+	hasIntrospection := oauth.Introspection.URL != ""
+	switch {
+	case hasKeys && hasIntrospection:
+		return errs.Errorf(errs.ClassUsage,
+			"config: server.inboundAuth.oauth has both jwksURI and introspection; "+
+				"a token is validated one way or the other, never both")
+	case hasKeys:
+		return requireHTTPS("jwksURI", oauth.JWKSURI)
+	case hasIntrospection:
+		return validateIntrospection(&oauth.Introspection)
+	default:
+		return errs.Errorf(errs.ClassUsage,
+			"config: server.inboundAuth.oauth needs either jwksURI (for signed tokens) "+
+				"or introspection.url (for opaque ones)")
+	}
+}
+
+// validateIntrospection refuses a half-configured introspection client.
+func validateIntrospection(introspection *Introspection) error {
+	if err := requireHTTPS("introspection.url", introspection.URL); err != nil {
+		return err
+	}
+	if introspection.ClientID == "" {
+		return errs.Errorf(errs.ClassUsage,
+			"config: server.inboundAuth.oauth.introspection.clientID is required: an "+
+				"introspection endpoint that answers anonymously lets anyone test tokens against it")
+	}
+	if introspection.ClientSecretRef == "" {
+		return errs.Errorf(errs.ClassUsage,
+			"config: server.inboundAuth.oauth.introspection.clientSecretRef is required")
+	}
+	if _, err := ParseSecretRef(string(introspection.ClientSecretRef)); err != nil {
+		return err
+	}
+	if introspection.Timeout != "" {
+		timeout, err := time.ParseDuration(introspection.Timeout)
+		if err != nil || timeout <= 0 {
+			return errs.Errorf(errs.ClassUsage,
+				"config: server.inboundAuth.oauth.introspection.timeout %q is not a positive duration",
+				introspection.Timeout)
 		}
 	}
 	return nil
