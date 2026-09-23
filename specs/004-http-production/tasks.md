@@ -59,25 +59,45 @@ the criterion down to what shipped.
 
 ## Step 2: Inbound authorization  ✅ CHECKPOINT: a deployed endpoint refuses an unauthenticated caller
 
-- [ ] T306 config: `inboundAuth: {mode: none|static-bearer|oauth, token: <secret ref>,
+- [x] T306 config: `inboundAuth: {mode: none|static-bearer|oauth, token: <secret ref>,
       trustedProxies: [...]}` with strict decoding
       → `mode: oauth` is refused as a capability this build does not have (exit 4, naming feature
         005), never ignored and never silently downgraded to `none`. A config written against the
         frozen spec must fail loudly on a binary that cannot honour it.
-- [ ] T307 inbound: a static-bearer `auth.TokenVerifier` behind the SDK's `RequireBearerToken`
-      → Constant-time comparison; the token arrives through the existing secret-reference
-        machinery and is registered for redaction like every other credential.
+      → That exit code turned up a bug of its own: every command mapped a configuration error to
+        exit 2 unconditionally, so a missing capability would have read as a misspelling. A
+        config error now carries its class into the exit code.
+      → A `tokenRef` set while the mode is `none` is refused too. A configured secret that
+        authenticates nothing is not a default worth guessing at.
+- [x] T307 inbound: a static-bearer `auth.TokenVerifier` behind the SDK's `RequireBearerToken`
+      → Both sides are hashed before the comparison. Comparing raw values in constant time still
+        leaks their length, and a length is a genuinely useful thing to learn about a secret you
+        are guessing at; comparing digests costs one hash and leaks nothing.
+      → The token arrives through the existing secret-reference machinery and joins the redaction
+        registry like every other credential, even though it points the other way.
+      → `AllowMissingExpiration` is on, and that is about the shape of the credential rather than
+        its lifetime: the SDK rejects a token that states no expiry, which is right for an issued
+        token and impossible for a configured one.
       → An empty or absent token in `static-bearer` mode is a startup error. "Authentication
         configured, no secret" must never resolve to "everyone is authenticated".
-- [ ] T308 challenges and proxies: 401/403 carry the metadata and scope hints FR-84 requires and
+- [x] T308 challenges and proxies: 401/403 carry the metadata and scope hints FR-84 requires and
       nothing about internal policy; `X-Forwarded-*` is honoured only from configured proxies
       (FR-85)
       → A challenge that explains why a call was denied is a policy oracle for anyone who can
-        reach the port.
-- [ ] T309 [P] FR-83 canary: an inbound bearer token appears in no upstream request, and in none of
+        reach the port. `WWW-Authenticate: Bearer` and nothing more: no realm naming the
+        deployment, and no error description telling a stranger whether the token was missing or
+        wrong. The SDK emits no challenge at all without metadata or scopes to advertise, so a
+        bare 401 had to be given the scheme it was missing.
+      → Forwarding headers are *removed* from an untrusted peer, not ignored. "Ignore them" is a
+        rule every future reader of the request has to know; deleting them means a later feature
+        that reads `X-Forwarded-For` gets the truth without having been told to be careful.
+- [x] T309 [P] FR-83 canary: an inbound bearer token appears in no upstream request, and in none of
       the four channels the existing canary test already covers
       → Inbound identity is permission to talk to lotsman, never an upstream credential. The
-        assertion is a test rather than a comment because the two token values sit in one process.
+        assertion is a test rather than a comment because the two tokens live in one process and
+        both travel in an `Authorization` header, one inbound and one outbound.
+      → The other half of FR-70 is now demonstrable and asserted: a public bind starts once
+        something authenticates it. The rule was never about public interfaces as such.
 
 ## Step 3: Hot reload  ✅ CHECKPOINT: acceptance criterion 9
 

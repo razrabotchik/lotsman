@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -66,8 +67,18 @@ var listening = regexp.MustCompile(`addr=(\S+)`)
 // endpoint to call it on.
 func serveHTTP(t *testing.T, args ...string) (endpoint string, stderr *syncBuffer) {
 	t.Helper()
-	full := append([]string{"serve", "--transport", "http", "--listen", "127.0.0.1:0"}, args...)
+	return serveHTTPEnv(t, nil, append([]string{"--listen", "127.0.0.1:0"}, args...)...)
+}
+
+// serveHTTPEnv is the same, with the environment a secret reference needs and
+// the bind address left to the caller.
+func serveHTTPEnv(t *testing.T, env []string, args ...string) (endpoint string, stderr *syncBuffer) {
+	t.Helper()
+	full := append([]string{"serve", "--transport", "http"}, args...)
 	cmd := exec.Command(buildBinary(t), full...)
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	stderr = &syncBuffer{}
 	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {

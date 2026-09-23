@@ -56,6 +56,10 @@ type ServerRuntime struct {
 	AllowedHosts                   []string
 	DrainTimeout                   time.Duration
 	AllowUnauthenticatedPublicBind bool
+	// InboundAuth is who may talk to the endpoint. The mode is never empty
+	// after Resolve: `none` is a decision, and a caller downstream should not
+	// have to work out what silence meant.
+	InboundAuth InboundAuth
 }
 
 // Overrides carries what the command line said. A nil field means the flag was
@@ -90,6 +94,7 @@ func Resolve(file *File, env Environment, flags Overrides) Runtime {
 			Listen:       DefaultListen,
 			DrainTimeout: DefaultDrainTimeout,
 			LogLevel:     DefaultLogLevel,
+			InboundAuth:  InboundAuth{Mode: InboundNone},
 		},
 	}
 
@@ -155,6 +160,11 @@ func applyServerFile(resolved *ServerRuntime, file *Server) {
 		}
 	}
 	resolved.AllowUnauthenticatedPublicBind = file.AllowUnauthenticatedPublicBind
+	if file.InboundAuth.Mode != "" {
+		resolved.InboundAuth.Mode = file.InboundAuth.Mode
+	}
+	resolved.InboundAuth.TokenRef = file.InboundAuth.TokenRef
+	resolved.InboundAuth.TrustedProxies = append([]string(nil), file.InboundAuth.TrustedProxies...)
 }
 
 // applyServerFlags is the last word, per FR-62.

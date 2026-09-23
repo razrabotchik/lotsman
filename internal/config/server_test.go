@@ -124,3 +124,83 @@ func TestServerPrecedence(t *testing.T) {
 		t.Errorf("transport = %q; a flag nobody passed overwrote the file", fromFlags.Server.Transport)
 	}
 }
+
+// FR-79 at load time. Each of these is a configuration that would otherwise
+// produce an endpoint the operator believes is protected and is not.
+func TestInboundAuthValidation(t *testing.T) {
+	cases := []struct {
+		name  string
+		yaml  string
+		class errs.Class
+	}{
+		{
+			name:  "a mode nobody defines",
+			yaml:  "server:\n  inboundAuth:\n    mode: mtls\n",
+			class: errs.ClassUsage,
+		},
+		{
+			name:  "static-bearer with no secret",
+			yaml:  "server:\n  inboundAuth:\n    mode: static-bearer\n",
+			class: errs.ClassUsage,
+		},
+		{
+			name:  "a literal secret instead of a reference",
+			yaml:  "server:\n  inboundAuth:\n    mode: static-bearer\n    tokenRef: sekrit\n",
+			class: errs.ClassUsage,
+		},
+		{
+			name:  "a secret that authenticates nothing",
+			yaml:  "server:\n  inboundAuth:\n    mode: none\n    tokenRef: env:TOKEN\n",
+			class: errs.ClassUsage,
+		},
+		{
+			name:  "a trusted proxy that is a name",
+			yaml:  "server:\n  inboundAuth:\n    mode: static-bearer\n    tokenRef: env:TOKEN\n    trustedProxies: [proxy.example.com]\n",
+			class: errs.ClassUsage,
+		},
+		{
+			// Not a typo and not a usage error: a capability this build does
+			// not have. The exit code has to say so, or an operator reads it
+			// as a misspelling and fixes the spelling.
+			name:  "oauth, which this build does not implement",
+			yaml:  "server:\n  inboundAuth:\n    mode: oauth\n",
+			class: errs.ClassUnsupported,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Parse([]byte("apiVersion: lotsman.dev/v1alpha1\n" + tc.yaml))
+			if err == nil {
+				t.Fatal("the configuration was accepted")
+			}
+			if got := errs.ClassOf(err); got != tc.class {
+				t.Errorf("class = %s, want %s (%v)", got, tc.class, err)
+			}
+		})
+	}
+}
+
+func TestInboundAuthAccepted(t *testing.T) {
+	file, err := Parse([]byte(`apiVersion: lotsman.dev/v1alpha1
+server:
+  inboundAuth:
+    mode: static-bearer
+    tokenRef: env:LOTSMAN_INBOUND
+    trustedProxies: ["10.0.0.0/8", "192.168.1.7"]
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	runtime := Resolve(file, Environment{}, Overrides{})
+	if runtime.Server.InboundAuth.Mode != InboundStaticBearer {
+		t.Errorf("mode = %q", runtime.Server.InboundAuth.Mode)
+	}
+	if len(runtime.Server.InboundAuth.TrustedProxies) != 2 {
+		t.Errorf("trustedProxies = %+v", runtime.Server.InboundAuth.TrustedProxies)
+	}
+	// Saying nothing still means nothing authenticates the endpoint, stated
+	// rather than left empty.
+	if bare := Resolve(nil, Environment{}, Overrides{}); bare.Server.InboundAuth.Mode != InboundNone {
+		t.Errorf("default mode = %q, want none", bare.Server.InboundAuth.Mode)
+	}
+}
