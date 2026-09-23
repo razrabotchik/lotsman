@@ -18,6 +18,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/razrabotchik/lotsman/internal/audit"
 	"github.com/razrabotchik/lotsman/internal/auth"
 	"github.com/razrabotchik/lotsman/internal/buildinfo"
 	"github.com/razrabotchik/lotsman/internal/catalog"
@@ -245,6 +246,9 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 	opts := mcpserver.Options{
 		Logger: logger, BaseURL: runtime.BaseURL, Egress: egressPolicy,
 		Approval: runtime.InteractiveApproval,
+		// Through the logger, so an event inherits redaction and the stdout
+		// ban instead of re-deriving both (FR-61, FR-68).
+		Audit: audit.Log(logger),
 	}
 	if spec != "" {
 		cat, err := loadCatalog(ctx, spec, logger, *lax, runtime, catalogMode)
@@ -287,18 +291,32 @@ func runTransport(ctx context.Context, runtime config.Runtime, opts *mcpserver.O
 	if err != nil {
 		return err
 	}
+	// Counters exist only here: §7.4 puts metrics in the HTTP profile, and a
+	// stdio process has nobody to scrape it. They are fed from the same
+	// events the audit log gets, so a metric and a log line cannot disagree
+	// about how many calls were refused.
+	counters := audit.NewCounters()
+	audited := *opts
+	audited.Audit = audit.Multi{opts.Audit, counters}
+
 	// Every published catalog goes through the same builder the startup one
 	// did, with the same options: a reload that could produce a differently
 	// configured server would be a second way to decide policy.
-	holder := reload.New(opts.Catalog, source, func(cat *catalog.Catalog) *mcp.Server {
-		published := *opts
+	holder := reload.New(audited.Catalog, source, func(cat *catalog.Catalog) *mcp.Server {
+		published := audited
 		published.Catalog = cat
 		return mcpserver.New(&published)
-	}, opts.Logger)
+	}, audited.Logger)
 	reload.Start(ctx, holder, triggers)
+
+	metrics := counters.Handler(func() audit.Snapshot {
+		current := holder.Catalog()
+		return audit.Snapshot{Tools: len(current.Tools), Digest: current.Digest}
+	})
 
 	return httpserver.Serve(ctx, &httpserver.Options{
 		Server:                         holder.Server,
+		Metrics:                        metrics,
 		Logger:                         opts.Logger,
 		Listen:                         runtime.Server.Listen,
 		AllowedOrigins:                 runtime.Server.AllowedOrigins,

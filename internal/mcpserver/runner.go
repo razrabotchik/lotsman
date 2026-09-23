@@ -2,12 +2,15 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/razrabotchik/lotsman/internal/argvalidate"
+	"github.com/razrabotchik/lotsman/internal/audit"
 	"github.com/razrabotchik/lotsman/internal/auth"
 	"github.com/razrabotchik/lotsman/internal/catalog"
 	"github.com/razrabotchik/lotsman/internal/domain"
@@ -37,6 +40,9 @@ type runner struct {
 	// after the gate, never instead of it (FR-44a).
 	approval approver
 
+	// audit receives one event per completed call.
+	audit audit.Sink
+
 	// refusal, when set, is why this operation cannot be called at all. The
 	// operation is still published -- discovery is not permission, and a model
 	// that can read the refusal is better off than one guessing why an
@@ -56,6 +62,53 @@ func (r *runner) callable() bool { return r.refusal == "" }
 // nil invocation is a caller with no client, which cannot be asked and
 // therefore fails closed exactly like a client that declared no capability.
 func (r *runner) call(ctx context.Context, invocation *mcp.CallToolRequest, args map[string]any) (response.Result, error) {
+	// §7.5's last stage. It wraps the call rather than living inside it so
+	// that there is no way out of a call that skips the record: every return
+	// below, including the ones added later, passes through here.
+	started := time.Now()
+	result, err := r.execute(ctx, invocation, args)
+	r.record(started, result, err)
+	return result, err
+}
+
+// record writes what happened (§7.4). It never fails a call: a runtime that
+// stops working because it cannot describe itself has its priorities
+// backwards.
+func (r *runner) record(started time.Time, result response.Result, err error) {
+	if r.audit == nil {
+		return
+	}
+	event := audit.Event{
+		SchemaVersion: audit.SchemaVersion,
+		Time:          started,
+		Operation:     string(r.tool.OperationKey),
+		Tool:          r.tool.Name,
+		Effect:        string(r.tool.Effect.Effect),
+		Decision:      audit.DecisionExecuted,
+		Origin:        origin(r.tool),
+		Method:        r.tool.Method,
+		Path:          r.tool.PathTemplate,
+		Status:        result.Status,
+		DurationMs:    time.Since(started).Milliseconds(),
+		ResponseBytes: result.ReceivedBytes,
+		Truncated:     result.Truncated,
+	}
+	var ask *pending
+	switch {
+	case errors.As(err, &ask):
+		// Waiting for a human is not a refusal and not an execution: nothing
+		// reached the network, and nothing was denied either (FR-44).
+		event.Decision = audit.DecisionInputRequired
+	case err != nil:
+		event.Decision = audit.DecisionRefused
+		event.Reason = string(errs.ClassOf(err))
+		event.Status = 0
+	}
+	r.audit.Record(event)
+}
+
+// execute runs the runtime order for validated arguments.
+func (r *runner) execute(ctx context.Context, invocation *mcp.CallToolRequest, args map[string]any) (response.Result, error) {
 	if !r.callable() {
 		return response.Result{}, errs.Errorf(r.refusalClass, "lotsman: %s %s %s",
 			r.tool.Method, r.tool.PathTemplate, r.refusal)
@@ -116,11 +169,12 @@ func (r *runner) call(ctx context.Context, invocation *mcp.CallToolRequest, args
 }
 
 // newRunners prepares one runner per published tool, in catalog order.
-func newRunners(tools []catalog.Tool, client *http.Client, baseURL string, outbound *egress.Policy, log logger, approval approver) []runner {
+func newRunners(tools []catalog.Tool, client *http.Client, baseURL string, outbound *egress.Policy,
+	log logger, approval approver, sink audit.Sink) []runner {
 	runners := make([]runner, 0, len(tools))
 	for i := range tools {
 		tool := &tools[i]
-		prepared := runner{tool: tool, baseURL: baseURL, egress: outbound, approval: approval}
+		prepared := runner{tool: tool, baseURL: baseURL, egress: outbound, approval: approval, audit: sink}
 
 		switch {
 		case len(tool.PolicyBlockers) > 0:

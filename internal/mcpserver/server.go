@@ -12,6 +12,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/razrabotchik/lotsman/internal/audit"
 	"github.com/razrabotchik/lotsman/internal/buildinfo"
 	"github.com/razrabotchik/lotsman/internal/catalog"
 	"github.com/razrabotchik/lotsman/internal/config"
@@ -65,6 +66,12 @@ type Options struct {
 	// The empty value is the documented default, `always`.
 	Approval config.Approval
 
+	// Audit receives one event per completed call (§7.5). Nil records
+	// nothing, which is what a one-off `explain-call` wants and what a
+	// deployed server must not be left with by accident -- so `serve` sets
+	// it rather than relying on this default.
+	Audit audit.Sink
+
 	// now is the clock used by tool handlers; tests override it.
 	now func() time.Time
 }
@@ -110,6 +117,14 @@ func (o *Options) approval() config.Approval {
 		return config.ApprovalAlways
 	}
 	return o.Approval
+}
+
+// auditSink is where completed calls are recorded.
+func (o *Options) auditSink() audit.Sink {
+	if o.Audit != nil {
+		return o.Audit
+	}
+	return audit.Discard{}
 }
 
 func (o *Options) clock() func() time.Time {
@@ -160,7 +175,7 @@ func New(opts *Options) *mcp.Server {
 
 	outbound := opts.egressPolicy()
 	runners := newRunners(catalogTools(opts.Catalog), opts.httpClient(), opts.BaseURL, &outbound,
-		opts.logger(), approver{mode: opts.approval(), log: opts.logger()})
+		opts.logger(), approver{mode: opts.approval(), log: opts.logger()}, opts.auditSink())
 
 	// Two front doors, one call path. In search mode the catalog is too large
 	// to publish as tools, so five meta-tools stand in front of the same
