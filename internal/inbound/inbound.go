@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"log/slog"
 	"net/http"
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
@@ -41,7 +42,10 @@ func (g Guard) Middleware(next http.Handler) http.Handler {
 // Resolving the secret is part of startup, not of the first request: an
 // endpoint that will refuse every caller because a `tokenRef` points at an
 // unset variable should say so while someone is still watching.
-func New(inbound config.InboundAuth) (Guard, error) {
+func New(inbound *config.InboundAuth, log *slog.Logger, client *http.Client) (Guard, error) {
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
 	switch inbound.Mode {
 	case "", config.InboundNone:
 		return Guard{}, nil
@@ -66,9 +70,8 @@ func New(inbound config.InboundAuth) (Guard, error) {
 				return challenge(verify(next))
 			},
 		}, nil
-	case config.InboundOAuth:
-		return Guard{}, errs.Errorf(errs.ClassUnsupported,
-			"inbound: oauth mode is not implemented in this build (feature 005)")
+	case config.InboundModeOAuth:
+		return oauthGuard(&inbound.OAuth, log, client)
 	default:
 		return Guard{}, errs.Errorf(errs.ClassUsage,
 			"inbound: mode %q is not none, static-bearer or oauth", inbound.Mode)
