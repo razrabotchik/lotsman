@@ -159,12 +159,12 @@ func TestInboundAuthValidation(t *testing.T) {
 			class: errs.ClassUsage,
 		},
 		{
-			// Not a typo and not a usage error: a capability this build does
-			// not have. The exit code has to say so, or an operator reads it
-			// as a misspelling and fixes the spelling.
-			name:  "oauth, which this build does not implement",
+			// `oauth` is implemented (feature 005), so an oauth section with
+			// nothing in it is an incomplete configuration rather than a
+			// missing capability.
+			name:  "oauth with nothing configured",
 			yaml:  "server:\n  inboundAuth:\n    mode: oauth\n",
-			class: errs.ClassUnsupported,
+			class: errs.ClassUsage,
 		},
 	}
 	for _, tc := range cases {
@@ -202,5 +202,70 @@ server:
 	// rather than left empty.
 	if bare := Resolve(nil, Environment{}, Overrides{}); bare.Server.InboundAuth.Mode != InboundNone {
 		t.Errorf("default mode = %q, want none", bare.Server.InboundAuth.Mode)
+	}
+}
+
+// FR-80–81 at load time. Nothing here is inferred: an issuer lotsman guessed
+// at, or a resource derived from a bind address, would be a value the
+// operator never checked against what their provider actually mints.
+func TestInboundOAuthValidation(t *testing.T) {
+	const valid = `apiVersion: lotsman.dev/v1alpha1
+server:
+  inboundAuth:
+    mode: oauth
+    oauth:
+      issuer: https://issuer.example.com
+      resource: https://mcp.example.com/
+      jwksURI: https://issuer.example.com/jwks
+`
+	if _, err := Parse([]byte(valid)); err != nil {
+		t.Fatalf("a complete oauth section was refused: %v", err)
+	}
+
+	cases := []struct{ name, oauth string }{
+		{name: "no issuer", oauth: "resource: https://mcp.example.com/\n      jwksURI: https://i.example.com/jwks"},
+		{name: "no resource", oauth: "issuer: https://i.example.com\n      jwksURI: https://i.example.com/jwks"},
+		{name: "no key set", oauth: "issuer: https://i.example.com\n      resource: https://mcp.example.com/"},
+		{
+			name:  "an issuer over plain http",
+			oauth: "issuer: http://i.example.com\n      resource: https://mcp.example.com/\n      jwksURI: https://i.example.com/jwks",
+		},
+		{
+			name:  "a key set over plain http",
+			oauth: "issuer: https://i.example.com\n      resource: https://mcp.example.com/\n      jwksURI: http://i.example.com/jwks",
+		},
+		{
+			name:  "a resource that is not a URI",
+			oauth: "issuer: https://i.example.com\n      resource: mcp\n      jwksURI: https://i.example.com/jwks",
+		},
+		{
+			// A resource server that accepts an HMAC algorithm accepts a
+			// token signed with the key it verifies with.
+			name: "a symmetric algorithm",
+			oauth: "issuer: https://i.example.com\n      resource: https://mcp.example.com/\n" +
+				"      jwksURI: https://i.example.com/jwks\n      algorithms: [HS256]",
+		},
+		{
+			name: "alg none, written out",
+			oauth: "issuer: https://i.example.com\n      resource: https://mcp.example.com/\n" +
+				"      jwksURI: https://i.example.com/jwks\n      algorithms: [none]",
+		},
+		{
+			name: "a TTL that is not a duration",
+			oauth: "issuer: https://i.example.com\n      resource: https://mcp.example.com/\n" +
+				"      jwksURI: https://i.example.com/jwks\n      jwksTTL: soon",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			document := "apiVersion: lotsman.dev/v1alpha1\nserver:\n  inboundAuth:\n    mode: oauth\n    oauth:\n      " + tc.oauth + "\n"
+			_, err := Parse([]byte(document))
+			if err == nil {
+				t.Fatal("the configuration was accepted")
+			}
+			if errs.ClassOf(err) != errs.ClassUsage {
+				t.Errorf("class = %s, want usage", errs.ClassOf(err))
+			}
+		})
 	}
 }

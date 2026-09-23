@@ -1,7 +1,9 @@
 package config
 
 import (
+	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -158,14 +160,14 @@ const (
 	// not implement it; feature 005 does. It is named here so that a
 	// configuration written against the frozen specification is refused
 	// rather than silently read as `none`.
-	InboundOAuth InboundMode = "oauth"
+	InboundModeOAuth InboundMode = "oauth"
 )
 
 // Known reports whether the mode is one the specification defines. It is not
 // the same question as whether this build serves it.
 func (m InboundMode) Known() bool {
 	switch m {
-	case InboundNone, InboundStaticBearer, InboundOAuth:
+	case InboundNone, InboundStaticBearer, InboundModeOAuth:
 		return true
 	default:
 		return false
@@ -184,6 +186,56 @@ type InboundAuth struct {
 	// headers are whatever the caller decided to claim, so they are removed
 	// before any handler can read them.
 	TrustedProxies []string `yaml:"trustedProxies,omitempty"`
+	// OAuth configures the resource-server mode (FR-80-82).
+	OAuth InboundOAuth `yaml:"oauth,omitempty"`
+}
+
+// DefaultJWKSTTL is how long a fetched key set is trusted without asking
+// again. It is a decision about how long a revoked key keeps working, so it
+// is a named constant rather than a number inside a function.
+const DefaultJWKSTTL = 15 * time.Minute
+
+// DefaultInboundAlgorithms are the signing algorithms accepted when the
+// operator names none.
+//
+// Asymmetric only, and deliberately short. A resource server that accepts an
+// HMAC algorithm accepts a token signed with a key it also uses to verify,
+// which is how a published JWKS becomes a shared secret.
+var DefaultInboundAlgorithms = []string{"RS256", "ES256"}
+
+// InboundOAuth is what lotsman needs in order to be a resource server for
+// somebody else's authorization server (docs/spec.md §8).
+type InboundOAuth struct {
+	// Issuer is the authorization server that mints acceptable tokens, and
+	// the value a token's `iss` must equal.
+	Issuer string `yaml:"issuer,omitempty"`
+	// Resource is this endpoint's identifier (RFC 9728): what the metadata
+	// document publishes, and what a client asks its authorization server for
+	// a token *for*.
+	Resource string `yaml:"resource,omitempty"`
+	// Audience is what a token's `aud` must contain. It defaults to Resource,
+	// which is what RFC 8707 intends; it exists as its own field because some
+	// providers mint an `aud` of an API identifier or a client id that is not
+	// the resource URL, and an operator who cannot say so has no way in.
+	Audience string `yaml:"audience,omitempty"`
+	// RequiredScopes must all be present. An empty list means authentication
+	// alone is the requirement, which is a decision an operator may take.
+	RequiredScopes []string `yaml:"requiredScopes,omitempty"`
+	// Algorithms is the allowlist of signing algorithms. It is configuration
+	// because the alternative is reading it from the token, which is the
+	// oldest way to turn a public key into a shared secret.
+	Algorithms []string `yaml:"algorithms,omitempty"`
+	// JWKSURI is where the issuer's public keys live.
+	JWKSURI string `yaml:"jwksURI,omitempty"`
+	// JWKSTTL is how long a fetched key set is trusted, as a Go duration.
+	JWKSTTL string `yaml:"jwksTTL,omitempty"`
+	// AuthorizationServers is what the metadata document tells a client to
+	// go to. It defaults to Issuer; more than one is for a deployment that
+	// accepts tokens from a federation.
+	AuthorizationServers []string `yaml:"authorizationServers,omitempty"`
+	// ScopesSupported is advertised in the metadata so a client can ask for
+	// the right thing the first time. It defaults to RequiredScopes.
+	ScopesSupported []string `yaml:"scopesSupported,omitempty"`
 }
 
 // Server mirrors the server section of the configuration file: how lotsman is
@@ -388,10 +440,10 @@ func validateInboundAuth(inbound *InboundAuth) error {
 		if _, err := ParseSecretRef(string(inbound.TokenRef)); err != nil {
 			return err
 		}
-	case InboundOAuth:
-		return errs.Errorf(errs.ClassUnsupported,
-			"config: server.inboundAuth.mode oauth is not implemented in this build (feature 005); "+
-				"it is refused rather than read as none")
+	case InboundModeOAuth:
+		if err := validateInboundOAuth(&inbound.OAuth); err != nil {
+			return err
+		}
 	default:
 		return errs.Errorf(errs.ClassUsage,
 			"config: server.inboundAuth.mode %q is not none, static-bearer or oauth", inbound.Mode)
@@ -400,6 +452,68 @@ func validateInboundAuth(inbound *InboundAuth) error {
 		if err := validateTrustedProxy(i, proxy); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// validateInboundOAuth refuses a resource-server configuration that could
+// only produce an endpoint refusing every caller for a reason nobody can see.
+//
+// Nothing here is inferred. An issuer lotsman guessed at, or a resource it
+// derived from a bind address, would be a value the operator never checked
+// against what their identity provider actually mints.
+func validateInboundOAuth(oauth *InboundOAuth) error {
+	if err := requireHTTPS("issuer", oauth.Issuer); err != nil {
+		return err
+	}
+	if oauth.Resource == "" {
+		return errs.Errorf(errs.ClassUsage,
+			"config: server.inboundAuth.oauth.resource is required: it is this endpoint's "+
+				"identifier, and the audience a token has to carry (RFC 9728)")
+	}
+	if parsed, err := url.Parse(oauth.Resource); err != nil || !parsed.IsAbs() {
+		return errs.Errorf(errs.ClassUsage,
+			"config: server.inboundAuth.oauth.resource %q is not an absolute URI", oauth.Resource)
+	}
+	if err := requireHTTPS("jwksURI", oauth.JWKSURI); err != nil {
+		return err
+	}
+	for i, algorithm := range oauth.Algorithms {
+		if strings.HasPrefix(algorithm, "HS") || algorithm == "none" {
+			return errs.Errorf(errs.ClassUsage,
+				"config: server.inboundAuth.oauth.algorithms[%d] %q is not asymmetric; a resource "+
+					"server that accepts it accepts a token signed with the key it verifies with", i, algorithm)
+		}
+	}
+	if oauth.JWKSTTL != "" {
+		ttl, err := time.ParseDuration(oauth.JWKSTTL)
+		if err != nil || ttl <= 0 {
+			return errs.Errorf(errs.ClassUsage,
+				"config: server.inboundAuth.oauth.jwksTTL %q is not a positive duration", oauth.JWKSTTL)
+		}
+	}
+	for i, server := range oauth.AuthorizationServers {
+		if err := requireHTTPS(fmt.Sprintf("authorizationServers[%d]", i), server); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// requireHTTPS refuses a URL that is missing or not HTTPS.
+//
+// Plain HTTP would put a token, or the keys that validate one, on a wire
+// anybody can read — and localhost is not an exception worth carving out
+// here, because a development shortcut in an authentication path is a
+// production configuration eventually.
+func requireHTTPS(field, value string) error {
+	if value == "" {
+		return errs.Errorf(errs.ClassUsage, "config: server.inboundAuth.oauth.%s is required", field)
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+		return errs.Errorf(errs.ClassUsage,
+			"config: server.inboundAuth.oauth.%s %q is not an https URL", field, value)
 	}
 	return nil
 }

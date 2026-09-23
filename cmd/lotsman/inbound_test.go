@@ -168,11 +168,10 @@ func TestInboundTokenNeverReachesTheUpstream(t *testing.T) {
 	}
 }
 
-// TestOAuthModeRefusesToStart: a configuration written against the frozen
-// specification must fail loudly on a build that cannot carry it out. The
-// alternative is an operator who believes their endpoint is behind an
-// authorization server.
-func TestOAuthModeRefusesToStart(t *testing.T) {
+// An oauth configuration this build cannot act on is a usage error naming
+// the field, not a missing capability: `mode: oauth` is implemented now
+// (feature 005), so the thing that can be wrong is the configuration.
+func TestIncompleteOAuthConfigurationRefusesToStart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "lotsman.yaml")
 	if err := os.WriteFile(path, []byte(`apiVersion: lotsman.dev/v1alpha1
 server:
@@ -184,12 +183,43 @@ server:
 	out, err := exec.Command(buildBinary(t), "serve", miniSpecPath(t), "--lax",
 		"--transport", "http", "--listen", "127.0.0.1:0", "--config", path).CombinedOutput()
 	if err == nil {
-		t.Fatalf("a build without oauth served an oauth configuration\n%s", out)
+		t.Fatalf("an oauth mode with nothing configured started\n%s", out)
 	}
-	if code := exitCodeOf(t, err); code != 4 {
-		t.Errorf("exit code = %d, want 4 (unsupported)", code)
+	if code := exitCodeOf(t, err); code != 2 {
+		t.Errorf("exit code = %d, want 2 (usage)", code)
 	}
-	if !strings.Contains(string(out), "005") {
-		t.Errorf("the refusal does not say where the capability is coming from:\n%s", out)
+	if !strings.Contains(string(out), "issuer") {
+		t.Errorf("the refusal does not name the missing field:\n%s", out)
+	}
+}
+
+// A complete one starts, and starts without reaching the identity provider:
+// keys are fetched when a token first needs verifying, so a provider that is
+// slow or briefly down does not stop a deployment from coming up.
+func TestOAuthEndpointStartsWithoutReachingTheProvider(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "lotsman.yaml")
+	if err := os.WriteFile(path, []byte(`apiVersion: lotsman.dev/v1alpha1
+server:
+  inboundAuth:
+    mode: oauth
+    oauth:
+      issuer: https://issuer.invalid
+      resource: https://mcp.example.com/
+      jwksURI: https://issuer.invalid/jwks
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	endpoint, _ := serveHTTPEnv(t, nil, "--listen", "127.0.0.1:0", miniSpecPath(t), "--lax", "--config", path)
+
+	// It is up, and it refuses: nothing can be verified against an issuer
+	// that does not resolve, so nothing is admitted.
+	res, err := http.Post(endpoint, "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", res.StatusCode)
 	}
 }

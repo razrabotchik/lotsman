@@ -165,6 +165,7 @@ func applyServerFile(resolved *ServerRuntime, file *Server) {
 	}
 	resolved.InboundAuth.TokenRef = file.InboundAuth.TokenRef
 	resolved.InboundAuth.TrustedProxies = append([]string(nil), file.InboundAuth.TrustedProxies...)
+	resolved.InboundAuth.OAuth = file.InboundAuth.OAuth
 }
 
 // applyServerFlags is the last word, per FR-62.

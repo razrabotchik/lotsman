@@ -287,7 +287,7 @@ func runTransport(ctx context.Context, runtime config.Runtime, opts *mcpserver.O
 	// The guard is built before the socket exists, so a `tokenRef` pointing
 	// at an unset variable is a startup failure rather than an endpoint that
 	// refuses every caller while looking healthy.
-	guard, err := inbound.New(runtime.Server.InboundAuth)
+	guard, err := inbound.New(&runtime.Server.InboundAuth, opts.Logger, nil)
 	if err != nil {
 		return err
 	}

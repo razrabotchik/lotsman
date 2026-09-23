@@ -8,6 +8,7 @@ module github.com/razrabotchik/lotsman
 go 1.25.7
 
 require (
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/pb33f/libopenapi v0.38.7
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2

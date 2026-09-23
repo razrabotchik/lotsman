@@ -1,6 +1,7 @@
 package inbound
 
 import (
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,7 +17,7 @@ const canary = "CANARY-inbound-2f81-DO-NOT-LEAK"
 // the bind rule reads (FR-70): "nothing authenticates this" has to be a fact
 // another package can act on, not a comment.
 func TestNoneAuthenticatesNothingAndAdmitsIt(t *testing.T) {
-	guard, err := New(config.InboundAuth{})
+	guard, err := New(&config.InboundAuth{}, nil, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -35,10 +36,10 @@ func TestNoneAuthenticatesNothingAndAdmitsIt(t *testing.T) {
 // FR-79: a shared secret admits the caller who has it and nobody else.
 func TestStaticBearer(t *testing.T) {
 	t.Setenv("LOTSMAN_TEST_INBOUND", canary)
-	guard, err := New(config.InboundAuth{
+	guard, err := New(&config.InboundAuth{
 		Mode:     config.InboundStaticBearer,
 		TokenRef: config.SecretRef("env:LOTSMAN_TEST_INBOUND"),
-	})
+	}, nil, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -82,10 +83,10 @@ func TestStaticBearer(t *testing.T) {
 // deployment, would tell anyone who can reach the port how it is configured.
 func TestTheChallengeSaysHowWithoutSayingWhy(t *testing.T) {
 	t.Setenv("LOTSMAN_TEST_INBOUND", canary)
-	guard, err := New(config.InboundAuth{
+	guard, err := New(&config.InboundAuth{
 		Mode:     config.InboundStaticBearer,
 		TokenRef: config.SecretRef("env:LOTSMAN_TEST_INBOUND"),
-	})
+	}, nil, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -111,30 +112,33 @@ func TestTheChallengeSaysHowWithoutSayingWhy(t *testing.T) {
 // everyone. It is a startup failure, while someone is still watching.
 func TestAnEmptyTokenIsAStartupFailure(t *testing.T) {
 	t.Setenv("LOTSMAN_TEST_INBOUND", "")
-	_, err := New(config.InboundAuth{
+	_, err := New(&config.InboundAuth{
 		Mode:     config.InboundStaticBearer,
 		TokenRef: config.SecretRef("env:LOTSMAN_TEST_INBOUND"),
-	})
+	}, nil, nil)
 	if err == nil {
 		t.Fatal("an empty inbound token was accepted")
 	}
 }
 
-// `oauth` is refused as a capability this build lacks, by name, rather than
-// read as `none` -- the difference between an operator who knows their
-// endpoint is unauthenticated and one who believes it is not.
-func TestOAuthModeIsRefusedAsMissingRatherThanIgnored(t *testing.T) {
-	_, err := New(config.InboundAuth{Mode: config.InboundOAuth})
+// A mode nobody defines is refused rather than read as `none`: the
+// difference between an operator who knows their endpoint is unauthenticated
+// and one who believes it is not.
+func TestAnUnknownModeIsRefusedRatherThanIgnored(t *testing.T) {
+	guard, err := New(&config.InboundAuth{Mode: "mtls"}, nil, nil)
 	if err == nil {
-		t.Fatal("oauth mode was accepted by a build that does not implement it")
+		t.Fatal("an unknown inbound mode was accepted")
 	}
-	if errs.ClassOf(err) != errs.ClassUnsupported {
-		t.Errorf("class = %s, want unsupported", errs.ClassOf(err))
+	if errs.ClassOf(err) != errs.ClassUsage {
+		t.Errorf("class = %s, want usage", errs.ClassOf(err))
 	}
-	if !strings.Contains(err.Error(), "005") {
-		t.Errorf("the refusal does not say where the capability is coming from: %v", err)
+	if guard.Required {
+		t.Error("a guard that failed to build claims to require authentication")
 	}
 }
+
+// discardLogger is the logger a test that is not about logging wants.
+func discardLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
 
 func spy(reached *bool) http.Handler {
 	return http.HandlerFunc(func(http.ResponseWriter, *http.Request) { *reached = true })
