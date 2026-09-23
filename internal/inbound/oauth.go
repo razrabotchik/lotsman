@@ -117,11 +117,15 @@ func oauthGuard(oauth *config.InboundOAuth, log *slog.Logger, client *http.Clien
 	}
 	keys := newKeySet(oauth.JWKSURI, ttl, client)
 	verify := auth.RequireBearerToken(oauthVerifier(oauth, keys, log), &auth.RequireBearerTokenOptions{
-		Scopes:    oauth.RequiredScopes,
-		ClockSkew: clockSkew,
+		Scopes: oauth.RequiredScopes,
+		// So that a 401 tells a client where to get a token instead of
+		// leaving it to guess (RFC 9728 §5.1, FR-84).
+		ResourceMetadataURL: metadataURL(oauth.Resource),
+		ClockSkew:           clockSkew,
 	})
 	return Guard{
 		Required:   true,
+		Metadata:   metadataHandler(oauth),
 		middleware: func(next http.Handler) http.Handler { return challenge(verify(next)) },
 	}, nil
 }

@@ -223,3 +223,67 @@ server:
 		t.Errorf("status = %d, want 401", res.StatusCode)
 	}
 }
+
+// TestMetadataIsTheOnlyRouteOutsideTheGuard is the assertion that keeps the
+// single exception single. A client reads the metadata document in order to
+// find out how to authenticate, so it cannot require authentication; nothing
+// else on the bind gets the same treatment.
+func TestMetadataIsTheOnlyRouteOutsideTheGuard(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "lotsman.yaml")
+	if err := os.WriteFile(path, []byte(`apiVersion: lotsman.dev/v1alpha1
+server:
+  inboundAuth:
+    mode: oauth
+    oauth:
+      issuer: https://issuer.invalid
+      resource: https://mcp.example.com/
+      jwksURI: https://issuer.invalid/jwks
+      requiredScopes: [mcp:call]
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	endpoint, _ := serveHTTPEnv(t, nil, "--listen", "127.0.0.1:0", miniSpecPath(t), "--lax", "--config", path)
+
+	t.Run("the document answers without a token", func(t *testing.T) {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+			endpoint+"/.well-known/oauth-protected-resource", http.NoBody)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		defer func() { _ = res.Body.Close() }()
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200", res.StatusCode)
+		}
+		var document map[string]any
+		if err := json.NewDecoder(res.Body).Decode(&document); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if document["resource"] != "https://mcp.example.com/" {
+			t.Errorf("resource = %v", document["resource"])
+		}
+	})
+
+	t.Run("the MCP endpoint still refuses, and says where to go", func(t *testing.T) {
+		res, err := http.Post(endpoint, "application/json", strings.NewReader(`{}`))
+		if err != nil {
+			t.Fatalf("post: %v", err)
+		}
+		defer func() { _ = res.Body.Close() }()
+		if res.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401", res.StatusCode)
+		}
+		if got := res.Header.Get("WWW-Authenticate"); !strings.Contains(got, "resource_metadata=") {
+			t.Errorf("WWW-Authenticate = %q, want it to name the metadata document", got)
+		}
+	})
+
+	t.Run("metrics still refuse", func(t *testing.T) {
+		if status, body := scrape(t, endpoint, ""); status != http.StatusUnauthorized {
+			t.Errorf("an unauthenticated scrape returned %d:\n%s", status, body)
+		}
+	})
+}

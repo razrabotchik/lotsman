@@ -18,14 +18,22 @@ understating what is already there. The algorithm allowlist stays configuration 
       → An `issuer` that is not an HTTPS URL is refused at load. So is a `resource` that is not
         an absolute URI: it is the audience value a token has to carry, and a typo there is an
         endpoint that refuses every token for a reason nobody can see.
-- [ ] T402 inbound: the Protected Resource Metadata document (RFC 9728, FR-80), served from
+- [x] T402 inbound: the Protected Resource Metadata document (RFC 9728, FR-80), served from
       `/.well-known/oauth-protected-resource` **outside** the guard
       → The one route that will ever live outside it, and it needs a test saying so: the MCP
         endpoint and `/metrics` on the same bind must still refuse without a token.
       → Built with `oauthex.ProtectedResourceMetadata` and served by
         `auth.ProtectedResourceMetadataHandler`; the SDK already implements the CORS rules that
         make a browser-based client able to read it.
-- [ ] T403 [P] challenges name the document (FR-84, RFC 9728 §5.1): a 401 from the MCP endpoint
+      → It skips authentication and *only* authentication: mounted inside the Host and Origin
+        checks, not in front of them. The exception is about the loop a token-gated discovery
+        document would create, not about the route being special.
+      → What it says is thin on purpose — the resource, the authorization servers, the scopes.
+        It is public, so it carries nothing an operator would mind a stranger reading, and a test
+        asserts the JWKS URI is not in it.
+      → The well-known URL is derived from the resource identifier rather than configured: two
+        fields that have to agree are two fields that will not.
+- [x] T403 [P] challenges name the document (FR-84, RFC 9728 §5.1): a 401 from the MCP endpoint
       carries `resource_metadata="…"` so a client that arrived with nothing learns where to go
       → 004's bare `WWW-Authenticate: Bearer` stays the answer for `static-bearer`, which has no
         metadata to point at. The scheme is the same; what it advertises is not.
