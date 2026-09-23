@@ -9,8 +9,8 @@ alpha, and where the evidence is. A criterion is not marked met because someone 
 implementing it; it is marked met because a test fails when it stops being true.
 
 Scope of this review: features 001 (core runtime), 002 (search mode), 003 (selection, overrides
-and interactive approval — the M2 tail) and 004 (the production HTTP profile — M3), all complete
-— 45, 14, 12 and 21 tasks respectively.
+and interactive approval — the M2 tail), 004 (the production HTTP profile — M3) and 005 (inbound
+OAuth — the M3 tail), all complete — 45, 14, 12, 21 and 15 tasks respectively.
 
 | # | Criterion | Status | Evidence |
 |---|---|---|---|
@@ -51,8 +51,11 @@ MCP `2026-07-28`, and "stateless" is a tested property rather than a flag: two p
 alternating proxy serve one session's worth of traffic, approval round trip included. The endpoint
 binds loopback unless told otherwise, refuses to start on a public interface with nothing
 authenticating it, and checks `Origin` and `Host` before a request reaches a handler. Inbound
-authorization is `none` or a static bearer; the OAuth resource server is feature 005 and a config
-asking for it is refused by name rather than read as `none`.
+authorization is `none`, a static bearer, or a full OAuth resource server (005): issuer, audience,
+expiry, scopes and signature against a cached key set, or RFC 7662 introspection for opaque
+tokens. Every refusal is byte-identical from outside; the reason goes to the log. The Protected
+Resource Metadata document answers without a token, because a client reads it in order to find out
+how to authenticate — and it is the only route on the bind that does.
 
 The catalog can be replaced under a running server, by signal or by watching the document, and a
 candidate that fails leaves the working catalog serving. Every completed call leaves an audit
@@ -60,9 +63,25 @@ record — operation, effect, decision, origin without its query, status, timing
 same events feed a `/metrics` endpoint in the Prometheus text format, behind the same inbound
 authorization as everything else.
 
+## M3's own exit criterion
+
+The roadmap states one for each milestone. M3's is *«≥2 replicas за round-robin; conformance и
+auth/egress security tests зелёные»* (docs/spec.md §12).
+
+- **Two replicas behind a round robin**: `TestHTTPIsStatelessAcrossReplicas` — two processes, an
+  alternating proxy, one session's worth of traffic, no sticky routing.
+- **Egress security tests**: unchanged from 001–003 and still green; acceptance criterion 8.
+- **Auth security tests**: green as of 005. Inbound authorization has a production mode, and its
+  refusals are a table asserted against the real middleware rather than a helper.
+- **Conformance**: green for the suite that exists (`TestHTTPConformance`, `TestStdioConformance`,
+  both transports, JSON-RPC level). The external cross-SDK runner has still not been run, which is
+  the same gap criterion 10 names and is not closed by this feature.
+
+So: met, with conformance qualified exactly as criterion 10 qualifies it.
+
 ## What it is not
 
-No OAuth — neither inbound (feature 005) nor upstream (M4) — no recipes, no multi-API namespaces.
+No upstream OAuth (M4), no recipes, no multi-API namespaces.
 Cookie parameters, form-urlencoded bodies and Swagger 2.0 are refused with reason codes rather
 than half-supported. Search ranking is lexical; semantic retrieval would need the same benchmark
 to earn a claim. No container image is pushed anywhere: building one is done and tested, but
@@ -114,6 +133,19 @@ resolve names itself, and the document still pointed at the old ones.
   to push to (ADR-0015).
 - **The reload watcher compares size and modification time.** An edit that changes neither is
   missed; `SIGHUP` covers the operator who needs more than that.
+- **A validated subject is recorded, not enforced.** The audit event names who asked; no rule can
+  match on it. Per-subject authorization is RBAC, and §8 defers RBAC to the gateway layer — a
+  half-built version would be worse than none, because an operator who saw `subject` in a rule
+  would reasonably assume the rest.
+- **A cached key set means a revoked key keeps working for up to its TTL** (15 minutes by
+  default). An unknown `kid` provokes at most one refetch per minute, which bounds what a forged
+  one can cost; the same bound means a rotation can take a minute to be noticed.
+- **Introspection puts the authorization server on the hot path.** Every call becomes an
+  authenticated round trip to the provider, bounded by a timeout that refuses rather than waits.
+  In exchange a revoked token stops working immediately instead of at its expiry.
+- **DPoP and sender-constrained tokens are not implemented**, because the Go SDK does not
+  implement them — its own conformance baseline excludes `auth/dpop`. Claiming them would be a
+  claim about somebody else's code.
 - **Metrics have no authentication of their own.** `/metrics` sits behind whatever inbound
   authorization the MCP endpoint has, which means an unauthenticated loopback deployment exposes
   it to anything on the machine — the same trust boundary the MCP endpoint already has there.

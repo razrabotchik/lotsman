@@ -91,20 +91,39 @@ understating what is already there. The algorithm allowlist stays configuration 
 
 ## Step 4: Opaque tokens  ✅ CHECKPOINT: a provider that issues no JWTs is still usable
 
-- [ ] T411 config + inbound: RFC 7662 introspection — endpoint, client id, client secret through
+- [x] T411 config + inbound: RFC 7662 introspection — endpoint, client id, client secret through
       the existing secret references, timeout
       → Configured *instead of* a JWKS, not alongside: two ways to validate one token is two
-        answers waiting to disagree. The config refuses both at once.
-- [ ] T412 introspection: `active: false`, a non-200, a timeout and an unparseable body are all
+        answers waiting to disagree. The config refuses both at once, and refuses neither.
+      → The timeout is on the hot path of every request, so it is short and it refuses rather than
+        waits. Introspection makes the authorization server part of this endpoint's availability;
+        it must not also put it in charge of how long a request lasts.
+- [x] T412 introspection: `active: false`, a non-200, a timeout and an unparseable body are all
       refusals; `active: true` carries scopes and subject forward
-- [ ] T413 [P] the canary gains the introspection client secret: two credentials in one process,
+      → `iss` and `aud` are checked here too. RFC 7662 §2.2 says the authorization server *may*
+        return them, and "may" is not a validation: an absent `aud` is a refusal, because reading
+        the omission as "for me" would accept every token that server ever issued, for any of its
+        resources.
+- [x] T413 [P] the canary gains the introspection client secret: two credentials in one process,
       neither in any channel
+      → Asserted where the secret actually travels: a provider failing, with the request in the
+        error message, and the log checked for the value. The secret joins the redaction registry
+        like every other credential, and a separate test proves it is sent as client
+        authentication rather than as the token being asked about.
 
 ## Step 5: Docs and the criterion  ✅ CHECKPOINT: M3's exit criterion is answered
 
-- [ ] T414 the audit event carries the subject — who asked, never what they hold
+- [x] T414 the audit event carries the subject — who asked, never what they hold
       → Recorded, not enforced. Per-subject authorization is RBAC and §8 defers RBAC to the
         gateway layer; an operator who saw `subject` in a rule would reasonably assume the rest.
-- [ ] T415 [P] docs: an ADR for the resource-server decisions (including what FR-82 means for
-      something that registers no clients), README, and M3's exit criterion in
-      docs/release-v0.1.0-alpha.md — met, or told plainly what is still missing
+      → It could only be tested end to end: the SDK gives no exported way to put a `TokenInfo`
+        into a context, which is correct of it and meant the assertion had to be a real request.
+        So the test runs a real HTTPS identity provider, points the subprocess at its certificate
+        through `SSL_CERT_FILE` — the way an operator with a private CA would — and reads the
+        subject out of the audit line. The token itself is checked for absence in the same log.
+- [x] T415 [P] docs: ADR-0016, README, and M3's exit criterion in docs/release-v0.1.0-alpha.md
+      → The criterion is answered with conformance qualified exactly as criterion 10 qualifies it:
+        green for the suite that exists, and the external cross-SDK runner still not run. Reading
+        it down to what shipped would have been the easy version.
+      → Four known limits added, including the two this feature created: a cached key set means a
+        revoked key works for up to its TTL, and introspection puts the provider on the hot path.

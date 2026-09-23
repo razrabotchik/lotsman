@@ -176,10 +176,37 @@ server:
   allowedOrigins: [https://console.example.com]
   drainTimeout: 30s
   inboundAuth:
-    mode: static-bearer           # none | static-bearer (oauth is feature 005)
+    mode: static-bearer           # none | static-bearer | oauth
     tokenRef: env:LOTSMAN_INBOUND_TOKEN
     trustedProxies: ["10.0.0.0/8"]
 ```
+
+For production, put your own identity provider in front of it. lotsman is a resource server, not
+an authorization server: it issues nothing and registers nobody.
+
+```yaml
+  inboundAuth:
+    mode: oauth
+    oauth:
+      issuer: https://issuer.example.com
+      resource: https://mcp.example.com/    # what a token's `aud` must carry
+      jwksURI: https://issuer.example.com/jwks
+      requiredScopes: [mcp:call]
+      # …or, for opaque tokens, introspection instead of a key set — never both:
+      # introspection:
+      #   url: https://issuer.example.com/introspect
+      #   clientID: lotsman
+      #   clientSecretRef: env:LOTSMAN_INTROSPECTION_SECRET
+```
+
+Issuer, audience, expiry, scopes and signature are all checked, and the algorithm allowlist is
+yours rather than the token's — a token does not get to nominate how it is verified. Every refusal
+looks identical from outside: same status, same body, same challenge. The reason is in your log,
+where you are.
+
+`/.well-known/oauth-protected-resource` answers without a token, because a client reads it to find
+out how to authenticate. It is the only route that does; the MCP endpoint and `/metrics` on the
+same bind still refuse.
 
 **A public bind with nothing authenticating it does not start.** Not a warning, not a 403 on the
 first call — exit 2, before the socket opens. A deployment that comes up and then denies
@@ -259,7 +286,7 @@ resolved.
 
 ## What is not here yet
 
-OAuth2 — inbound (feature 005) and upstream (M4) — recipes, multi-API namespaces, cookie
+Upstream OAuth2 (M4), recipes, multi-API namespaces, cookie
 parameters, form-urlencoded bodies, Swagger 2.0. No container image is published to a registry:
 one is built and tested, but publishing needs a registry, a signing story and a retention policy.
 
