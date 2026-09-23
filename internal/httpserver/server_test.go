@@ -228,9 +228,10 @@ func TestServeRefusesWithoutAServer(t *testing.T) {
 
 // testServer is a minimal MCP server: these tests are about the guards in
 // front of it, not about what it publishes.
-func testServer(t *testing.T) *mcp.Server {
+func testServer(t *testing.T) func() *mcp.Server {
 	t.Helper()
-	return mcp.NewServer(&mcp.Implementation{Name: "lotsman-test", Version: "v0"}, nil)
+	server := mcp.NewServer(&mcp.Implementation{Name: "lotsman-test", Version: "v0"}, nil)
+	return func() *mcp.Server { return server }
 }
 
 // spy stands in for the MCP handler and records whether a request reached it.

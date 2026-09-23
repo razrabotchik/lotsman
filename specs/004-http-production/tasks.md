@@ -101,24 +101,48 @@ the criterion down to what shipped.
 
 ## Step 3: Hot reload  ✅ CHECKPOINT: acceptance criterion 9
 
-- [ ] T310 mcpserver: reach the catalog through a snapshot taken once at the start of a call
+- [x] T310 mcpserver: reach the catalog through a snapshot taken once at the start of a call
       → §7.6 step 7: calls in flight finish on the catalog they started on. A handler that
         re-reads a pointer mid-call can observe two catalogs in one request, which is the failure
         reload is supposed to prevent rather than introduce.
-- [ ] T311 reload: build candidate → parse, normalize, validate *completely* → digest and diff
+      → The snapshot landed one layer further out than this task assumed, and `mcpserver` needed
+        no change at all: a `Catalog` was already immutable and its runners already hold the tools
+        they were built with. What moves is the whole server, resolved per request by the
+        transport. The task was written expecting to edit the wrong package.
+- [x] T311 reload: build candidate → parse, normalize, validate *completely* → digest and diff
       summary → atomic publish only if the digest changed (FR-72, §7.6)
       → A candidate that fails at any step leaves the working catalog serving and is reported. The
         test that matters feeds a deliberately broken document to a running server and asserts the
         next call still succeeds.
       → An unchanged digest publishes nothing: FR-74's cache hints are a promise that a digest
         moves only on a substantive change.
-- [ ] T312 triggers: `SIGHUP` and an explicit `--watch` with debounce (plan decision 2)
+      → Swapping the server rather than editing its tool list is what makes this atomic at all.
+        `AddTool`/`RemoveTools` on a live server are two critical sections, and a call arriving
+        between them finds no tool — a half-applied reload, which is worse than none.
+      → Which decides where reload is available: a transport that resolves its server once per
+        session cannot be handed a new one, so this is an HTTP property and `--watch` over stdio
+        is refused rather than quietly ignored.
+- [x] T312 triggers: `SIGHUP` and an explicit `--watch` with debounce (plan decision 2)
       → No admin endpoint. A reload endpoint is a new authenticated write surface and belongs to
         the control-plane discussion, not to a transport.
-- [ ] T313 [P] FR-73/FR-74: `tools/list_changed` after a successful publish on stdio and legacy
+      → Polling, not a filesystem notification API: that would be a dependency for the job of
+        noticing a file every couple of seconds, and a poll behaves the same through every kind of
+        mount, including the container volumes this is for.
+      → The debounce waits for the file to stop changing rather than firing on first movement. A
+        document mid-write parses as a broken document, and reporting that failure would be
+        reporting something that was never true.
+- [x] T313 [P] FR-73/FR-74: `tools/list_changed` after a successful publish on stdio and legacy
       stateful connections; the stateless profile gets cache hints and a documented silence
       → Stating that the sessionless profile cannot push is more useful than implying a
         notification an operator would wait for.
+      → And the stdio half of this task turned out not to exist: reload is an HTTP property (see
+        T311), so there is no transport in this build that both reloads and has a connection to
+        notify. `tools/list_changed` is deferred with the reason written down (plan decision 3,
+        revised) rather than implemented for a case that cannot arise.
+      → FR-74 therefore carries the whole weight, and it is two things, not one: `ttlMs` says when
+        to ask again, and the catalog digest in `_meta` says whether the answer changed. The
+        second is the honest half — reload refuses to republish an identical candidate, so a
+        digest moves only when the catalog does.
 
 ## Step 4: Audit and metrics  ✅ CHECKPOINT: an executed call leaves a record, and no record leaks
 

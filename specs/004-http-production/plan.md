@@ -77,6 +77,16 @@ unless someone objects to one.
    get `tools/list_changed` after a successful publish. The stateless profile gets FR-74's cache
    hints and nothing else, because there is no connection to push to — and the docs say so rather
    than implying a guarantee the profile cannot make.
+
+   *Revised during T310–T313.* Reload turned out to be a property of the transport rather than of
+   the server: publishing works by swapping the value a transport resolves **per request**, which
+   a stdio session — one server for its whole life — never does. Adding and removing tools on a
+   live server instead would be two critical sections with a gap between them, and a call arriving
+   in that gap would find no tool. So reload applies to HTTP only, `--watch` over stdio is refused
+   rather than silently ignored, and no transport in this build both reloads and has somewhere to
+   push a notification. `tools/list_changed` therefore ships in 005 or not at all, and FR-74's
+   hints carry the whole weight: a TTL saying when to ask again, and the catalog digest saying
+   whether the answer changed.
 4. **Metrics without a client library.** A `/metrics` endpoint in the Prometheus text format,
    generated from counters the runtime already has reasons to keep, served only in the HTTP profile
    and only on the bind the operator chose. Constitution VII, and U13 asks for aggregated

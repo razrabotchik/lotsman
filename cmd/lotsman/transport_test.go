@@ -74,6 +74,20 @@ func serveHTTP(t *testing.T, args ...string) (endpoint string, stderr *syncBuffe
 // the bind address left to the caller.
 func serveHTTPEnv(t *testing.T, env []string, args ...string) (endpoint string, stderr *syncBuffer) {
 	t.Helper()
+	endpoint, stderr, _ = serveHTTPProcess(t, env, args...)
+	return endpoint, stderr
+}
+
+// runBinary runs the CLI once and returns everything it printed.
+func runBinary(t *testing.T, args ...string) ([]byte, error) {
+	t.Helper()
+	return exec.Command(buildBinary(t), args...).CombinedOutput()
+}
+
+// serveHTTPProcess also hands back the process, for a test that needs to
+// signal it.
+func serveHTTPProcess(t *testing.T, env []string, args ...string) (endpoint string, stderr *syncBuffer, process *os.Process) {
+	t.Helper()
 	full := append([]string{"serve", "--transport", "http"}, args...)
 	cmd := exec.Command(buildBinary(t), full...)
 	if len(env) > 0 {
@@ -92,7 +106,7 @@ func serveHTTPEnv(t *testing.T, env []string, args ...string) (endpoint string, 
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		if match := listening.FindStringSubmatch(stderr.String()); match != nil {
-			return "http://" + match[1], stderr
+			return "http://" + match[1], stderr, cmd.Process
 		}
 		if strings.Contains(stderr.String(), "lotsman:") {
 			break
@@ -100,7 +114,7 @@ func serveHTTPEnv(t *testing.T, env []string, args ...string) (endpoint string, 
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("the server never reported a listening address\nstderr:\n%s", stderr.String())
-	return "", stderr
+	return "", stderr, nil
 }
 
 // TestServeOverEveryTransport is the checkpoint of step 1: the scenarios that
