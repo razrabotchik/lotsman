@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net"
 	"os"
 	"sort"
 	"strings"
@@ -134,6 +135,57 @@ func (t Transport) Valid() bool {
 	}
 }
 
+// InboundMode is how the HTTP endpoint decides whether a caller may talk to
+// it at all (FR-79).
+//
+// It answers a different question from everything else in this file. The
+// execution policy decides what a call may do; this decides whether there is
+// a caller. An inbound identity is never an upstream credential and never
+// widens what the operator configured (FR-83) -- a deployment where the two
+// are the same is one where reaching the endpoint is reaching the API.
+type InboundMode string
+
+// Inbound authorization modes.
+const (
+	// InboundNone is for loopback and for an endpoint something else already
+	// protects. It is the default, and it is only safe because a public bind
+	// without authentication does not start (FR-70).
+	InboundNone InboundMode = "none"
+	// InboundStaticBearer is a shared secret: honest for a limited
+	// deployment, and not a substitute for an authorization server.
+	InboundStaticBearer InboundMode = "static-bearer"
+	// InboundOAuth is the resource-server mode of FR-80-82. This build does
+	// not implement it; feature 005 does. It is named here so that a
+	// configuration written against the frozen specification is refused
+	// rather than silently read as `none`.
+	InboundOAuth InboundMode = "oauth"
+)
+
+// Known reports whether the mode is one the specification defines. It is not
+// the same question as whether this build serves it.
+func (m InboundMode) Known() bool {
+	switch m {
+	case InboundNone, InboundStaticBearer, InboundOAuth:
+		return true
+	default:
+		return false
+	}
+}
+
+// InboundAuth is the inbound authorization section (docs/spec.md §8).
+type InboundAuth struct {
+	// Mode defaults to none.
+	Mode InboundMode `yaml:"mode,omitempty"`
+	// TokenRef is where the static bearer secret lives. Like every other
+	// credential it is a reference, never a value (FR-59).
+	TokenRef SecretRef `yaml:"tokenRef,omitempty"`
+	// TrustedProxies are the addresses and CIDRs whose `X-Forwarded-*` and
+	// `Forwarded` headers may be believed (FR-85). From anywhere else those
+	// headers are whatever the caller decided to claim, so they are removed
+	// before any handler can read them.
+	TrustedProxies []string `yaml:"trustedProxies,omitempty"`
+}
+
 // Server mirrors the server section of the configuration file: how lotsman is
 // reached, as distinct from what it may do once reached. Nothing in here can
 // widen a policy; the two questions are answered by different sections on
@@ -165,6 +217,8 @@ type Server struct {
 	// permits, spelled out rather than abbreviated: it is the only way to put
 	// an endpoint nothing authenticates on a public interface.
 	AllowUnauthenticatedPublicBind bool `yaml:"allowUnauthenticatedPublicBind,omitempty"`
+	// InboundAuth is who may talk to the endpoint (FR-79).
+	InboundAuth InboundAuth `yaml:"inboundAuth,omitempty"`
 }
 
 // Catalog mirrors the catalog section: what gets published, before any
@@ -293,6 +347,9 @@ func validateServer(server *Server) error {
 		return errs.Errorf(errs.ClassUsage,
 			"config: server.transport %q is not stdio or http", server.Transport)
 	}
+	if err := validateInboundAuth(&server.InboundAuth); err != nil {
+		return err
+	}
 	if server.DrainTimeout != "" {
 		d, err := time.ParseDuration(server.DrainTimeout)
 		if err != nil {
@@ -302,6 +359,64 @@ func validateServer(server *Server) error {
 		if d < 0 {
 			return errs.Errorf(errs.ClassUsage, "config: server.drainTimeout %q is negative", server.DrainTimeout)
 		}
+	}
+	return nil
+}
+
+// validateInboundAuth refuses a mode this build cannot honour.
+//
+// `oauth` is refused as a missing capability rather than as a typo, and the
+// refusal names the feature that will provide it: a configuration written
+// against the frozen specification must fail loudly on a binary that cannot
+// carry it out, because the alternative is an endpoint the operator believes
+// is behind an authorization server and is not.
+func validateInboundAuth(inbound *InboundAuth) error {
+	switch inbound.Mode {
+	case "", InboundNone:
+		if inbound.TokenRef != "" {
+			return errs.Errorf(errs.ClassUsage,
+				"config: server.inboundAuth.tokenRef is set but the mode is none; "+
+					"a configured secret that authenticates nothing is not a default worth guessing at")
+		}
+		return nil
+	case InboundStaticBearer:
+		if inbound.TokenRef == "" {
+			return errs.Errorf(errs.ClassUsage,
+				"config: server.inboundAuth.mode is static-bearer but no tokenRef is configured; "+
+					"authentication configured with no secret must never resolve to everyone being authenticated")
+		}
+		if _, err := ParseSecretRef(string(inbound.TokenRef)); err != nil {
+			return err
+		}
+	case InboundOAuth:
+		return errs.Errorf(errs.ClassUnsupported,
+			"config: server.inboundAuth.mode oauth is not implemented in this build (feature 005); "+
+				"it is refused rather than read as none")
+	default:
+		return errs.Errorf(errs.ClassUsage,
+			"config: server.inboundAuth.mode %q is not none, static-bearer or oauth", inbound.Mode)
+	}
+	for i, proxy := range inbound.TrustedProxies {
+		if err := validateTrustedProxy(i, proxy); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateTrustedProxy accepts an address or a CIDR and nothing else. A name
+// would mean resolving DNS to decide whether a header may be believed.
+func validateTrustedProxy(index int, proxy string) error {
+	if strings.Contains(proxy, "/") {
+		if _, _, err := net.ParseCIDR(proxy); err != nil {
+			return errs.Errorf(errs.ClassUsage,
+				"config: server.inboundAuth.trustedProxies[%d] %q is not a CIDR", index, proxy)
+		}
+		return nil
+	}
+	if net.ParseIP(proxy) == nil {
+		return errs.Errorf(errs.ClassUsage,
+			"config: server.inboundAuth.trustedProxies[%d] %q is not an IP address or CIDR", index, proxy)
 	}
 	return nil
 }

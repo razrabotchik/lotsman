@@ -24,6 +24,7 @@ import (
 	"github.com/razrabotchik/lotsman/internal/egress"
 	"github.com/razrabotchik/lotsman/internal/errs"
 	"github.com/razrabotchik/lotsman/internal/httpserver"
+	"github.com/razrabotchik/lotsman/internal/inbound"
 	"github.com/razrabotchik/lotsman/internal/mcpserver"
 	"github.com/razrabotchik/lotsman/internal/openapi"
 	"github.com/razrabotchik/lotsman/internal/policy"
@@ -198,7 +199,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
-		return exitUsage
+		return exitCode(err)
 	}
 	runtime.AllowPrivateNetworks = runtime.AllowPrivateNetworks || *allowPrivate
 
@@ -261,18 +262,22 @@ func runTransport(ctx context.Context, runtime config.Runtime, opts *mcpserver.O
 	if runtime.Server.Transport != config.TransportHTTP {
 		return mcpserver.ServeStdio(ctx, opts)
 	}
+	// The guard is built before the socket exists, so a `tokenRef` pointing
+	// at an unset variable is a startup failure rather than an endpoint that
+	// refuses every caller while looking healthy.
+	guard, err := inbound.New(runtime.Server.InboundAuth)
+	if err != nil {
+		return err
+	}
 	return httpserver.Serve(ctx, &httpserver.Options{
-		Server:         mcpserver.New(opts),
-		Logger:         opts.Logger,
-		Listen:         runtime.Server.Listen,
-		AllowedOrigins: runtime.Server.AllowedOrigins,
-		AllowedHosts:   runtime.Server.AllowedHosts,
-		DrainTimeout:   runtime.Server.DrainTimeout,
-		// Authenticated stays false until step 2 of feature 004 gives the
-		// endpoint an inbound authorization mode. Until then FR-70's opt-in
-		// is the only way onto a public interface, which is the honest state
-		// of affairs rather than a placeholder.
-		Authenticated:                  false,
+		Server:                         mcpserver.New(opts),
+		Logger:                         opts.Logger,
+		Listen:                         runtime.Server.Listen,
+		AllowedOrigins:                 runtime.Server.AllowedOrigins,
+		AllowedHosts:                   runtime.Server.AllowedHosts,
+		DrainTimeout:                   runtime.Server.DrainTimeout,
+		Guard:                          guard,
+		TrustedProxies:                 runtime.Server.InboundAuth.TrustedProxies,
 		AllowUnauthenticatedPublicBind: runtime.Server.AllowUnauthenticatedPublicBind,
 	})
 }

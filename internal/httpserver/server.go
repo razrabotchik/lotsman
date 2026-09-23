@@ -13,6 +13,7 @@ import (
 
 	"github.com/razrabotchik/lotsman/internal/buildinfo"
 	"github.com/razrabotchik/lotsman/internal/errs"
+	"github.com/razrabotchik/lotsman/internal/inbound"
 )
 
 // readHeaderTimeout bounds how long a connection may spend sending its
@@ -46,10 +47,14 @@ type Options struct {
 	// DrainTimeout bounds graceful shutdown (FR-75).
 	DrainTimeout time.Duration
 
-	// Authenticated reports whether an inbound authorization mode is in
-	// force. Step 2 of feature 004 supplies it; until then it is false and a
-	// public bind needs the opt-in below.
-	Authenticated bool
+	// Guard is the inbound authorization decision (FR-79). Its zero value
+	// authenticates nothing, which is what the bind rule reads to decide
+	// whether a public interface is allowed at all.
+	Guard inbound.Guard
+
+	// TrustedProxies are the peers whose forwarding headers may be believed
+	// (FR-85).
+	TrustedProxies []string
 
 	// AllowUnauthenticatedPublicBind is FR-70's explicitly dangerous opt-in.
 	AllowUnauthenticatedPublicBind bool
@@ -75,7 +80,7 @@ func Serve(ctx context.Context, opts *Options) error {
 	if opts.Server == nil {
 		return errs.Errorf(errs.ClassInternal, "server: no MCP server to serve")
 	}
-	if err := checkBind(opts.Listen, opts.Authenticated, opts.AllowUnauthenticatedPublicBind); err != nil {
+	if err := checkBind(opts.Listen, opts.Guard.Required, opts.AllowUnauthenticatedPublicBind); err != nil {
 		return err
 	}
 	handler, err := newHandler(opts)
@@ -118,6 +123,12 @@ func newHandler(opts *Options) (http.Handler, error) {
 // there: "the refused request never reached the handler" is the assertion
 // that matters, and it cannot be made against something unreachable.
 func guard(next http.Handler, opts *Options) (http.Handler, error) {
+	// Authentication sits closest to the handler, so the cheap structural
+	// refusals happen before anything spends time on a credential -- and so
+	// that a request which fails one of them never reaches the code that
+	// knows what the credential is.
+	handler := opts.Guard.Middleware(next)
+
 	protection := http.NewCrossOriginProtection()
 	for _, origin := range opts.AllowedOrigins {
 		if err := protection.AddTrustedOrigin(origin); err != nil {
@@ -129,7 +140,11 @@ func guard(next http.Handler, opts *Options) (http.Handler, error) {
 		// policy oracle for anyone who can reach the port.
 		http.Error(w, "forbidden", http.StatusForbidden)
 	}))
-	return allowHosts(protection.Handler(next), opts.AllowedHosts), nil
+	// Forwarding headers are stripped outermost: by the time anything below
+	// reads the request, a claim about where it came from is either the
+	// truth from a configured proxy or absent.
+	return inbound.StripUntrustedForwarding(
+		allowHosts(protection.Handler(handler), opts.AllowedHosts), opts.TrustedProxies)
 }
 
 // allowHosts refuses a Host header the operator did not name.
@@ -173,8 +188,8 @@ func serve(ctx context.Context, listener net.Listener, handler http.Handler, opt
 		"mcp_sdk", info.MCPSDKVersion,
 		"mcp_protocol", info.MCPProtocolVersion,
 		"stateless", true,
-		"authenticated", opts.Authenticated)
-	if !opts.Authenticated && opts.AllowUnauthenticatedPublicBind {
+		"authenticated", opts.Guard.Required)
+	if !opts.Guard.Required && opts.AllowUnauthenticatedPublicBind {
 		// Every start, not once: an operator who meant this should keep being
 		// told, and one who inherited it should find out from the first line
 		// of the log rather than from a stranger.

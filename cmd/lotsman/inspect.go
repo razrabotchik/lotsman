@@ -91,7 +91,7 @@ func inspect(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	runtime, err := resolveConfig(*configPath, fs, &flagValues{allowMutations: *allowMutations})
 	if err != nil {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
-		return exitUsage
+		return exitCode(err)
 	}
 	catalogMode, err := parseMode(*mode)
 	if err != nil {

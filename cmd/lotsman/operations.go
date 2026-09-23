@@ -57,7 +57,7 @@ func operations(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	runtime, err := resolveConfig(*configPath, fs, &flagValues{allowMutations: *allowMutations})
 	if err != nil {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
-		return exitUsage
+		return exitCode(err)
 	}
 	opts, err := catalogOptions(runtime, catalog.ModeTools, doc.Operations)
 	if err != nil {
