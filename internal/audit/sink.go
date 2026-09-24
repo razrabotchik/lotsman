@@ -43,6 +43,7 @@ func (s LogSink) Record(event Event) {
 		"origin", event.Origin,
 		"method", event.Method,
 		"path", event.Path,
+		"refreshed", event.Refreshed,
 		"status", event.Status,
 		"durationMs", event.DurationMs,
 		"responseBytes", event.ResponseBytes,

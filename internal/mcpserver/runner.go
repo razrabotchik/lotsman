@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -44,6 +45,10 @@ type runner struct {
 	// audit receives one event per completed call.
 	audit audit.Sink
 
+	// minter re-mints a credential that a 401 says has gone stale (FR-35).
+	// Nil when nothing in this operation's binding can be re-minted.
+	minter *auth.Minter
+
 	// refusal, when set, is why this operation cannot be called at all. The
 	// operation is still published -- discovery is not permission, and a model
 	// that can read the refusal is better off than one guessing why an
@@ -67,15 +72,24 @@ func (r *runner) call(ctx context.Context, invocation *mcp.CallToolRequest, args
 	// that there is no way out of a call that skips the record: every return
 	// below, including the ones added later, passes through here.
 	started := time.Now()
-	result, err := r.execute(ctx, invocation, args)
-	r.record(ctx, started, result, err)
+	result, how, err := r.execute(ctx, invocation, args)
+	r.record(ctx, started, result, how, err)
 	return result, err
+}
+
+// outcome is what the call path learned along the way that the record needs
+// and the caller does not. It is returned rather than stored on the runner,
+// which is shared between concurrent calls.
+type outcome struct {
+	// refreshed reports that a credential was re-minted and the request made
+	// again (FR-35).
+	refreshed bool
 }
 
 // record writes what happened (§7.4). It never fails a call: a runtime that
 // stops working because it cannot describe itself has its priorities
 // backwards.
-func (r *runner) record(ctx context.Context, started time.Time, result response.Result, err error) {
+func (r *runner) record(ctx context.Context, started time.Time, result response.Result, how outcome, err error) {
 	if r.audit == nil {
 		return
 	}
@@ -94,6 +108,7 @@ func (r *runner) record(ctx context.Context, started time.Time, result response.
 		DurationMs:    time.Since(started).Milliseconds(),
 		ResponseBytes: result.ReceivedBytes,
 		Truncated:     result.Truncated,
+		Refreshed:     how.refreshed,
 	}
 	var ask *pending
 	switch {
@@ -110,16 +125,17 @@ func (r *runner) record(ctx context.Context, started time.Time, result response.
 }
 
 // execute runs the runtime order for validated arguments.
-func (r *runner) execute(ctx context.Context, invocation *mcp.CallToolRequest, args map[string]any) (response.Result, error) {
+func (r *runner) execute(ctx context.Context, invocation *mcp.CallToolRequest, args map[string]any) (response.Result, outcome, error) {
+	var how outcome
 	if !r.callable() {
-		return response.Result{}, errs.Errorf(r.refusalClass, "lotsman: %s %s %s",
+		return response.Result{}, how, errs.Errorf(r.refusalClass, "lotsman: %s %s %s",
 			r.tool.Method, r.tool.PathTemplate, r.refusal)
 	}
 
 	// Every error leaving a call passes through redaction: an argument, a URL
 	// or an upstream message may quote a credential.
 	if err := r.validator.Validate(args); err != nil {
-		return response.Result{}, redact.Error(err)
+		return response.Result{}, how, redact.Error(err)
 	}
 
 	op := requestbuild.Operation{
@@ -129,18 +145,30 @@ func (r *runner) execute(ctx context.Context, invocation *mcp.CallToolRequest, a
 		Parameters:   r.tool.Input.Parameters,
 		Body:         r.tool.Input.Body,
 	}
-	req, err := requestbuild.Build(ctx, &op, requestbuild.Arguments(args), requestbuild.Options{BaseURL: r.baseURL})
+	// build makes the request from scratch. A retry re-runs this rather than
+	// re-sending the first request with a header patched (§7.5): the body of
+	// a sent request has been read, and an unrepeatable request is not a
+	// request lotsman should try to repeat.
+	build := func() (*http.Request, error) {
+		req, err := requestbuild.Build(ctx, &op, requestbuild.Arguments(args), requestbuild.Options{BaseURL: r.baseURL})
+		if err != nil {
+			return nil, redact.Error(err)
+		}
+		// Defence in depth: an unexpanded template would mean a placeholder
+		// reached the wire as a literal, which is a guess about the API.
+		if strings.ContainsAny(req.URL.EscapedPath(), "{}") {
+			return nil, errs.Errorf(errs.ClassInternal,
+				"lotsman: %s %s: unexpanded path template", r.tool.Method, r.tool.PathTemplate)
+		}
+		if denied := r.egress.CheckTarget(req.URL); denied != nil {
+			return nil, denied
+		}
+		return req, nil
+	}
+
+	req, err := build()
 	if err != nil {
-		return response.Result{}, redact.Error(err)
-	}
-	// Defence in depth: an unexpanded template would mean a placeholder
-	// reached the wire as a literal, which is a guess about the API.
-	if strings.ContainsAny(req.URL.EscapedPath(), "{}") {
-		return response.Result{}, errs.Errorf(errs.ClassInternal,
-			"lotsman: %s %s: unexpanded path template", r.tool.Method, r.tool.PathTemplate)
-	}
-	if denied := r.egress.CheckTarget(req.URL); denied != nil {
-		return response.Result{}, denied
+		return response.Result{}, how, err
 	}
 
 	// Last: everything that could refuse this call without troubling a human
@@ -148,26 +176,84 @@ func (r *runner) execute(ctx context.Context, invocation *mcp.CallToolRequest, a
 	// otherwise happen -- and the only thing a yes does is send it.
 	ask, err := r.approval.check(invocation, r.tool, args)
 	if err != nil {
-		return response.Result{}, err
+		return response.Result{}, how, err
 	}
 	if ask != nil {
-		return response.Result{}, &pending{result: ask}
+		return response.Result{}, how, &pending{result: ask}
 	}
 
-	//nolint:bodyclose // response.FromHTTP closes resp.Body on every path;
-	// bodyclose cannot see through the call.
+	resp, err := r.send(req)
+	if err != nil {
+		return response.Result{}, how, err
+	}
+
+	// FR-35: one refresh and one retry, on a 401, and only for a credential
+	// this runtime can provably re-mint.
+	//
+	// A 401 is not a generic transport error: the API answered, and it
+	// answered that the credential was not accepted -- so the request
+	// provably did not take effect, which is the only reason repeating a
+	// mutation is defensible at all (§7.5).
+	if resp.StatusCode == http.StatusUnauthorized && r.refreshable() != "" {
+		drain(resp)
+		r.minter.Invalidate(r.refreshable())
+		how.refreshed = true
+
+		retried, buildErr := build()
+		if buildErr != nil {
+			return response.Result{}, how, buildErr
+		}
+		//nolint:bodyclose // response.FromHTTP below closes it; the reassignment is what bodyclose cannot follow.
+		resp, err = r.send(retried)
+		if err != nil {
+			return response.Result{}, how, err
+		}
+	}
+
+	result, err := response.FromHTTP(resp)
+	if err != nil {
+		return response.Result{}, how, redact.Error(err)
+	}
+	return result, how, nil
+}
+
+// send performs one request. Every caller hands the response to
+// response.FromHTTP or to drain, and both of those close it.
+func (r *runner) send(req *http.Request) (*http.Response, error) {
 	resp, err := r.client.Do(req)
 	if err != nil {
 		// A transport error can carry the request URL, and an API key may live
 		// in a query parameter.
-		return response.Result{}, redact.Error(
+		return nil, redact.Error(
 			errs.Errorf(errs.ClassUpstream, "lotsman: %s %s: %w", r.tool.Method, r.tool.PathTemplate, err))
 	}
-	result, err := response.FromHTTP(resp)
-	if err != nil {
-		return response.Result{}, redact.Error(err)
+	return resp, nil
+}
+
+// drain discards a response whose body nobody will read, so the connection
+// can be reused instead of dropped.
+func drain(resp *http.Response) {
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+	_ = resp.Body.Close()
+}
+
+// refreshable names the credential this operation presents that can be
+// re-minted, or empty when none can.
+//
+// "Can provably refresh" is FR-35's condition and it is a property of the
+// scheme: an API key read from a file cannot be renewed by asking anyone, so
+// a 401 against one is the API's own answer and goes to the caller unchanged.
+func (r *runner) refreshable() string {
+	if r.minter == nil {
+		return ""
 	}
-	return result, nil
+	for i := range r.tool.AuthBinding.Credentials {
+		credential := &r.tool.AuthBinding.Credentials[i]
+		if auth.Mints(&credential.Profile) {
+			return credential.Name
+		}
+	}
+	return ""
 }
 
 // subjectOf reports who the transport authenticated, or empty when nothing
@@ -225,6 +311,7 @@ func newRunners(tools []catalog.Tool, client *http.Client, baseURL string, outbo
 			// The credential is applied by the innermost round tripper, after
 			// every other layer has seen the request without it.
 			prepared.client = auth.Client(client, tool.AuthBinding, minter)
+			prepared.minter = minter
 		}
 
 		runners = append(runners, prepared)
