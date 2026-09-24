@@ -339,7 +339,14 @@ make build          # bin/lotsman
 make check          # lint + race tests
 make corpus         # fetch the pinned vendor documents
 make bench
+make mutate         # switch off each security control and check a test notices
 ```
+
+`make mutate` answers the question a green suite does not: *could* these tests fail. It switches
+off one control at a time — the algorithm allowlist, the egress check, the approval gate, the
+schema sanitizer — and expects a failure each time. It found a real one on its first run: a test
+that searched `json.Marshal` output for `"<script>"` and could never match, because `encoding/json`
+escapes `<`.
 
 Go ≥ 1.25. Four direct dependencies. Apache-2.0.
 

@@ -209,13 +209,13 @@ func TestExamplesAreSanitizedLikeEveryOtherPieceOfProse(t *testing.T) {
 		},
 	})
 
-	rendered, err := json.Marshal(cleaned)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Walked rather than marshalled: encoding/json escapes "<" to "\u003c",
+	// so a Contains check over marshalled bytes can never fire. The first
+	// version of this test did exactly that and passed against a sanitizer
+	// that had been switched off.
 	for _, forbidden := range []string{"<script>", "<i>", "<em>", "<b>", "\x00", "\t"} {
-		if bytes.Contains(rendered, []byte(forbidden)) {
-			t.Errorf("the published schema still carries %q:\n%s", forbidden, rendered)
+		if found := findString(cleaned, forbidden); found != "" {
+			t.Errorf("the published schema still carries %q, in %q", forbidden, found)
 		}
 	}
 	// The shape survives: cleaning is about the strings, not the structure.
@@ -265,15 +265,42 @@ func TestNestedSchemasAreSanitizedWhereverTheySit(t *testing.T) {
 		"allOf":                []any{map[string]any{"title": "<b>branch</b>"}},
 	})
 
-	rendered, err := json.Marshal(cleaned)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Contains(rendered, []byte("<b>")) {
-		t.Errorf("prose survived somewhere nested:\n%s", rendered)
+	if found := findString(cleaned, "<b>"); found != "" {
+		t.Errorf("prose survived somewhere nested, in %q", found)
 	}
 	properties, _ := cleaned["properties"].(map[string]any)
 	if _, ok := properties["description"]; !ok {
 		t.Errorf("a field named description was dropped: %#v", properties)
 	}
+}
+
+// findString reports the first string anywhere in a decoded schema that
+// contains want, or empty when none does.
+//
+// It exists because the obvious check -- marshal and search the bytes -- is
+// not a check at all: encoding/json escapes "<", ">" and "&", so a needle
+// containing any of them is never found however raw the value is.
+func findString(value any, want string) string {
+	switch typed := value.(type) {
+	case string:
+		if strings.Contains(typed, want) {
+			return typed
+		}
+	case map[string]any:
+		for key, item := range typed {
+			if strings.Contains(key, want) {
+				return key
+			}
+			if found := findString(item, want); found != "" {
+				return found
+			}
+		}
+	case []any:
+		for _, item := range typed {
+			if found := findString(item, want); found != "" {
+				return found
+			}
+		}
+	}
+	return ""
 }
