@@ -12,7 +12,16 @@ import (
 // runCLI runs the built binary and returns stdout, stderr and the exit code.
 func runCLI(t *testing.T, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
+	return runCLIEnv(t, nil, args...)
+}
+
+// runCLIEnv is the same, with an environment.
+func runCLIEnv(t *testing.T, env []string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
 	cmd := exec.Command(buildBinary(t), args...)
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	var out, errOut strings.Builder
 	cmd.Stdout = &out
 	cmd.Stderr = &errOut

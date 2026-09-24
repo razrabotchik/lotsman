@@ -92,12 +92,21 @@ precedent as `golang-jwt` in 005.
 
 ## Step 4: Secrets and the criterion  ✅ CHECKPOINT: M4a's exit criterion
 
-- [ ] T510 the canary covers both secrets at once: the client secret and the token it mints,
+- [x] T510 the canary covers both secrets at once: the client secret and the token it mints,
       through every channel the existing test checks plus the audit record
-- [ ] T511 [P] end to end against a real OAuth2 token endpoint — the exit criterion M4a states
+- [x] T511 [P] end to end against a real OAuth2 token endpoint — the exit criterion M4a states
       → "Real" means a token endpoint that actually implements the flow, not a stub returning a
         fixed string: the mint is a form POST whose client authentication style, `expires_in` and
-        error shape are the parts that go wrong.
+        error shape are the parts that go wrong. It checks the grant type, accepts either
+        client-authentication style, and refuses the wrong secret.
+      → Over HTTPS, because the configuration refuses anything else, with the subprocess pointed
+        at the certificate through `SSL_CERT_FILE` — the way an operator with a private authority
+        would do it, and the same mechanism 005's inbound e2e uses.
+      → A second call mints nothing: the token belongs to the credential, asserted against the
+        provider's own counter rather than inferred from timing.
+      → T503 turned out to be half-done and this test found it: `inspect` builds its own document
+        from selected report fields, so the `credentials` section existed in the report and never
+        reached the output. Both forms carry it now.
 
 ## Step 5: Docs  ✅ CHECKPOINT: the support matrix stops being out of date
 

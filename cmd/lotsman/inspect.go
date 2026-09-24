@@ -10,6 +10,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/razrabotchik/lotsman/internal/auth"
 	"github.com/razrabotchik/lotsman/internal/buildinfo"
 	"github.com/razrabotchik/lotsman/internal/catalog"
 	"github.com/razrabotchik/lotsman/internal/domain"
@@ -32,6 +33,7 @@ type inspectDocument struct {
 	ByReason       map[domain.ReasonCode]int  `json:"byReason,omitempty"`
 	Catalog        catalog.Estimate           `json:"catalog"`
 	Security       catalog.SecuritySummary    `json:"security"`
+	Credentials    []auth.Summary             `json:"credentials,omitempty"`
 	DocumentIssues []documentIssue            `json:"documentIssues,omitempty"`
 	Operations     []catalog.OperationVerdict `json:"operations"`
 }
@@ -114,6 +116,7 @@ func inspect(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		ByReason:       cat.Report.ByReason,
 		Catalog:        cat.Report.Estimate,
 		Security:       cat.Report.Security,
+		Credentials:    cat.Report.Credentials,
 		DocumentIssues: documentIssues(doc.Diagnostics),
 		Operations:     cat.Report.Operations,
 	}
@@ -147,6 +150,35 @@ func documentIssues(diagnostics []domain.Diagnostic) []documentIssue {
 	return out
 }
 
+// writeCredentials says what each configured profile is.
+//
+// "A credential that will be fetched" is a different fact from "one you
+// configured", and an operator reading this before serving should see which
+// they have -- along with the scopes a minting profile asks for, since an
+// operation may declare others and lotsman does not overrule the provider
+// about it.
+func writeCredentials(w io.Writer, credentials []auth.Summary) {
+	if len(credentials) == 0 {
+		return
+	}
+	for i, credential := range credentials {
+		label := "credentials:"
+		if i > 0 {
+			label = "            "
+		}
+		if !credential.Mints {
+			fmt.Fprintf(w, "%s %s (%s)\n", label, credential.Name, credential.Scheme)
+			continue
+		}
+		scopes := "no scopes"
+		if len(credential.Scopes) > 0 {
+			scopes = "scopes " + strings.Join(credential.Scopes, ", ")
+		}
+		fmt.Fprintf(w, "%s %s (%s) mints from %s, %s\n",
+			label, credential.Name, credential.Scheme, credential.TokenURL, scopes)
+	}
+}
+
 // writeHumanReport prints the report for a person: the numbers first, then
 // what to do about them. Reasons are sorted by count so the biggest source of
 // lost operations is the first line a reader sees (FR-12a).
@@ -176,9 +208,11 @@ func writeHumanReport(w io.Writer, report *inspectDocument) {
 				"a model may not fit this many tool definitions\n", over)
 		}
 	}
-	fmt.Fprintf(w, "security:   remote refs %s, redirects %s, unknown mutations %s\n\n",
+	fmt.Fprintf(w, "security:   remote refs %s, redirects %s, unknown mutations %s\n",
 		enabledWord(report.Security.RemoteRefs), enabledWord(report.Security.Redirects),
 		blockedWord(report.Security.UnknownMutationsBlocked))
+	writeCredentials(w, report.Credentials)
+	fmt.Fprintln(w)
 
 	if len(report.DocumentIssues) > 0 {
 		fmt.Fprintf(w, "document issues (these stop `serve` in every mode): %d\n", len(report.DocumentIssues))
