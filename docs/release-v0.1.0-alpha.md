@@ -109,6 +109,14 @@ resolve names itself, and the document still pointed at the old ones.
   `apps/v1` publishes 2.23 MB of tool definitions in tools mode and 5.5 KB in search mode, but the
   schema a model needs to create a Deployment is still 38.9 KB *after* every description is
   dropped. `inspect` reports the measurement either way, so the trade is visible before it is felt.
+- **A parameter name could carry anything into a model's context.** Every other string a document
+  contributes there is sanitized and bounded — tool names, descriptions, tags, examples — but a
+  parameter name is published verbatim as a schema property key, because it is the key the model
+  sends and the key lotsman puts on the wire. A name containing a newline, or four thousand bytes
+  long, went straight through. It cannot be cleaned without publishing a schema that does not
+  describe the API, so the operation is refused instead: a control character or a name over 256
+  bytes is `invalid_parameter`, and the refusal does not quote the name it is refusing. No corpus
+  document is affected.
 - **Schema `examples` used to reach a model uncleaned.** Descriptions and titles from an
   untrusted document are stripped of HTML and control characters and budgeted before they are
   published (Constitution V); `examples` is prose that reaches the same place and was the one
