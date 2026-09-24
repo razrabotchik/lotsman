@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/pb33f/libopenapi"
 	"github.com/pb33f/libopenapi/datamodel"
@@ -374,6 +375,15 @@ func buildOperation(namespace, method, path string, op *v3.Operation, pathParams
 				"(only apiKey and HTTP basic/bearer are in this release), so the operation could never be called",
 		})
 	}
+	if why := unrequestablePath(path); why != "" {
+		rejections = appendReason(rejections, domain.ReasonInvalidPath)
+		result.Diagnostics = append(result.Diagnostics, domain.Diagnostic{
+			Severity: domain.SeverityError,
+			Code:     domain.ReasonInvalidPath,
+			Pointer:  pointer,
+			Message:  "the path template " + why,
+		})
+	}
 	for _, name := range pathPlaceholder.FindAllStringSubmatch(path, -1) {
 		placeholder := name[1]
 		p, ok := merged[paramKey{placeholder, "path"}]
@@ -456,4 +466,33 @@ func flattenErrors(err error) []error {
 		return out
 	}
 	return []error{err}
+}
+
+// unrequestablePath reports why a path template cannot be turned into the
+// request the document describes, or empty when it can.
+//
+// This is refusal rather than cleaning, and it is a different question from
+// whether the template is safe to *show* (catalog.Tool.SafePath). Markup in a
+// path is ugly to display and harmless to send; the characters below are the
+// other way round.
+//
+// The message never quotes the template. It is the value under suspicion, and
+// it travels into a log and a report from here.
+func unrequestablePath(path string) string {
+	for _, r := range path {
+		if unicode.IsControl(r) {
+			// net/url refuses these, but it refuses them at call time with a
+			// message about the base URL -- sending an operator to check a
+			// setting that is fine. Better to reject the operation while the
+			// document is being read, which is where the fault is.
+			return "contains a control character and could never be requested"
+		}
+	}
+	switch {
+	case strings.ContainsRune(path, '?'):
+		return "contains '?', so everything after it would be silently dropped from the request"
+	case strings.ContainsRune(path, '#'):
+		return "contains '#', so everything after it would be silently dropped from the request"
+	}
+	return ""
 }
