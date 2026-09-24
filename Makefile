@@ -73,6 +73,10 @@ bench: ## Run benchmarks (needs `make corpus` for the vendor documents)
 corpus: ## Fetch the vendor corpus into testdata/corpus (verifies pinned digests)
 	@python3 scripts/fetch_corpus.py
 
+.PHONY: mutate
+mutate: ## Switch off each security control in turn and check a test notices
+	@bash scripts/mutate.sh
+
 .PHONY: tools
 tools: ## Install the pinned golangci-lint into bin/
 	GOBIN=$(CURDIR)/bin $(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
