@@ -357,6 +357,47 @@ func IsProtectedHeader(name string) bool {
 // (Constitution IV).
 type Schema map[string]any
 
+// How a schema's keywords must be walked.
+//
+// Two packages walk a published schema for different reasons -- catalog
+// sanitizes its prose before it reaches a model (Constitution V), mcpserver
+// strips prose to fit a response budget (FR-52) -- and both have to agree
+// about one fact of JSON Schema: which values are schemas and which are the
+// API's own data.
+//
+// Getting it wrong is not cosmetic. A walker that treats `properties` as a
+// list of keywords deletes the API's field called `description`; one that
+// walks into `enum` edits the API's values. That bug existed in the budget
+// prune, which is why the answer lives here once instead of being written out
+// twice and drifting.
+//
+// Anything not named below is copied as it was found. lotsman does not know
+// what an unrecognised keyword means, and guessing is how a schema stops
+// describing the API.
+var (
+	// SchemaValuedKeywords hold one schema.
+	SchemaValuedKeywords = map[string]bool{
+		"items": true, "not": true, "if": true, "then": true, "else": true,
+		"contains": true, "propertyNames": true, "additionalProperties": true,
+		"additionalItems": true, "unevaluatedItems": true, "unevaluatedProperties": true,
+	}
+	// SchemaListKeywords hold an array of schemas.
+	SchemaListKeywords = map[string]bool{
+		"allOf": true, "anyOf": true, "oneOf": true, "prefixItems": true,
+	}
+	// NamedSchemaKeywords map a *name* to a schema. The names belong to the
+	// API and are never keywords.
+	NamedSchemaKeywords = map[string]bool{
+		"properties": true, "$defs": true, "definitions": true,
+		"patternProperties": true, "dependentSchemas": true,
+	}
+	// ProseKeywords explain a schema to a reader rather than constrain what
+	// it accepts.
+	ProseKeywords = map[string]bool{
+		"description": true, "title": true, "examples": true,
+	}
+)
+
 // Argument groups (FR-22). Inputs are ALWAYS grouped, even when a group is
 // empty: a flat-until-collision shape would change retroactively the day an
 // API adds a path parameter colliding with a query one, and a tool's schema
