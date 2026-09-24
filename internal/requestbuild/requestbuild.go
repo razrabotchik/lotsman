@@ -194,7 +194,13 @@ func resolveBaseURL(servers []string, opts Options) (string, error) {
 func joinURL(base, escapedPath string) (*url.URL, error) {
 	u, err := url.Parse(strings.TrimRight(base, "/") + escapedPath)
 	if err != nil {
-		return nil, errs.Errorf(errs.ClassUsage, "requestbuild: invalid base URL syntax")
+		// Not "invalid base URL": the base was parsed before this, so what
+		// failed is the join, and the part that usually causes it is the
+		// document's path template. Saying "base URL" sends an operator to
+		// check a setting that is fine. The path is not quoted, because it is
+		// the untrusted half.
+		return nil, errs.Errorf(errs.ClassSpecInvalid,
+			"requestbuild: the path template does not form a valid URL against the base")
 	}
 	return u, nil
 }

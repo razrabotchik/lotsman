@@ -109,6 +109,13 @@ resolve names itself, and the document still pointed at the old ones.
   `apps/v1` publishes 2.23 MB of tool definitions in tools mode and 5.5 KB in search mode, but the
   schema a model needs to create a Deployment is still 38.9 KB *after* every description is
   dropped. `inspect` reports the measurement either way, so the trade is visible before it is felt.
+- **A path template containing `?` or `#` used to change the request silently.** Everything after
+  the separator was dropped by URL parsing, so lotsman made a request the document did not
+  describe — an approximation, which is the one thing this runtime is built not to do. A template
+  with a control character was refused, but at call time and with a message blaming the operator's
+  base URL. Both are now refused while the document is read, as `invalid_path`, and the message
+  names the reason without quoting the template. (A control character could not have been smuggled
+  onto the wire: `net/url` rejects it. The fault was in where and how it was reported.)
 - **A refusal used to quote the document's path template verbatim.** Every tool error, every
   approval prompt and every search result carried it — so a path containing a newline could put a
   line of its own inside lotsman's own message to a model. The template a request is built from

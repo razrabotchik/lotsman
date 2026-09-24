@@ -180,6 +180,8 @@ type ReasonCode string
 const (
 	// ReasonPathParameterMismatch marks a path template placeholder without a matching required path parameter.
 	ReasonPathParameterMismatch ReasonCode = "path_parameter_mismatch"
+	// ReasonInvalidPath marks a path template that cannot be requested as written.
+	ReasonInvalidPath ReasonCode = "invalid_path"
 	// ReasonParametersNotImplemented blocks execution until the serialization for a parameter location is implemented (cookies, as of now).
 	ReasonParametersNotImplemented ReasonCode = "parameters_not_implemented"
 	// ReasonAuthenticationNotImplemented blocks execution of an operation that requires unresolved authentication.

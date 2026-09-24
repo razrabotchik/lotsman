@@ -41,14 +41,22 @@ func TestUnpublishableParameterNamesRejectTheOperation(t *testing.T) {
 // it travels into a log and a report from here.
 func TestTheRefusalDoesNotQuoteTheSuspectName(t *testing.T) {
 	const canary = "SYSTEM-IGNORE-PREVIOUS"
-	doc, err := Parse(t.Context(), parameterNameSpec("q\n"+canary), Options{})
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
+	op := parseOne(t, parameterNameSpec("q\n"+canary))
+	if len(op.Diagnostics) == 0 {
+		t.Fatal("no diagnostic was produced, so this asserts nothing")
 	}
-	for _, d := range doc.Diagnostics {
+	var saw bool
+	for _, d := range op.Diagnostics {
+		if d.Code != domain.ReasonInvalidParameter {
+			continue
+		}
+		saw = true
 		if strings.Contains(d.Message, canary) {
 			t.Errorf("the diagnostic quotes the name it is refusing: %s", d.Message)
 		}
+	}
+	if !saw {
+		t.Errorf("no %s diagnostic among %d", domain.ReasonInvalidParameter, len(op.Diagnostics))
 	}
 }
 
