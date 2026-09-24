@@ -63,6 +63,11 @@ type Event struct {
 	// with rather than data it may write down.
 	Path string `json:"path,omitempty"`
 
+	// Refreshed reports that a credential was re-minted and the request made
+	// again (FR-35's *audit metadata*). That it happened, never what the new
+	// credential is.
+	Refreshed bool `json:"refreshed,omitempty"`
+
 	Status        int   `json:"status,omitempty"`
 	DurationMs    int64 `json:"durationMs"`
 	ResponseBytes int   `json:"responseBytes,omitempty"`

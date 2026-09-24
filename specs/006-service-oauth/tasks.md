@@ -64,7 +64,7 @@ precedent as `golang-jwt` in 005.
 
 ## Step 3: Expiry  ✅ CHECKPOINT: FR-35, exercised for the first time
 
-- [ ] T507 runner: one refresh-and-retry on `401`, only for a credential that can be re-minted
+- [x] T507 runner: one refresh-and-retry on `401`, only for a credential that can be re-minted
       → In the runner, not in a `RoundTripper`: §7.5 puts the retry coordinator above auth
         application, and a retry decided inside a transport would be invisible to the audit record
         that has to mention it.
@@ -72,13 +72,23 @@ precedent as `golang-jwt` in 005.
         is why this is allowed for a mutation at all. That distinction lives in the code, not only
         in this note.
       → The retried request is rebuilt and re-authenticated from scratch, never the old request
-        with a header patched.
-- [ ] T508 audit: the event says a credential was refreshed (FR-35's *audit metadata*) — that it
+        with a header patched. The body of a sent request has been read, and an unrepeatable
+        request is not one lotsman should try to repeat — so the build became a closure and the
+        retry runs it again, egress check included.
+      → "Can provably refresh" is a property of the scheme, not a flag: an API key read from a
+        file is not renewed by asking anyone. The runner looks at its own binding for a minting
+        credential and finds none, which is why no branch had to be added for the other schemes.
+- [x] T508 audit: the event says a credential was refreshed (FR-35's *audit metadata*) — that it
       happened, never what the token is
-- [ ] T509 [P] no retry for any other status, any other scheme, or a second 401
+- [x] T509 [P] no retry for any other status, any other scheme, or a second 401
       → A second 401 is the API's own answer and goes to the caller as FR-39 requires. lotsman
         adding "and this credential cannot be refreshed" would be commentary on a message that
         belongs to the API.
+      → The minting endpoint in the test issues a *different* token each time, so "the retry
+        presented a new credential" is observed rather than assumed, and the API counts its calls
+        so "exactly two" is a number.
+      → 403, 500 and 429 get no retry. A 403 means the credential was understood and refused, and
+        re-minting it would produce the same credential.
 
 ## Step 4: Secrets and the criterion  ✅ CHECKPOINT: M4a's exit criterion
 
