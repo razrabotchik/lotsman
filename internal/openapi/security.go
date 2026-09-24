@@ -1,6 +1,8 @@
 package openapi
 
 import (
+	"slices"
+
 	"github.com/pb33f/libopenapi/datamodel/high/base"
 	v3 "github.com/pb33f/libopenapi/datamodel/high/v3"
 	"github.com/pb33f/libopenapi/orderedmap"
@@ -9,13 +11,20 @@ import (
 )
 
 // coreSchemeTypes are the security scheme types lotsman's providers can
-// satisfy (FR-58): API keys in a header, query or cookie, and HTTP basic or
-// bearer. OAuth2 and OpenID Connect are an M4 concern, and mutual TLS is a
+// satisfy (FR-58): API keys in a header, query or cookie, HTTP basic or
+// bearer, and -- since M4a -- OAuth2 in the one flow a process can complete
+// by itself. OpenID Connect discovery is not implemented, and mutual TLS is a
 // transport arrangement rather than a credential lotsman can supply.
 var coreSchemeTypes = map[string]bool{
 	"apiKey": true,
 	"http":   true,
+	"oauth2": true,
 }
+
+// flowClientCredentials is the only OAuth2 flow a service can complete
+// without a person in front of it (FR-63). The others need a browser, a
+// redirect and a human decision, which is delegated mode and M4b (FR-64).
+const flowClientCredentials = "clientCredentials"
 
 // coreHTTPSchemes are the HTTP authentication schemes among those types.
 var coreHTTPSchemes = map[string]bool{
@@ -74,6 +83,7 @@ func describeScheme(name string, scopes []string, schemes *orderedmap.Map[string
 	requirement.In = scheme.In
 	requirement.Name = scheme.Name
 	requirement.HTTP = scheme.Scheme
+	requirement.Flows = declaredFlows(scheme)
 
 	if !coreSchemeTypes[scheme.Type] {
 		return requirement
@@ -84,8 +94,39 @@ func describeScheme(name string, scopes []string, schemes *orderedmap.Map[string
 	if scheme.Type == "apiKey" && scheme.Name == "" {
 		return requirement
 	}
+	// An OAuth2 scheme that offers only flows needing a person is not
+	// satisfiable by anything this build has. Saying so here, rather than at
+	// binding time, keeps the reason in the report: the operation is rejected
+	// for what the document asks, not for what the operator forgot.
+	if scheme.Type == "oauth2" && !slices.Contains(requirement.Flows, flowClientCredentials) {
+		return requirement
+	}
 	requirement.Satisfiable = true
 	return requirement
+}
+
+// declaredFlows lists the OAuth2 flows a scheme offers, in a fixed order so
+// that two runs over one document report the same thing (Principle IV).
+func declaredFlows(scheme *v3.SecurityScheme) []string {
+	if scheme.Flows == nil {
+		return nil
+	}
+	var flows []string
+	for _, candidate := range []struct {
+		name    string
+		present bool
+	}{
+		{flowClientCredentials, scheme.Flows.ClientCredentials != nil},
+		{"authorizationCode", scheme.Flows.AuthorizationCode != nil},
+		{"implicit", scheme.Flows.Implicit != nil},
+		{"password", scheme.Flows.Password != nil},
+		{"device", scheme.Flows.Device != nil},
+	} {
+		if candidate.present {
+			flows = append(flows, candidate.name)
+		}
+	}
+	return flows
 }
 
 // securityVerdict turns the alternatives into the two facts the rest of the

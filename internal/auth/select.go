@@ -207,6 +207,21 @@ func compatible(profile *config.Profile, requirement *domain.SecurityRequirement
 		default:
 			return "unsupported HTTP authentication scheme " + requirement.HTTP
 		}
+	case "oauth2":
+		if profile.Scheme != config.SchemeOAuth2ClientCredentials {
+			return "the API wants an OAuth2 token"
+		}
+		// The flow is the parser's verdict, not this one's: a scheme offering
+		// only flows that need a person was already marked unsatisfiable, so
+		// an operation carrying one never reaches here. Repeating the check
+		// would be a second opinion that can drift from the first.
+		//
+		// Scopes are deliberately not compared. The profile asks the
+		// authorization server for what the operator configured; an operation
+		// naming a scope the profile did not request is a mismatch worth
+		// *seeing* in the report, not one lotsman should settle on the
+		// provider's behalf (ADR-0017).
+		return ""
 	case "":
 		// The document referenced a scheme it never defined; nothing can be
 		// matched against a definition that does not exist.
@@ -268,4 +283,50 @@ func (p Profiles) Only(name string) Profiles {
 		}
 	}
 	return narrowed
+}
+
+// Summary describes one configured profile for the report.
+//
+// It says what the credential *is*, never what it holds: a name, a scheme,
+// and -- for a profile that obtains its token rather than being handed one --
+// where from and what it asks for. Every field here is safe to print.
+type Summary struct {
+	Name   string `json:"name"`
+	Scheme string `json:"scheme"`
+	// Mints reports whether this profile obtains a token at call time. It is
+	// a different fact from "a credential you configured", and an operator
+	// reading a report before serving should see which they have.
+	Mints bool `json:"mints,omitempty"`
+	// TokenURL and Scopes are populated for a minting profile. The scopes are
+	// what the profile *requests*; an operation may declare others, and
+	// lotsman does not overrule the provider about it (ADR-0017).
+	TokenURL string   `json:"tokenURL,omitempty"`
+	Scopes   []string `json:"scopes,omitempty"`
+}
+
+// Describe summarises every configured profile, in a deterministic order.
+func (p Profiles) Describe() []Summary {
+	seen := map[string]bool{}
+	var summaries []Summary
+	for _, credentials := range p.byScheme {
+		for i := range credentials {
+			credential := &credentials[i]
+			if seen[credential.Name] {
+				continue
+			}
+			seen[credential.Name] = true
+			summary := Summary{Name: credential.Name, Scheme: string(credential.Profile.Scheme)}
+			if credential.Profile.Scheme == config.SchemeOAuth2ClientCredentials {
+				summary.Mints = true
+				summary.TokenURL = credential.Profile.TokenURL
+				summary.Scopes = append([]string(nil), credential.Profile.Scopes...)
+			}
+			summaries = append(summaries, summary)
+		}
+	}
+	// By name, so that two runs over one configuration produce one report
+	// (Principle IV): map iteration order is not a fact about the operator's
+	// file.
+	sort.Slice(summaries, func(i, j int) bool { return summaries[i].Name < summaries[j].Name })
+	return summaries
 }

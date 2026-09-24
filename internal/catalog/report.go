@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"sort"
 
+	"github.com/razrabotchik/lotsman/internal/auth"
 	"github.com/razrabotchik/lotsman/internal/domain"
 )
 
@@ -24,7 +25,11 @@ type Report struct {
 	ByReason      map[domain.ReasonCode]int `json:"byReason,omitempty"`
 	Estimate      Estimate                  `json:"catalog"`
 	Security      SecuritySummary           `json:"security"`
-	Operations    []OperationVerdict        `json:"operations"`
+	// Credentials describes the configured profiles: what each one is and,
+	// for one that obtains its token, where from and what it asks for. Once,
+	// rather than repeated against every operation that uses it.
+	Credentials []auth.Summary     `json:"credentials,omitempty"`
+	Operations  []OperationVerdict `json:"operations"`
 }
 
 // Totals counts operations along the axes that matter to different readers:
@@ -131,7 +136,8 @@ func buildReport(operations []domain.Operation, tools []Tool, excluded map[domai
 		Security: SecuritySummary{
 			UnknownMutationsBlocked: !opts.Policy.AllowMutations,
 		},
-		Totals: Totals{Found: len(operations), ByEffect: map[domain.Effect]int{}},
+		Credentials: opts.Auth.Describe(),
+		Totals:      Totals{Found: len(operations), ByEffect: map[domain.Effect]int{}},
 	}
 
 	byKey := make(map[domain.OperationKey]*Tool, len(tools))

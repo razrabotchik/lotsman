@@ -9,25 +9,35 @@ precedent as `golang-jwt` in 005.
 
 ## Step 1: Binding  ✅ CHECKPOINT: an oauth2 document stops being refused for the wrong reason
 
-- [ ] T501 config: the `oauth2-client-credentials` scheme — `tokenURL`, `clientID`,
+- [x] T501 config: the `oauth2-client-credentials` scheme — `tokenURL`, `clientID`,
       `clientSecretRef`, `scopes`, `audience`, `authStyle`; strict decoding and no inferred fields
       → `tokenURL` must be https, like every other authentication URL: a development shortcut in
         a credential path is a production configuration eventually (the rule 005 set).
       → `authStyle` is `basic` or `body` with `auto` the default, because providers disagree and
         the disagreement is not something an operator should have to discover from a 401.
-- [ ] T502 auth/select: an `oauth2` security scheme with a `clientCredentials` flow is satisfiable
+- [x] T502 auth/select: an `oauth2` security scheme with a `clientCredentials` flow is satisfiable
       by such a profile (FR-55–57 unchanged around it)
       → The AND/OR semantics do not move. What changes is that one more scheme type has a
         compatible profile kind, so `ambiguous_security` and `no_compatible_credential` keep
         meaning exactly what they meant.
+      → Which flows a scheme declares is now recorded on the requirement, and it is the whole of
+        the difference: `clientCredentials` is satisfiable, `authorizationCode` is not, and the
+        verdict is the parser's so the *reason* stays in the report — the operation is rejected
+        for what the document asks, not for what the operator forgot to configure.
+      → That changed two existing tests, correctly: they asserted "oauth2 is unsatisfiable" using
+        a fixture whose flow was `clientCredentials`. They now use a delegated flow, and a new
+        test holds both halves apart.
       → Scopes are configuration, not a per-operation check (plan decision 3). An operation naming
         a scope the profile did not request is published and callable; the report shows both, so
         the mismatch is visible without lotsman overruling the provider.
-- [ ] T503 [P] the report and `inspect` say a profile mints rather than presents, and which scopes
+- [x] T503 [P] the report and `inspect` say a profile mints rather than presents, and which scopes
       it requests
       → The report is the product (FR-12a). "This operation is satisfied by a credential that will
         be fetched" is a different fact from "satisfied by one you configured", and an operator
         reading the report before serving should see which.
+      → It is a `credentials` section stated once rather than repeated against every operation
+        that uses a profile: the scopes a profile requests are a fact about the profile. Additive,
+        so the report's schema version does not move.
 
 ## Step 2: Minting  ✅ CHECKPOINT: a call reaches an API with a token lotsman obtained
 

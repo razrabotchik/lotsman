@@ -138,9 +138,15 @@ type SecurityRequirement struct {
 	Name   string   `json:"name,omitempty"`       // apiKey: the header/query/cookie name
 	HTTP   string   `json:"httpScheme,omitempty"` // http: basic | bearer | ...
 	Scopes []string `json:"scopes,omitempty"`
+	// Flows are the OAuth2 flows the scheme declares, in document order.
+	// Which flows a scheme offers decides whether lotsman can satisfy it at
+	// all: `clientCredentials` is a credential a process can obtain on its
+	// own, and `authorizationCode` is one that needs a person.
+	Flows []string `json:"flows,omitempty"`
 	// Satisfiable reports whether lotsman has a provider that could ever meet
-	// this requirement. An OAuth2 flow cannot be satisfied by the core
-	// providers (FR-58), and an undefined scheme cannot be satisfied at all.
+	// this requirement. An undefined scheme cannot be satisfied at all, and
+	// neither can an OAuth2 scheme offering only flows that need a human
+	// (FR-58, FR-64: delegated mode is M4b).
 	Satisfiable bool `json:"satisfiable"`
 }
 
@@ -149,8 +155,8 @@ type SecurityRequirement struct {
 // requirements is the OAS way of saying "no authentication", which is always
 // satisfiable.
 func (a SecurityAlternative) Satisfiable() bool {
-	for _, requirement := range a.Requirements {
-		if !requirement.Satisfiable {
+	for i := range a.Requirements {
+		if !a.Requirements[i].Satisfiable {
 			return false
 		}
 	}

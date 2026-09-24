@@ -18,6 +18,13 @@ components:
       type: oauth2
       flows:
         clientCredentials: { tokenUrl: https://example.com/token, scopes: { read: r } }
+    oauthDelegated:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: https://example.com/authorize
+          tokenUrl: https://example.com/token
+          scopes: { read: r }
 `
 
 func securitySpec(operation string) []byte {
@@ -147,9 +154,12 @@ paths:
 // An operation whose every alternative needs a credential lotsman will never
 // supply in this release can never be called, so it is rejected rather than
 // published as a tool that always fails.
+//
+// `authorizationCode` is the case: obtaining that token needs a browser, a
+// redirect and a person, which is delegated mode (FR-64) and M4b.
 func TestUnsatisfiableSecurityRejectsTheOperation(t *testing.T) {
 	op := parseOne(t, securitySpec(`      security:
-        - oauth: [read]`))
+        - oauthDelegated: [read]`))
 
 	if op.Support.Level != domain.SupportRejected {
 		t.Fatalf("support = %q, want rejected", op.Support.Level)
@@ -159,18 +169,18 @@ func TestUnsatisfiableSecurityRejectsTheOperation(t *testing.T) {
 	}
 }
 
-// One satisfiable alternative is enough: OAuth2 OR an API key means lotsman
-// can take the second road.
+// One satisfiable alternative is enough: a flow lotsman cannot complete OR an
+// API key means it can take the second road.
 func TestOneSatisfiableAlternativeIsEnough(t *testing.T) {
 	op := parseOne(t, securitySpec(`      security:
-        - oauth: [read]
+        - oauthDelegated: [read]
         - apiKeyAuth: []`))
 
 	if op.Support.Level != domain.SupportSupported {
 		t.Fatalf("support = %+v, want supported", op.Support)
 	}
 	if op.Security[0].Satisfiable() {
-		t.Error("the OAuth2 alternative must be marked unsatisfiable")
+		t.Error("the delegated OAuth2 alternative must be marked unsatisfiable")
 	}
 	if !op.Security[1].Satisfiable() {
 		t.Error("the API key alternative must be marked satisfiable")
@@ -189,5 +199,33 @@ func TestUndefinedSchemeIsNotSatisfiable(t *testing.T) {
 	}
 	if op.Security[0].Satisfiable() {
 		t.Error("an alternative naming an undefined scheme must not be satisfiable")
+	}
+}
+
+// M4a: an OAuth2 scheme offering client credentials is satisfiable, because a
+// process can obtain that token by itself (FR-63). Which flows a scheme
+// declares is the whole of the difference, so the requirement records them.
+func TestClientCredentialsIsSatisfiableAndDelegatedIsNot(t *testing.T) {
+	op := parseOne(t, securitySpec(`      security:
+        - oauth: [read]`))
+
+	if op.Support.Level != domain.SupportSupported {
+		t.Fatalf("support = %+v, want supported", op.Support)
+	}
+	requirement := op.Security[0].Requirements[0]
+	if !requirement.Satisfiable {
+		t.Error("a clientCredentials flow must be satisfiable")
+	}
+	if !reflect.DeepEqual(requirement.Flows, []string{"clientCredentials"}) {
+		t.Errorf("flows = %v, want [clientCredentials]", requirement.Flows)
+	}
+
+	delegated := parseOne(t, securitySpec(`      security:
+        - oauthDelegated: [read]`))
+	if delegated.Security[0].Requirements[0].Satisfiable {
+		t.Error("an authorizationCode flow needs a person and cannot be satisfiable here")
+	}
+	if !reflect.DeepEqual(delegated.Security[0].Requirements[0].Flows, []string{"authorizationCode"}) {
+		t.Errorf("flows = %v, want [authorizationCode]", delegated.Security[0].Requirements[0].Flows)
 	}
 }
