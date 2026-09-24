@@ -26,6 +26,29 @@ const maxJWKSBytes = 1 << 20
 // maxJWKSKeys bounds how many keys one set may carry.
 const maxJWKSKeys = 64
 
+// RSA key sizes this build will verify against.
+//
+// Both ends matter, and the upper one is the surprising half. Verifying an
+// RS256 signature costs modular exponentiation, which grows fast: 36 µs
+// against a 2048-bit modulus, 2.7 s against a 1-Mbit one, 43 s against a
+// 4-Mbit one -- and a key set document under the 1 MiB cap can carry a
+// modulus of about 6.3 Mbit. Without this bound, anything that can serve the
+// configured key set can make every verification burn a minute of CPU, and
+// the verification happens *before* a caller is authenticated, so an
+// unauthenticated request is enough to trigger it.
+//
+// The lower bound is the ordinary reason: a modulus small enough to factor is
+// a signature anyone can forge, and accepting one would make the whole check
+// ceremony.
+const (
+	minRSABits = 2048
+	maxRSABits = 8192
+)
+
+// maxRSAExponent bounds the public exponent. Real ones are 65537; a large one
+// costs the same exponentiation the modulus does.
+const maxRSAExponent = 1 << 31
+
 // unknownKidCooldown is the shortest interval between two fetches provoked by
 // a `kid` the cached set does not contain.
 //
@@ -209,7 +232,13 @@ func (j *jwk) publicKey() (crypto.PublicKey, error) {
 		if err != nil {
 			return nil, err
 		}
-		if !e.IsInt64() || e.Int64() <= 0 {
+		if bits := n.BitLen(); bits < minRSABits || bits > maxRSABits {
+			return nil, errs.Errorf(errs.ClassAuth,
+				"inbound: jwks: RSA modulus of %d bits is outside %d-%d", bits, minRSABits, maxRSABits)
+		}
+		// Odd and greater than one: an even exponent is not an RSA exponent,
+		// and 1 makes every signature verify.
+		if !e.IsInt64() || e.Int64() <= 1 || e.Int64() >= maxRSAExponent || e.Bit(0) == 0 {
 			return nil, errs.Errorf(errs.ClassAuth, "inbound: jwks: unusable RSA exponent")
 		}
 		return &rsa.PublicKey{N: n, E: int(e.Int64())}, nil
