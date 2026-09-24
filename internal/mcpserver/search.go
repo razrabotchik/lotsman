@@ -288,29 +288,6 @@ func serializedSize(schema map[string]any) int {
 	return len(encoded)
 }
 
-// proseKeywords are the JSON Schema keywords that explain a schema to a
-// reader rather than constrain what it accepts.
-var proseKeywords = map[string]bool{"description": true, "title": true, "examples": true}
-
-// schemaValued are keywords whose value is itself a schema.
-var schemaValued = map[string]bool{
-	"items": true, "not": true, "if": true, "then": true, "else": true,
-	"contains": true, "propertyNames": true, "additionalProperties": true,
-	"additionalItems": true, "unevaluatedItems": true, "unevaluatedProperties": true,
-}
-
-// schemaLists are keywords whose value is an array of schemas.
-var schemaLists = map[string]bool{
-	"allOf": true, "anyOf": true, "oneOf": true, "prefixItems": true,
-}
-
-// namedSchemas are keywords whose value maps a *name* to a schema. The names
-// belong to the API, not to JSON Schema.
-var namedSchemas = map[string]bool{
-	"properties": true, "$defs": true, "definitions": true,
-	"patternProperties": true, "dependentSchemas": true,
-}
-
 // withoutProse strips descriptions, titles and examples from a schema at every
 // depth, so that a schema too large for the response budget can be sent
 // without its explanations rather than not at all.
@@ -332,13 +309,13 @@ func withoutProse(schema map[string]any) map[string]any {
 	out := make(map[string]any, len(schema))
 	for key, value := range schema {
 		switch {
-		case proseKeywords[key]:
+		case domain.ProseKeywords[key]:
 			continue
-		case schemaValued[key]:
+		case domain.SchemaValuedKeywords[key]:
 			out[key] = pruneSchema(value)
-		case schemaLists[key]:
+		case domain.SchemaListKeywords[key]:
 			out[key] = pruneSchemaList(value)
-		case namedSchemas[key]:
+		case domain.NamedSchemaKeywords[key]:
 			out[key] = pruneNamedSchemas(value)
 		default:
 			// Data, or something this build does not recognise. Either way it

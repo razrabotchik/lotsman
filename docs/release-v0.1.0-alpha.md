@@ -109,6 +109,13 @@ resolve names itself, and the document still pointed at the old ones.
   `apps/v1` publishes 2.23 MB of tool definitions in tools mode and 5.5 KB in search mode, but the
   schema a model needs to create a Deployment is still 38.9 KB *after* every description is
   dropped. `inspect` reports the measurement either way, so the trade is visible before it is felt.
+- **Schema `examples` used to reach a model uncleaned.** Descriptions and titles from an
+  untrusted document are stripped of HTML and control characters and budgeted before they are
+  published (Constitution V); `examples` is prose that reaches the same place and was the one
+  piece that got there verbatim. It is now cleaned the same way. `enum` and `const` are
+  deliberately *not*: they are constraints, and rewriting them would change what the schema
+  accepts, which is a worse failure than the prose they might carry. No corpus document changes
+  as a result — the surface was open rather than exploited.
 - **The 24 KB `describe_operation` budget used to remove more than prose.** Reducing a schema to
   fit dropped every map key named `description`, `title` or `examples` — including under
   `properties`, where those are the names of the API's own fields. An API with a field called

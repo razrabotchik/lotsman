@@ -158,20 +158,29 @@ func defaultNote(schema domain.Schema) string {
 func sanitizeSchema(schema map[string]any) map[string]any {
 	out := make(map[string]any, len(schema))
 	for key, value := range schema {
-		switch key {
-		case "description", "title":
+		switch {
+		case key == "description" || key == "title":
 			if text := sanitizeDescription(toString(value)); text != "" {
 				out[key] = text
 			}
-		case "default":
+		case key == "examples":
+			// Illustrative, not a constraint -- so unlike `enum` and `const`
+			// it can be cleaned without changing what the schema accepts, and
+			// unlike them it is written to be read. It reaches a model's
+			// context exactly as a description does, and until this line it
+			// was the one piece of document prose that got there uncleaned.
+			if cleaned := sanitizeData(value); cleaned != nil {
+				out[key] = cleaned
+			}
+		case key == "default":
 			// Never republished; see defaultNote.
-		case "items", "additionalProperties":
+		case domain.SchemaValuedKeywords[key]:
 			if nested, ok := value.(map[string]any); ok {
 				out[key] = sanitizeSchema(nested)
 				continue
 			}
 			out[key] = value
-		case "properties":
+		case domain.NamedSchemaKeywords[key]:
 			nested, ok := value.(map[string]any)
 			if !ok {
 				out[key] = value
@@ -186,7 +195,7 @@ func sanitizeSchema(schema map[string]any) map[string]any {
 				cleaned[name] = property
 			}
 			out[key] = cleaned
-		case "allOf", "oneOf", "anyOf":
+		case domain.SchemaListKeywords[key]:
 			branches, ok := value.([]any)
 			if !ok {
 				out[key] = value
@@ -202,10 +211,37 @@ func sanitizeSchema(schema map[string]any) map[string]any {
 			}
 			out[key] = cleaned
 		default:
+			// Data the API defined, or a keyword this build does not know.
+			// `enum` and `const` in particular are constraints: cleaning them
+			// would change what the schema accepts, which is a worse failure
+			// than the prose they might carry.
 			out[key] = value
 		}
 	}
 	return out
+}
+
+// sanitizeData cleans the strings inside an illustrative value, at any depth,
+// and leaves its shape alone.
+func sanitizeData(value any) any {
+	switch typed := value.(type) {
+	case string:
+		return sanitizeDescription(typed)
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, item := range typed {
+			out[key] = sanitizeData(item)
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, sanitizeData(item))
+		}
+		return out
+	default:
+		return value
+	}
 }
 
 func sanitizeDescription(s string) string {
