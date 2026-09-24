@@ -231,7 +231,7 @@ func TestTransportAppliesCredentials(t *testing.T) {
 			defer srv.Close()
 
 			binding := Binding{Credentials: []Credential{{Name: "p", Profile: tt.profile, Requirement: tt.req}}}
-			client := Client(srv.Client(), binding)
+			client := Client(srv.Client(), binding, nil)
 
 			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/pets?limit=1", http.NoBody)
 			if err != nil {
@@ -268,7 +268,7 @@ func TestResolvedSecretsAreRegisteredForRedaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := Client(srv.Client(), binding).Do(req)
+	resp, err := Client(srv.Client(), binding, nil).Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +294,7 @@ func TestTransportReportsMissingSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Client(srv.Client(), binding).Do(req); err == nil {
+	if _, err := Client(srv.Client(), binding, nil).Do(req); err == nil {
 		t.Fatal("a call with an unresolvable credential succeeded")
 	}
 }

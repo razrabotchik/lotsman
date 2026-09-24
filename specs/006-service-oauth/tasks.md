@@ -41,16 +41,23 @@ precedent as `golang-jwt` in 005.
 
 ## Step 2: Minting  ✅ CHECKPOINT: a call reaches an API with a token lotsman obtained
 
-- [ ] T504 auth/oauth2: the provider — mint over the egress-governed client, cache until expiry,
+- [x] T504 auth/oauth2: the provider — mint over the egress-governed client, cache until expiry,
       one mint under concurrency
       → Over `egress.Policy`, not `http.DefaultClient`. The token endpoint is an origin lotsman
         calls, so the allowlist, the dial guard and the redirect refusal apply. A credential
         provider is not a hole in the floor the last five features closed.
       → Nothing is minted at startup. A process that cannot reach a token endpoint should still
         come up, still answer `inspect`, and refuse the calls that need it.
-- [ ] T505 transport: the new scheme applies the minted bearer; the minted token joins the
+      → One minter for the whole catalog, keyed by profile name: the token belongs to the
+        credential, not to the operation, so two hundred tools bound to one profile hold one
+        token between them. Twenty concurrent calls with nothing cached cost one mint — oauth2's
+        reusing source serialises them behind a single fetch, which is asserted rather than
+        assumed.
+      → The token source takes no per-call context, so the bound on a mint is the egress client's
+        own budget — the same budget every other outbound request is held to (FR-32).
+- [x] T505 transport: the new scheme applies the minted bearer; the minted token joins the
       redaction registry the moment it exists
-- [ ] T506 [P] a token endpoint that is unreachable, slow or refusing is a credential failure
+- [x] T506 [P] a token endpoint that is unreachable, slow or refusing is a credential failure
       naming the profile and the origin — with zero requests to the API itself
       → Exit code 5 and `ClassAuth`, not `ClassUpstream`: the API did not fail, and an operator
         reading a failure should be sent to the right system.

@@ -15,7 +15,7 @@ import (
 // hands the request to the transport: every layer above -- retries, logging,
 // egress checks -- has already seen and recorded the request without it. That
 // ordering is the reason a token cannot appear in a trace by accident.
-func Client(base *http.Client, binding Binding) *http.Client {
+func Client(base *http.Client, binding Binding, minter *Minter) *http.Client {
 	if binding.Empty() {
 		return base
 	}
@@ -24,7 +24,7 @@ func Client(base *http.Client, binding Binding) *http.Client {
 	if inner == nil {
 		inner = http.DefaultTransport
 	}
-	clone.Transport = &transport{inner: inner, binding: binding}
+	clone.Transport = &transport{inner: inner, binding: binding, minter: minter}
 	return &clone
 }
 
@@ -32,6 +32,10 @@ func Client(base *http.Client, binding Binding) *http.Client {
 type transport struct {
 	inner   http.RoundTripper
 	binding Binding
+	// minter obtains tokens for profiles that mint them. Nil when nothing in
+	// this binding does, which is every binding until an operator configures
+	// one.
+	minter *Minter
 }
 
 // RoundTrip resolves each credential and applies it to a copy of the request.
@@ -45,7 +49,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	outgoing := req.Clone(req.Context())
 
 	for i := range t.binding.Credentials {
-		if err := apply(outgoing, &t.binding.Credentials[i]); err != nil {
+		if err := apply(outgoing, &t.binding.Credentials[i], t.minter); err != nil {
 			// Redacted defensively: a resolution error should never carry the
 			// value, and this is the last place to be sure of it.
 			return nil, redact.Error(err)
@@ -54,8 +58,20 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.inner.RoundTrip(outgoing)
 }
 
-func apply(req *http.Request, credential *Credential) error {
+func apply(req *http.Request, credential *Credential, minter *Minter) error {
 	switch credential.Profile.Scheme {
+	case config.SchemeOAuth2ClientCredentials:
+		if minter == nil {
+			return errs.Errorf(errs.ClassInternal,
+				"auth: profile %q mints its token but no minter was wired", credential.Name)
+		}
+		token, err := minter.token(credential)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		return nil
+
 	case config.SchemeBearer:
 		token, err := resolve(credential.Profile.TokenRef)
 		if err != nil {
