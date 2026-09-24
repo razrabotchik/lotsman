@@ -66,6 +66,32 @@ The value is read at the moment a request is made, registered for redaction, and
 last code that touches the request before the wire. A canary-secret test suite checks that it
 appears in no log, result, error or report.
 
+### APIs that issue their own tokens
+
+An API whose `security` is an OAuth2 client-credentials flow needs a token minted rather than
+handed over. Configure the client id and secret, and lotsman gets one.
+
+```yaml
+execution:
+  allowedOrigins:
+    - https://issuer.example.com      # the token endpoint is egress too
+authProfiles:
+  serviceAuth:
+    scheme: oauth2-client-credentials
+    tokenURL: https://issuer.example.com/token
+    clientID: lotsman
+    clientSecretRef: env:LOTSMAN_CLIENT_SECRET
+    scopes: [read]
+```
+
+One token per credential, not per call: two hundred tools bound to one profile share it, and
+twenty concurrent calls with nothing cached cost one mint. Nothing is minted at startup — a
+process that cannot reach the token endpoint still comes up and still answers `inspect`.
+
+If the API answers `401`, lotsman re-mints once and retries once. A second `401` is the API's own
+answer and reaches you unchanged; a `403` is not retried at all, because the credential was
+understood and refused. Flows that need a browser and a person are still out of scope.
+
 ### Large APIs: search mode
 
 One tool per operation stops working above a certain catalog — not gradually, but completely: 65
@@ -240,7 +266,7 @@ executed — not that it silently misbehaves.
 | References | local `$ref`, published as `$defs`; file `$ref` confined to the document's directory | remote `$ref` (never fetched); anything escaping the root |
 | Parameters | path (`simple`), query (`form`, exploded or not), header (`simple`) — scalars and arrays of scalars | `deepObject`, `spaceDelimited`, `pipeDelimited`, `label`, `matrix`; objects and unions in a URL slot; cookie parameters (not serialized yet) |
 | Bodies | `application/json` (and a sole `*/*`), objects, arrays, `allOf`/`oneOf`/`anyOf`, recursion | `application/x-www-form-urlencoded`, multipart, several competing media types, conditional subschemas |
-| Auth | API key (header/query/cookie), HTTP basic, HTTP bearer — via `env:`/`file:` references | OAuth2, OpenID Connect, mutual TLS |
+| Auth | API key (header/query/cookie), HTTP basic, HTTP bearer — via `env:`/`file:` references; OAuth2 `clientCredentials` (the token is minted and cached) | OAuth2 `authorizationCode`/`implicit`/`password` (they need a person — delegated mode), OpenID Connect discovery, mutual TLS |
 | Effects | `read` executes by default; `write`/`destructive`/`unknown` need `--allow-mutations` | — |
 
 Measured against real documents ([docs/corpus.md](docs/corpus.md)): Kubernetes `apps/v1` 65 of 77
@@ -286,7 +312,7 @@ resolved.
 
 ## What is not here yet
 
-Upstream OAuth2 (M4), recipes, multi-API namespaces, cookie
+Delegated OAuth2 — the flows that need a person (M4b) — recipes, multi-API namespaces, cookie
 parameters, form-urlencoded bodies, Swagger 2.0. No container image is published to a registry:
 one is built and tested, but publishing needs a registry, a signing story and a retention policy.
 

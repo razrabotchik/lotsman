@@ -110,6 +110,11 @@ precedent as `golang-jwt` in 005.
 
 ## Step 5: Docs  ✅ CHECKPOINT: the support matrix stops being out of date
 
-- [ ] T512 [P] docs: an ADR, README, and the support matrix — `oauth2` client credentials moves
-      out of the refused column, with `authorizationCode` and `implicit` staying in it and saying
-      why (M4b, and it starts only when a real user needs it)
+- [x] T512 [P] docs: ADR-0017, README, and the support matrix — `oauth2` client credentials moved
+      out of the refused column, with `authorizationCode`, `implicit` and `password` staying in it
+      and saying why (they need a person: delegated mode, M4b)
+      → The README section says the token endpoint is egress and has to be allowlisted, because
+        that is the one part of this an operator will otherwise meet as a puzzling denial.
+      → Two known limits added to the release review, and both are decisions rather than gaps: a
+        minted token lives in memory and nowhere else, and requested scopes are not checked
+        against what an operation declares.

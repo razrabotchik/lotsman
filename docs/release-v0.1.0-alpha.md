@@ -9,8 +9,9 @@ alpha, and where the evidence is. A criterion is not marked met because someone 
 implementing it; it is marked met because a test fails when it stops being true.
 
 Scope of this review: features 001 (core runtime), 002 (search mode), 003 (selection, overrides
-and interactive approval — the M2 tail), 004 (the production HTTP profile — M3) and 005 (inbound
-OAuth — the M3 tail), all complete — 45, 14, 12, 21 and 15 tasks respectively.
+and interactive approval — the M2 tail), 004 (the production HTTP profile — M3) 005 (inbound
+OAuth — the M3 tail) and 006 (service OAuth upstream — M4a), all complete — 45, 14, 12, 21, 15 and
+12 tasks respectively.
 
 | # | Criterion | Status | Evidence |
 |---|---|---|---|
@@ -79,9 +80,18 @@ auth/egress security tests зелёные»* (docs/spec.md §12).
 
 So: met, with conformance qualified exactly as criterion 10 qualifies it.
 
+## What 006 added
+
+Upstream credentials that are obtained rather than configured. An API whose `security` is an
+OAuth2 client-credentials flow is now callable: lotsman mints the token from a client id and
+secret, over the same egress-governed client every API call goes through, and caches it per
+credential rather than per operation. A `401` causes exactly one re-mint and one retry — FR-35,
+which had been vacuously satisfied since 001 because nothing in the build could refresh anything.
+
 ## What it is not
 
-No upstream OAuth (M4), no recipes, no multi-API namespaces.
+No delegated OAuth — the flows that need a person are M4b and start only when a real user needs
+them — no recipes, no multi-API namespaces.
 Cookie parameters, form-urlencoded bodies and Swagger 2.0 are refused with reason codes rather
 than half-supported. Search ranking is lexical; semantic retrieval would need the same benchmark
 to earn a claim. No container image is pushed anywhere: building one is done and tested, but
@@ -133,6 +143,14 @@ resolve names itself, and the document still pointed at the old ones.
   to push to (ADR-0015).
 - **The reload watcher compares size and modification time.** An edit that changes neither is
   missed; `SIGHUP` covers the operator who needs more than that.
+- **A minted token lives in memory and nowhere else.** No token store, and no cross-replica
+  refresh coordination: in service mode the token is derived from a secret the process already
+  holds, and client credentials has no refresh token to rotate. FR-66 and FR-67 were written for
+  delegated mode; what they ask for here is an in-memory cache, and that is what they get
+  (ADR-0017).
+- **Scopes a profile requests are not checked against what an operation declares.** Refusing
+  locally would be overruling the provider about a token it already issued. The report shows
+  both, so a mismatch is visible without being fatal.
 - **A validated subject is recorded, not enforced.** The audit event names who asked; no rule can
   match on it. Per-subject authorization is RBAC, and §8 defers RBAC to the gateway layer — a
   half-built version would be worse than none, because an operator who saw `subject` in a rule
