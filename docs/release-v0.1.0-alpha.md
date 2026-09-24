@@ -109,6 +109,14 @@ resolve names itself, and the document still pointed at the old ones.
   `apps/v1` publishes 2.23 MB of tool definitions in tools mode and 5.5 KB in search mode, but the
   schema a model needs to create a Deployment is still 38.9 KB *after* every description is
   dropped. `inspect` reports the measurement either way, so the trade is visible before it is felt.
+- **The 24 KB `describe_operation` budget used to remove more than prose.** Reducing a schema to
+  fit dropped every map key named `description`, `title` or `examples` — including under
+  `properties`, where those are the names of the API's own fields. An API with a field called
+  `description` therefore lost it from the reduced schema, so a call that worked in tools mode was
+  rejected in search mode as an unknown argument, while the caller was told only
+  `descriptionsOmitted`. The prune now recurses solely where a value is known to be a schema, and
+  leaves instance data and unrecognised keywords exactly as found. Found by writing the test the
+  function never had.
 - **An MCP result is carried twice** — as `structuredContent` and as the text fallback for clients
   that predate it — so a response costs roughly double its payload on the wire. The 24 KB
   `describe_operation` budget therefore buys about 50 KB.

@@ -288,32 +288,99 @@ func serializedSize(schema map[string]any) int {
 	return len(encoded)
 }
 
+// proseKeywords are the JSON Schema keywords that explain a schema to a
+// reader rather than constrain what it accepts.
+var proseKeywords = map[string]bool{"description": true, "title": true, "examples": true}
+
+// schemaValued are keywords whose value is itself a schema.
+var schemaValued = map[string]bool{
+	"items": true, "not": true, "if": true, "then": true, "else": true,
+	"contains": true, "propertyNames": true, "additionalProperties": true,
+	"additionalItems": true, "unevaluatedItems": true, "unevaluatedProperties": true,
+}
+
+// schemaLists are keywords whose value is an array of schemas.
+var schemaLists = map[string]bool{
+	"allOf": true, "anyOf": true, "oneOf": true, "prefixItems": true,
+}
+
+// namedSchemas are keywords whose value maps a *name* to a schema. The names
+// belong to the API, not to JSON Schema.
+var namedSchemas = map[string]bool{
+	"properties": true, "$defs": true, "definitions": true,
+	"patternProperties": true, "dependentSchemas": true,
+}
+
 // withoutProse strips descriptions, titles and examples from a schema at every
-// level. Everything that decides whether an argument is valid stays.
+// depth, so that a schema too large for the response budget can be sent
+// without its explanations rather than not at all.
+//
+// It recurses only where a value is known to be a schema. That is the whole
+// difficulty, and getting it wrong is not a cosmetic bug:
+//
+//   - Under `properties`, the keys are the names of the API's fields. A field
+//     called `description` is data, and dropping it produces a schema that
+//     rejects the very argument the API expects -- a call that works in tools
+//     mode failing in search mode, with the caller told `descriptionsOmitted`
+//     as if only prose had gone.
+//   - Under `enum`, `const` and `default`, the values are instance data.
+//     Walking into them looking for keywords would edit the API's own values.
+//   - An unrecognised keyword is left exactly as it was found. lotsman does
+//     not know what a vendor extension means, and guessing is how a schema
+//     stops describing the API.
 func withoutProse(schema map[string]any) map[string]any {
 	out := make(map[string]any, len(schema))
 	for key, value := range schema {
-		switch key {
-		case "description", "title", "examples":
+		switch {
+		case proseKeywords[key]:
 			continue
+		case schemaValued[key]:
+			out[key] = pruneSchema(value)
+		case schemaLists[key]:
+			out[key] = pruneSchemaList(value)
+		case namedSchemas[key]:
+			out[key] = pruneNamedSchemas(value)
 		default:
-			out[key] = pruneValue(value)
+			// Data, or something this build does not recognise. Either way it
+			// is copied through untouched.
+			out[key] = value
 		}
 	}
 	return out
 }
 
-func pruneValue(value any) any {
-	switch typed := value.(type) {
-	case map[string]any:
-		return withoutProse(typed)
-	case []any:
-		pruned := make([]any, 0, len(typed))
-		for _, item := range typed {
-			pruned = append(pruned, pruneValue(item))
-		}
-		return pruned
-	default:
+// pruneSchema prunes a value that is a schema, or leaves it alone when it is
+// not one (`additionalProperties: false` is a boolean, not a schema).
+func pruneSchema(value any) any {
+	if schema, ok := value.(map[string]any); ok {
+		return withoutProse(schema)
+	}
+	return value
+}
+
+// pruneSchemaList prunes each schema in an array of them.
+func pruneSchemaList(value any) any {
+	list, ok := value.([]any)
+	if !ok {
 		return value
 	}
+	pruned := make([]any, 0, len(list))
+	for _, item := range list {
+		pruned = append(pruned, pruneSchema(item))
+	}
+	return pruned
+}
+
+// pruneNamedSchemas prunes the values of a name-to-schema map and never the
+// names.
+func pruneNamedSchemas(value any) any {
+	named, ok := value.(map[string]any)
+	if !ok {
+		return value
+	}
+	out := make(map[string]any, len(named))
+	for name, sub := range named {
+		out[name] = pruneSchema(sub)
+	}
+	return out
 }
