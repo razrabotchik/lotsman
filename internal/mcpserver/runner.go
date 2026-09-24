@@ -187,6 +187,10 @@ func subjectOf(ctx context.Context) string {
 // newRunners prepares one runner per published tool, in catalog order.
 func newRunners(tools []catalog.Tool, client *http.Client, baseURL string, outbound *egress.Policy,
 	log logger, approval approver, sink audit.Sink) []runner {
+	// One minter for the whole catalog: a token belongs to the credential,
+	// not to the operation, so two hundred tools bound to one profile hold
+	// one token between them.
+	minter := auth.NewMinter(client)
 	runners := make([]runner, 0, len(tools))
 	for i := range tools {
 		tool := &tools[i]
@@ -220,7 +224,7 @@ func newRunners(tools []catalog.Tool, client *http.Client, baseURL string, outbo
 			prepared.validator = validator
 			// The credential is applied by the innermost round tripper, after
 			// every other layer has seen the request without it.
-			prepared.client = auth.Client(client, tool.AuthBinding)
+			prepared.client = auth.Client(client, tool.AuthBinding, minter)
 		}
 
 		runners = append(runners, prepared)
