@@ -22,10 +22,12 @@ func FromCatalog(cat *catalog.Catalog) *Index {
 			Key:      tool.OperationKey,
 			ToolName: tool.Name,
 			Method:   tool.Method,
-			Path:     tool.PathTemplate,
-			Summary:  tool.Description,
-			Tags:     tool.Tags,
-			Effect:   tool.Effect.Effect,
+			// The cleaned form: a search result is read by a model, and the
+			// raw template is the document's to write.
+			Path:    tool.SafePath(),
+			Summary: tool.Description,
+			Tags:    tool.Tags,
+			Effect:  tool.Effect.Effect,
 		})
 	}
 	return Build(documents)

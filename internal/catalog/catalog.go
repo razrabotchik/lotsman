@@ -364,6 +364,23 @@ func digest(tools []Tool) string {
 // model choose, and every one of them costs context.
 const maxTags = 8
 
+// maxPathDisplayBytes bounds a path template shown to a person or a model.
+// No API has a longer one, and the string is untrusted.
+const maxPathDisplayBytes = 256
+
+// SafePath is the path template as it may be shown to a person or a model.
+//
+// PathTemplate is what a request is built from and stays exactly as the
+// document wrote it; there is no room to clean a string that has to match an
+// API. This is the same string cleaned and bounded for the places that only
+// *read* it: a refusal returned to a model, an approval prompt a person is
+// shown, a search result. Those are rendered where a description is rendered,
+// and a document able to put its own line into one of them has the injection
+// surface Constitution V is about.
+func (t *Tool) SafePath() string {
+	return budgetBytes(sanitizeText(t.PathTemplate), maxPathDisplayBytes)
+}
+
 // sanitizeTags cleans and bounds the document's tags. They are untrusted text
 // on their way to an LLM exactly like a description is, and they are also a
 // filter vocabulary, so duplicates and empties are dropped rather than carried.

@@ -109,6 +109,13 @@ resolve names itself, and the document still pointed at the old ones.
   `apps/v1` publishes 2.23 MB of tool definitions in tools mode and 5.5 KB in search mode, but the
   schema a model needs to create a Deployment is still 38.9 KB *after* every description is
   dropped. `inspect` reports the measurement either way, so the trade is visible before it is felt.
+- **A refusal used to quote the document's path template verbatim.** Every tool error, every
+  approval prompt and every search result carried it — so a path containing a newline could put a
+  line of its own inside lotsman's own message to a model. The template a request is built from
+  still has to match the API exactly and is untouched; the places that only *read* it now use a
+  cleaned, bounded copy, the same treatment a description has always had. The words in a payload
+  survive, as they do in any description: what stops is the structure that makes them look like
+  something other than a path.
 - **A parameter name could carry anything into a model's context.** Every other string a document
   contributes there is sanitized and bounded — tool names, descriptions, tags, examples — but a
   parameter name is published verbatim as a schema property key, because it is the key the model
