@@ -237,6 +237,17 @@ func buildModel(ctx context.Context, specBytes []byte, cfg parseConfig) (*parsed
 		}
 		// A circular reference is a legitimate shape now that references are
 		// published as references rather than inlined (ADR-0009).
+		// The index collects descriptions, summaries, enums and JSONPath
+		// values for tools that lint documents. lotsman is not one: it reads
+		// the high-level model and never touches an index accessor, so this
+		// is memory spent on an answer nobody asks for. Measured at 5-7 MB
+		// per document across the corpus, with every report byte-identical
+		// (docs/benchmarks.md).
+		//
+		// The upstream warning is real and does not apply here: anything that
+		// consumes `GetAllDescriptions` and its siblings, or inline schema
+		// `Reference.Path` values, must leave this alone.
+		config.SkipMetadataCollection = true
 		config.IgnorePolymorphicCircularReferences = true
 		config.IgnoreArrayCircularReferences = true
 

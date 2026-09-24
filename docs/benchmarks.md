@@ -75,6 +75,11 @@ again expecting more:
   200 MiB budget — and doubles wall time to 0.80 s. `GOGC=50` gives 250 MB for a small slowdown.
   Neither reaches the budget, because the peak is driven by allocation churn against a live heap
   that is already 103 MB: the runtime cannot collect what is still in use.
+- **Skipping the index's diagnostic metadata.** libopenapi collects descriptions, summaries,
+  enums and JSONPath values for tools that lint documents; lotsman reads the high-level model and
+  never touches an index accessor. `SkipMetadataCollection` takes 5-7 MB off each document in the
+  corpus — 269 MB to 265 MB on the exploded one — with every report byte-identical across all five
+  corpus documents. Free, and not nearly enough.
 - **A `$ref` resolution cache**, which *was* worth doing on its own merits. Confinement resolves
   symlinks on every reference, and an exploded specification asks the same question thousands of
   times over paths that share their leading components. Caching the answer for one closure walk
@@ -87,10 +92,29 @@ allocation is where the peak comes from, and it is libopenapi's: `lookupRolodex`
 `ExtractComponentsFromRefs` account for roughly two thirds of what is still resident. Nothing in
 lotsman's own code is a meaningful share of it.
 
-So the remedy is unchanged and is not a tuning knob: parsing referenced documents lazily, on the
-path from an operation to the schemas it actually uses, which changes how the adapter is
-structured. Until then, an operator serving a large exploded specification should expect a quarter
-of a gigabyte of resident memory, and the number is here so the decision is theirs rather than a
+### The remedy is larger than this document used to say
+
+The earlier wording was "parsing referenced documents lazily … which changes how the adapter is
+structured". Looking for the lever showed that understated it.
+
+libopenapi has one option for not resolving external references —
+`SkipExternalRefResolution` — and its own documentation says what it costs: schema proxies keep
+the reference string and `Schema()` returns **nil**. lotsman derives its IR from those schemas, so
+with that option there is nothing to derive from. There is no setting that resolves a reference
+the first time an operation needs it.
+
+So the remedy is not "restructure the adapter" but "stop using libopenapi's reference resolution
+and do it here" — resolving `$ref` against the closure lotsman already walks, on demand, and
+handing libopenapi one document at a time. That is a parser-level change with its own correctness
+surface (circularity, pointer semantics, `$ref` siblings), and it is not something to start
+because a benchmark is 25% over.
+
+The alternative is to say NFR-11 does not apply to exploded specifications and amend it, which is
+a decision about the requirement rather than about the code. Either way it is a decision, not a
+task, and it is recorded here as one.
+
+Until then, an operator serving a large exploded specification should expect a quarter of a
+gigabyte of resident memory, and the number is here so the decision is theirs rather than a
 surprise.
 
 ## What is not benchmarked yet
