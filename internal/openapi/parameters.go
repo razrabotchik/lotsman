@@ -3,6 +3,7 @@ package openapi
 import (
 	"fmt"
 	"sort"
+	"unicode"
 
 	"github.com/pb33f/libopenapi/datamodel/high/base"
 	v3 "github.com/pb33f/libopenapi/datamodel/high/v3"
@@ -67,6 +68,18 @@ func buildInput(merged map[paramKey]*v3.Parameter, pointer string, defs *bundle)
 			continue
 		}
 
+		if why := unpublishableName(key.name); why != "" {
+			// Refused rather than cleaned, because a parameter name is a
+			// contract: it is the key a model sends and the key lotsman puts
+			// on the wire, so rewriting it would publish a schema that does
+			// not describe the API. Every other string a document contributes
+			// to a model's context is sanitized and bounded; this is the one
+			// that cannot be, so the operation goes instead.
+			out.reject(domain.ReasonInvalidParameter, paramPointer,
+				fmt.Sprintf("parameter name in %q %s and cannot be published", in, why))
+			continue
+		}
+
 		style := domain.ParameterStyle(source.Style)
 		if style == "" {
 			style = domain.DefaultStyle(in)
@@ -116,6 +129,36 @@ func buildInput(merged map[paramKey]*v3.Parameter, pointer string, defs *bundle)
 	}
 
 	return out
+}
+
+// maxParameterNameBytes bounds a published parameter name.
+//
+// No API names a field this long. The bound exists because the name is
+// published verbatim into a model's context, and every other document string
+// that gets there is budgeted: a name alone should not be able to spend a
+// tool definition's worth of it.
+const maxParameterNameBytes = 256
+
+// unpublishableName reports why a parameter name cannot be published, or
+// empty when it can.
+//
+// The message deliberately does not quote the name. It is the value under
+// suspicion, it reaches a log and a report, and this is the one place that
+// knows it is untrustworthy.
+func unpublishableName(name string) string {
+	if len(name) > maxParameterNameBytes {
+		return fmt.Sprintf("is %d bytes, over the %d-byte limit", len(name), maxParameterNameBytes)
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			// A newline in a property key is a label that can carry its own
+			// line into whatever renders it. Descriptions have these stripped
+			// for exactly that reason; a name cannot be stripped without
+			// ceasing to be the API's name.
+			return "contains a control character"
+		}
+	}
+	return ""
 }
 
 func (b *inputBuild) reject(code domain.ReasonCode, pointer, message string) {

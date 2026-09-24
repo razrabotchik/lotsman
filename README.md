@@ -286,6 +286,9 @@ These are not gaps. They are the product.
   `127.0.0.1` yourself is fine: that is intent.
 - **An unknown argument is a validation error**, never something quietly dropped, and never
   something smuggled into a query string.
+- **A parameter name that cannot be published is an operation lotsman refuses.** Names go into the
+  tool schema verbatim, because they are the contract with the API — so a name carrying a newline
+  or running to four thousand bytes is not cleaned into something else, it is a reason code.
 - **A truncated response is text**, marked `truncated` with `receivedBytes`. Half a JSON document
   handed over as structured content is how an agent ends up confidently wrong.
 - **A `2 KB` YAML alias bomb is refused in milliseconds**, because expansion is measured rather
