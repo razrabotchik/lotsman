@@ -30,7 +30,17 @@ var transports = []struct {
 // stdioSession starts the binary on a pipe, the way a desktop client does.
 func stdioSession(t *testing.T, args ...string) (*mcp.ClientSession, *syncBuffer) {
 	t.Helper()
+	return stdioSessionEnv(t, nil, args...)
+}
+
+// stdioSessionEnv is the same, with the environment a secret reference or a
+// private certificate authority needs.
+func stdioSessionEnv(t *testing.T, env []string, args ...string) (*mcp.ClientSession, *syncBuffer) {
+	t.Helper()
 	cmd := exec.Command(buildBinary(t), append([]string{"serve"}, args...)...)
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	stderr := &syncBuffer{}
 	cmd.Stderr = stderr
 
