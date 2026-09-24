@@ -162,7 +162,7 @@ func approvalMessage(tool *catalog.Tool, args map[string]any) string {
 	}
 	fmt.Fprintf(&b, "operation %s\n", tool.OperationKey)
 	fmt.Fprintf(&b, "effect    %s (%s, %s)\n", tool.Effect.Effect, tool.Effect.Source, tool.Effect.Confidence)
-	fmt.Fprintf(&b, "target    %s %s%s\n", tool.Method, origin(tool), tool.PathTemplate)
+	fmt.Fprintf(&b, "target    %s %s%s\n", tool.Method, origin(tool), tool.SafePath())
 	if summary := argumentSummary(args); summary != "" {
 		fmt.Fprintf(&b, "arguments %s\n", summary)
 	}

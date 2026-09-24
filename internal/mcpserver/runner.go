@@ -103,7 +103,7 @@ func (r *runner) record(ctx context.Context, started time.Time, result response.
 		Decision:      audit.DecisionExecuted,
 		Origin:        origin(r.tool),
 		Method:        r.tool.Method,
-		Path:          r.tool.PathTemplate,
+		Path:          r.tool.SafePath(),
 		Status:        result.Status,
 		DurationMs:    time.Since(started).Milliseconds(),
 		ResponseBytes: result.ReceivedBytes,
@@ -129,7 +129,7 @@ func (r *runner) execute(ctx context.Context, invocation *mcp.CallToolRequest, a
 	var how outcome
 	if !r.callable() {
 		return response.Result{}, how, errs.Errorf(r.refusalClass, "lotsman: %s %s %s",
-			r.tool.Method, r.tool.PathTemplate, r.refusal)
+			r.tool.Method, r.tool.SafePath(), r.refusal)
 	}
 
 	// Every error leaving a call passes through redaction: an argument, a URL
@@ -158,7 +158,7 @@ func (r *runner) execute(ctx context.Context, invocation *mcp.CallToolRequest, a
 		// reached the wire as a literal, which is a guess about the API.
 		if strings.ContainsAny(req.URL.EscapedPath(), "{}") {
 			return nil, errs.Errorf(errs.ClassInternal,
-				"lotsman: %s %s: unexpanded path template", r.tool.Method, r.tool.PathTemplate)
+				"lotsman: %s %s: unexpanded path template", r.tool.Method, r.tool.SafePath())
 		}
 		if denied := r.egress.CheckTarget(req.URL); denied != nil {
 			return nil, denied
@@ -225,7 +225,7 @@ func (r *runner) send(req *http.Request) (*http.Response, error) {
 		// A transport error can carry the request URL, and an API key may live
 		// in a query parameter.
 		return nil, redact.Error(
-			errs.Errorf(errs.ClassUpstream, "lotsman: %s %s: %w", r.tool.Method, r.tool.PathTemplate, err))
+			errs.Errorf(errs.ClassUpstream, "lotsman: %s %s: %w", r.tool.Method, r.tool.SafePath(), err))
 	}
 	return resp, nil
 }
