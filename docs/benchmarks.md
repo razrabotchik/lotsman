@@ -35,30 +35,66 @@ Derivation is measured separately from parsing because the two scale with differ
 parsing with the document's size, derivation with the number of operations and the size of their
 schemas.
 
-## End-to-end `inspect` (process wall time and peak RSS)
+## Search latency (NFR-10: p95 < 50 ms over 1000 operations, cold build excluded)
+
+| Call | Operations | p50 | p95 | max |
+|---|---|---|---|---|
+| `search_operations` | 1,000 | 86 µs | **257 µs** | 359 µs |
+| `list_tags` | 1,000 | 40 ns | 451 ns | 691 ns |
+
+Measured by `TestSearchLatency` over the DigitalOcean corpus grown to the size the requirement
+states — the corpus publishes 631 operations, so the index is repeated under distinct keys until
+it reaches a thousand. Duplication lengthens every term's posting list, which is what search cost
+scales with, so this is a conservative measurement rather than a flattering one. The query set is
+the recall tasks plus the shapes that cost most: a term half the corpus carries, an empty query
+that browses everything, a long query, and one that matches nothing but still scans.
+
+**The budget is met by a factor of about two hundred.** That is worth stating plainly, because it
+means NFR-10 cannot catch a regression: search could become twenty times slower and still pass.
+The test therefore asserts a second threshold of 5 ms — the measured baseline with wide margin for
+platform variance — so that an order-of-magnitude change fails somewhere rather than nowhere.
+
+`BenchmarkSearch` reports the same thing in the form CI can track: 87 µs/op.
+
+## End-to-end `inspect` and NFR-11
+
+Re-measured after the `$ref` resolution cache (below). Peak RSS varies by a few percent between
+runs; the figures are the median of three.
 
 | Document | Wall | Peak RSS |
 |---|---|---|
-| Kubernetes `apps/v1` (833 KB) | 0.15 s | 84 MB |
-| Stripe (5.2 MB) | 0.40 s | 147 MB |
-| DigitalOcean, exploded (~2,900 documents, 14 MB) | 0.39 s | **262 MB** |
+| Kubernetes `apps/v1` (833 KB) | 0.14 s | 93 MB |
+| Stripe (5.2 MB) | 0.38 s | 157 MB |
+| DigitalOcean, exploded (~2,900 documents, 14 MB) | 0.32 s | **262 MB** |
 
-**NFR-11 (core RSS < 200 MiB after loading a reference specification) holds for single-document
-specifications and does not hold for the exploded case.** DigitalOcean's closure is parsed and
-indexed in full before a single operation is enumerated, and 262 MB is the honest cost of that.
+**NFR-11 still does not hold for the exploded case**, and the remedy is still the structural one
+described below rather than a knob. Two things were tried and are recorded so nobody tries them
+again expecting more:
 
-This is recorded rather than fixed. The remedy is not a tuning knob: it is parsing referenced
-documents lazily, on the path from an operation to the schemas it actually uses, which changes how
-the adapter is structured. Until then, an operator serving a large exploded specification should
-expect a quarter of a gigabyte of resident memory, and the number is here so the decision is
-theirs rather than a surprise.
+- **The Go runtime's own limit.** `GOMEMLIMIT=180MiB` brings peak RSS to 215 MB — still over the
+  200 MiB budget — and doubles wall time to 0.80 s. `GOGC=50` gives 250 MB for a small slowdown.
+  Neither reaches the budget, because the peak is driven by allocation churn against a live heap
+  that is already 103 MB: the runtime cannot collect what is still in use.
+- **A `$ref` resolution cache**, which *was* worth doing on its own merits. Confinement resolves
+  symlinks on every reference, and an exploded specification asks the same question thousands of
+  times over paths that share their leading components. Caching the answer for one closure walk
+  cut wall time from 0.39 s to 0.32 s (~18%) and peak RSS by about 8 MB, with the report
+  byte-identical across 2,900 documents. It does not change the confinement decision: identical
+  input, identical answer.
+
+The live heap after parsing the exploded corpus is 103 MB, against 448 MB allocated in total. The
+allocation is where the peak comes from, and it is libopenapi's: `lookupRolodex` and
+`ExtractComponentsFromRefs` account for roughly two thirds of what is still resident. Nothing in
+lotsman's own code is a meaningful share of it.
+
+So the remedy is unchanged and is not a tuning knob: parsing referenced documents lazily, on the
+path from an operation to the schemas it actually uses, which changes how the adapter is
+structured. Until then, an operator serving a large exploded specification should expect a quarter
+of a gigabyte of resident memory, and the number is here so the decision is theirs rather than a
+surprise.
 
 ## What is not benchmarked yet
 
-- Search latency (NFR-10: p95 < 50 ms over 1000 operations) is unmeasured. Indexing happens once
-  per catalog snapshot and does not appear as a separate cost in the numbers above, but an
-  unclaimed number is better than an unmeasured claim. The catalog-size side of search mode *is*
-  measured, in docs/corpus.md.
 - Per-call latency is dominated by the upstream API and is not a useful lotsman metric until the
   runtime does something expensive per call. Validation and serialization are microseconds against
   a network round trip.

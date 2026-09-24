@@ -112,6 +112,10 @@ resolve names itself, and the document still pointed at the old ones.
 - **An MCP result is carried twice** — as `structuredContent` and as the text fallback for clients
   that predate it — so a response costs roughly double its payload on the wire. The 24 KB
   `describe_operation` budget therefore buys about 50 KB.
+- **Search latency is now measured too, and the budget turns out to be decoration.** NFR-10 asks
+  for p95 under 50 ms over a thousand operations; the measured p95 is 257 µs, about two hundred
+  times under. The test asserts a second, tighter threshold so that an order-of-magnitude
+  regression fails somewhere rather than nowhere (docs/benchmarks.md).
 - **Search recall is measured, not claimed**: Kubernetes Recall@5 1.00 / MRR 0.53, DigitalOcean
   0.75 / 0.65 (`internal/searchindex/recall_test.go`). The two fail in opposite directions:
   Kubernetes because its operations are near-duplicates and the ambiguity is in the question,
@@ -119,7 +123,10 @@ resolve names itself, and the document still pointed at the old ones.
   carries. NFR-10 (search p95 < 50 ms) is deliberately unmeasured rather than assumed.
 - **An exploded specification costs memory.** DigitalOcean's ~2,900-document closure peaks at
   262 MB RSS, over NFR-11's 200 MiB budget, because the closure is parsed in full before any
-  operation is enumerated (docs/benchmarks.md).
+  operation is enumerated. Two cheaper remedies were tried and measured: the Go runtime's own
+  `GOMEMLIMIT` reaches 215 MB at twice the wall time — still over — and a `$ref` resolution cache
+  took 18% off wall time and 8 MB off the peak. The structural fix, lazy parsing of referenced
+  documents, is unchanged and still not done (docs/benchmarks.md).
 - **`ambiguous_security` is only evaluated against configured profiles.** With no profiles, no
   alternative is satisfiable and the operation is blocked rather than called ambiguously. Two
   profiles satisfying one scheme now refuse as ambiguous instead of taking the first — that was a

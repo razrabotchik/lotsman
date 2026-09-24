@@ -56,6 +56,8 @@ func resolveClosure(rootBytes []byte, rootPath string, refs []refSite, limits Li
 		rootPath = resolved
 	}
 
+	paths := newResolver()
+
 	type pending struct {
 		abs  string
 		refs []refSite
@@ -82,7 +84,7 @@ func resolveClosure(rootBytes []byte, rootPath string, refs []refSite, limits Li
 				continue
 			}
 
-			abs, reason := confine(currentDir, rootPath, target)
+			abs, reason := confine(paths, currentDir, rootPath, target)
 			if reason != "" {
 				result.diagnostics = append(result.diagnostics, diagnostic(reason, ref, confinementText(reason, rootPath, target)))
 				continue
@@ -131,21 +133,57 @@ func resolveClosure(rootBytes []byte, rootPath string, refs []refSite, limits Li
 	return result, nil
 }
 
+// resolver answers "what does this path really point at" and remembers.
+//
+// The answer is a `lstat` per path component, and an exploded specification
+// asks the same question thousands of times: every `$ref` in every document
+// resolves a path that mostly shares its leading components with the last
+// one. Caching by the cleaned candidate path returns exactly what a fresh
+// call would -- identical input, identical answer -- so nothing about the
+// confinement check changes, only how often it walks the filesystem.
+//
+// The cache lives for one closure walk. A symlink changed between two parses
+// is seen by the next one; a symlink changed *during* one is a race that
+// exists with or without this, since the check and the read are separate
+// syscalls either way.
+type resolver struct {
+	resolved map[string]string
+	failed   map[string]bool
+}
+
+func newResolver() *resolver {
+	return &resolver{resolved: map[string]string{}, failed: map[string]bool{}}
+}
+
+// eval resolves a path with symlinks expanded, remembering both answers.
+func (r *resolver) eval(path string) (string, bool) {
+	if answer, ok := r.resolved[path]; ok {
+		return answer, true
+	}
+	if r.failed[path] {
+		return "", false
+	}
+	answer, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		r.failed[path] = true
+		return "", false
+	}
+	r.resolved[path] = answer
+	return answer, true
+}
+
 // confine resolves target relative to fromDir and verifies that the result is
 // inside root, with symlinks expanded: a symlink pointing out of the tree is
 // the oldest way to escape a directory check.
-func confine(fromDir, root, target string) (string, domain.ReasonCode) {
+func confine(paths *resolver, fromDir, root, target string) (string, domain.ReasonCode) {
 	if filepath.IsAbs(target) {
 		// An absolute path ignores the root by construction.
 		return "", domain.ReasonRefOutsideRoot
 	}
 	candidate := filepath.Clean(filepath.Join(fromDir, target))
 
-	resolved, err := filepath.EvalSymlinks(candidate)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", domain.ReasonRefUnresolvable
-		}
+	resolved, ok := paths.eval(candidate)
+	if !ok {
 		return "", domain.ReasonRefUnresolvable
 	}
 	if !within(root, resolved) {
