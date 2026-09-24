@@ -1,6 +1,9 @@
 package inbound
 
 import (
+	"encoding/base64"
+	"encoding/json"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -155,4 +158,83 @@ func TestAnUnusableKeyDoesNotSpoilTheSet(t *testing.T) {
 	if _, err := keys.key(t.Context(), p.kid); err != nil {
 		t.Errorf("a usable key was lost because the set also carried an unusable one: %v", err)
 	}
+}
+
+// A key set may not hand this process a key that is expensive to verify
+// against, or cheap to forge against.
+//
+// The expensive direction is the one that is easy to miss: verifying an RS256
+// signature against a 4-Mbit modulus takes about 43 seconds on the machine
+// these numbers were measured on, against 36 µs for a 2048-bit one — and the
+// verification runs before a caller is authenticated, so one unauthenticated
+// request is enough to spend it.
+func TestRSAKeysOutsideTheAcceptedSizesAreRefused(t *testing.T) {
+	cases := []struct {
+		name string
+		bits int
+	}{
+		{name: "small enough to factor", bits: 512},
+		{name: "just under the floor", bits: minRSABits - 8},
+		{name: "just over the ceiling", bits: maxRSABits + 8},
+		{name: "expensive enough to be a weapon", bits: 1 << 20},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			modulus := new(big.Int).Lsh(big.NewInt(1), uint(tc.bits-1))
+			modulus.SetBit(modulus, 0, 1)
+			document := jwksWith(map[string]string{
+				"kty": "RSA", "kid": "a",
+				"n": base64.RawURLEncoding.EncodeToString(modulus.Bytes()),
+				"e": base64.RawURLEncoding.EncodeToString(big.NewInt(65537).Bytes()),
+			})
+			if _, err := parseJWKS(document); err == nil {
+				t.Errorf("a %d-bit RSA key was accepted", tc.bits)
+			}
+		})
+	}
+}
+
+// And the exponent, which costs the same exponentiation the modulus does --
+// and where 1 would make every signature verify.
+func TestUnusableRSAExponentsAreRefused(t *testing.T) {
+	modulus := new(big.Int).Lsh(big.NewInt(1), minRSABits-1)
+	modulus.SetBit(modulus, 0, 1)
+
+	for _, exponent := range []*big.Int{
+		big.NewInt(1),
+		big.NewInt(0),
+		big.NewInt(65536),                   // even
+		new(big.Int).Lsh(big.NewInt(1), 40), // larger than anything real
+	} {
+		document := jwksWith(map[string]string{
+			"kty": "RSA", "kid": "a",
+			"n": base64.RawURLEncoding.EncodeToString(modulus.Bytes()),
+			"e": base64.RawURLEncoding.EncodeToString(exponent.Bytes()),
+		})
+		if _, err := parseJWKS(document); err == nil {
+			t.Errorf("exponent %s was accepted", exponent)
+		}
+	}
+}
+
+// A key of an ordinary size still works, so the bounds above refuse the right
+// things rather than everything.
+func TestAnOrdinaryRSAKeyIsStillAccepted(t *testing.T) {
+	p := newProvider(t)
+	keys, err := parseJWKS(p.jwks())
+	if err != nil {
+		t.Fatalf("parseJWKS: %v", err)
+	}
+	if _, ok := keys[p.kid]; !ok {
+		t.Error("a 2048-bit RSA key was refused")
+	}
+}
+
+// jwksWith renders a one-key document.
+func jwksWith(key map[string]string) []byte {
+	document, err := json.Marshal(map[string]any{"keys": []map[string]string{key}})
+	if err != nil {
+		panic(err)
+	}
+	return document
 }

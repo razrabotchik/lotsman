@@ -75,6 +75,18 @@ Everything below follows from that sentence.
     something that is not an authorization server; it is recorded here so it stops looking unmet
     for the wrong reason.
 
+11. **A key set may not hand this process an expensive key.** RSA moduli are accepted between
+    2048 and 8192 bits and the exponent must be odd, greater than one and small. The lower bound
+    is the ordinary one — a modulus small enough to factor is a signature anyone can forge. The
+    upper bound is the one that was missing and was found by fuzzing the parser: verifying RS256
+    costs modular exponentiation, which is 36 µs against a 2048-bit modulus, 2.7 s against a
+    1-Mbit one and **43 s against a 4-Mbit one**, and a key set document under the 1 MiB cap can
+    carry about 6.3 Mbit. Anything able to serve the configured key set could therefore make every
+    verification burn a minute of CPU — and the verification runs *before* a caller is
+    authenticated, so one unauthenticated request is enough to spend it. Bounding the document
+    size and validating the curve were already there; bounding the key size is their missing
+    sibling.
+
 ## Consequences
 
 - M3's exit criterion — *conformance and auth/egress security tests green* — is answered. Inbound

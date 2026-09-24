@@ -162,6 +162,11 @@ resolve names itself, and the document still pointed at the old ones.
   match on it. Per-subject authorization is RBAC, and §8 defers RBAC to the gateway layer — a
   half-built version would be worse than none, because an operator who saw `subject` in a rule
   would reasonably assume the rest.
+- **An RSA key from a key set is accepted only between 2048 and 8192 bits.** The upper bound is
+  not tidiness: verifying RS256 against a 4-Mbit modulus takes about 43 seconds, a 1 MiB key set
+  document can carry 6.3 Mbit, and the verification happens before a caller is authenticated. A
+  provider that legitimately publishes a larger key will be refused, and that is the intended
+  trade (ADR-0016).
 - **A cached key set means a revoked key keeps working for up to its TTL** (15 minutes by
   default). An unknown `kid` provokes at most one refetch per minute, which bounds what a forged
   one can cost; the same bound means a rotation can take a minute to be noticed.
