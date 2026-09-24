@@ -113,8 +113,8 @@ func Resolve(file *File, env Environment, flags Overrides) Runtime {
 		applyServerFile(&runtime.Server, &file.Server)
 		if len(file.AuthProfiles) > 0 {
 			runtime.AuthProfiles = make(map[string]Profile, len(file.AuthProfiles))
-			for name, profile := range file.AuthProfiles {
-				runtime.AuthProfiles[name] = profile
+			for name := range file.AuthProfiles {
+				runtime.AuthProfiles[name] = file.AuthProfiles[name]
 			}
 		}
 	}

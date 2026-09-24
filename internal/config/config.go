@@ -29,6 +29,27 @@ const (
 	SchemeAPIKey Scheme = "apikey"
 	SchemeBasic  Scheme = "basic"
 	SchemeBearer Scheme = "bearer"
+	// SchemeOAuth2ClientCredentials mints its own bearer from a client id
+	// and secret (FR-63). It is the only OAuth2 flow a service can complete
+	// without a person in front of it; the rest are delegated mode (M4b).
+	//
+	//nolint:gosec // G101: this is the name of a scheme an operator writes in a config file, not a credential.
+	SchemeOAuth2ClientCredentials Scheme = "oauth2-client-credentials"
+)
+
+// AuthStyle is how a client authenticates itself to a token endpoint.
+//
+// Providers disagree, and the disagreement is not something an operator
+// should have to discover from a 401: `auto` tries both the way the oauth2
+// library does, and the explicit values exist for a provider that needs to be
+// told.
+type AuthStyle string
+
+// Client authentication styles at the token endpoint.
+const (
+	AuthStyleAuto  AuthStyle = "auto"
+	AuthStyleBasic AuthStyle = "basic"
+	AuthStyleBody  AuthStyle = "body"
 )
 
 // Location is where an API key is carried.
@@ -50,6 +71,20 @@ type Profile struct {
 	TokenRef    SecretRef `yaml:"tokenRef,omitempty"`    // bearer, apikey
 	UsernameRef SecretRef `yaml:"usernameRef,omitempty"` // basic
 	PasswordRef SecretRef `yaml:"passwordRef,omitempty"` // basic
+
+	// The client-credentials fields. A profile of this scheme presents a
+	// token it obtained rather than one it was given, which is the whole
+	// difference: the credential can expire between two calls.
+	TokenURL        string    `yaml:"tokenURL,omitempty"`
+	ClientID        string    `yaml:"clientID,omitempty"`
+	ClientSecretRef SecretRef `yaml:"clientSecretRef,omitempty"`
+	// Scopes are what this profile asks the authorization server for. They
+	// are not checked against what an operation declares: see ADR-0017.
+	Scopes []string `yaml:"scopes,omitempty"`
+	// Audience is RFC 8707's `resource` parameter, for providers that key a
+	// token to the API it is for.
+	Audience  string    `yaml:"audience,omitempty"`
+	AuthStyle AuthStyle `yaml:"authStyle,omitempty"`
 
 	// Satisfies names the document's security schemes this profile can meet.
 	// When empty, the profile's own key is matched against the scheme name,
@@ -681,6 +716,40 @@ func knownEffect(s string) bool {
 	}
 }
 
+// validateClientCredentials refuses a minting profile that could only fail at
+// the moment it is first needed.
+//
+// The token endpoint is held to the same rule as every other authentication
+// URL: HTTPS, including on loopback. A client secret posted over plain HTTP is
+// a client secret somebody has, and a development shortcut in a credential
+// path is a production configuration eventually.
+func validateClientCredentials(name string, profile *Profile) error {
+	if profile.TokenURL == "" {
+		return errs.Errorf(errs.ClassUsage,
+			"config: auth profile %q: oauth2-client-credentials needs a tokenURL", name)
+	}
+	parsed, err := url.Parse(profile.TokenURL)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+		return errs.Errorf(errs.ClassUsage,
+			"config: auth profile %q: tokenURL %q is not an https URL", name, profile.TokenURL)
+	}
+	if profile.ClientID == "" {
+		return errs.Errorf(errs.ClassUsage,
+			"config: auth profile %q: oauth2-client-credentials needs a clientID", name)
+	}
+	if profile.ClientSecretRef == "" {
+		return errs.Errorf(errs.ClassUsage,
+			"config: auth profile %q: oauth2-client-credentials needs a clientSecretRef", name)
+	}
+	switch profile.AuthStyle {
+	case "", AuthStyleAuto, AuthStyleBasic, AuthStyleBody:
+	default:
+		return errs.Errorf(errs.ClassUsage,
+			"config: auth profile %q: authStyle %q is not auto, basic or body", name, profile.AuthStyle)
+	}
+	return nil
+}
+
 func validateProfile(name string, profile *Profile) error {
 	switch profile.Scheme {
 	case SchemeBearer:
@@ -705,14 +774,19 @@ func validateProfile(name string, profile *Profile) error {
 			return errs.Errorf(errs.ClassUsage,
 				"config: auth profile %q: basic needs a usernameRef and a passwordRef", name)
 		}
+	case SchemeOAuth2ClientCredentials:
+		if err := validateClientCredentials(name, profile); err != nil {
+			return err
+		}
 	default:
 		return errs.Errorf(errs.ClassUsage,
-			"config: auth profile %q: scheme %q is not one of apikey, basic, bearer", name, profile.Scheme)
+			"config: auth profile %q: scheme %q is not one of apikey, basic, bearer, "+
+				"oauth2-client-credentials", name, profile.Scheme)
 	}
 
 	// Every reference is validated at load time, so a literal secret is caught
 	// before it can be used -- and before it reaches a log line.
-	for _, ref := range []SecretRef{profile.TokenRef, profile.UsernameRef, profile.PasswordRef} {
+	for _, ref := range []SecretRef{profile.TokenRef, profile.UsernameRef, profile.PasswordRef, profile.ClientSecretRef} {
 		if ref == "" {
 			continue
 		}
