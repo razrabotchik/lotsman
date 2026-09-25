@@ -1,13 +1,14 @@
 # Benchmarks
 
-Baseline recorded at the v0.1.0-alpha preparation (T038). Reproduce with:
+Baseline recorded at the v0.1.0-alpha preparation (T038) and re-measured since, most recently after
+the diagnostic and reporting fixes. Reproduce with:
 
 ```bash
 make corpus   # fetch the vendor documents (pinned, see testdata/corpus/MANIFEST.json)
 make bench
 ```
 
-Machine: linux/amd64, 32 logical CPUs, Go 1.25. These are *this machine's* numbers; CI runners
+Machine: linux/amd64, 32 logical CPUs, Go 1.27. These are *this machine's* numbers; CI runners
 differ by a factor of two or three, which is why the budgets below are stated with headroom and
 why a regression threshold belongs in CI rather than in a README.
 
@@ -15,12 +16,12 @@ why a regression threshold belongs in CI rather than in a README.
 
 | Document | Size | Operations | Parse + normalize | Throughput | Allocations |
 |---|---|---|---|---|---|
-| Stripe | 5.2 MB | 559 | **279 ms** | 18.7 MB/s | 210 MB, 3.4 M allocs |
-| Kubernetes `apps/v1` | 833 KB | 77 | **61 ms** | 13.8 MB/s | 138 MB, 0.67 M allocs |
-| mini fixture | 1.5 KB | 5 | 0.5 ms | — | 0.37 MB, 4.8 K allocs |
+| Stripe | 5.2 MB | 559 | **239 ms** | 21.9 MB/s | 199 MB, 3.3 M allocs |
+| Kubernetes `apps/v1` | 833 KB | 77 | **48 ms** | 17.2 MB/s | 137 MB, 0.66 M allocs |
+| mini fixture | 1.5 KB | 5 | 0.3 ms | — | 0.32 MB, 4.7 K allocs |
 
-The budget is met with room to spare: the document the NFR was written for takes 279 ms against a
-2 s ceiling. Allocation volume is the number to watch rather than wall time — 210 MB allocated to
+The budget is met with room to spare: the document the NFR was written for takes 239 ms against a
+2 s ceiling. Allocation volume is the number to watch rather than wall time — 199 MB allocated to
 parse a 5 MB document is the parser's cost of keeping every YAML node addressable for diagnostics,
 and it is what drives the memory figures below.
 
@@ -28,8 +29,8 @@ and it is what drives the memory figures below.
 
 | Document | Tools | Build | Published `tools/list` |
 |---|---|---|---|
-| Kubernetes `apps/v1` | 65 | 60 ms | 2.23 MB |
-| Stripe | 0 (all refused) | 0.2 ms | — |
+| Kubernetes `apps/v1` | 65 | 54 ms | 2.23 MB |
+| Stripe | 0 (all refused) | 0.13 ms | — |
 
 Derivation is measured separately from parsing because the two scale with different things:
 parsing with the document's size, derivation with the number of operations and the size of their
@@ -54,7 +55,7 @@ means NFR-10 cannot catch a regression: search could become twenty times slower 
 The test therefore asserts a second threshold of 5 ms — the measured baseline with wide margin for
 platform variance — so that an order-of-magnitude change fails somewhere rather than nowhere.
 
-`BenchmarkSearch` reports the same thing in the form CI can track: 87 µs/op.
+`BenchmarkSearch` reports the same thing in the form CI can track: 86 µs/op.
 
 ## End-to-end `inspect` and NFR-11
 
@@ -63,9 +64,9 @@ runs; the figures are the median of three.
 
 | Document | Wall | Peak RSS |
 |---|---|---|
-| Kubernetes `apps/v1` (833 KB) | 0.14 s | 93 MB |
-| Stripe (5.2 MB) | 0.38 s | 157 MB |
-| DigitalOcean, exploded (~2,900 documents, 14 MB) | 0.32 s | **262 MB** |
+| Kubernetes `apps/v1` (833 KB) | 0.14 s | 87 MB |
+| Stripe (5.2 MB) | 0.36 s | 146 MB |
+| DigitalOcean, exploded (~2,900 documents, 14 MB) | 0.31 s | **263 MB** |
 
 **NFR-11 still does not hold for the exploded case**, and the remedy is still the structural one
 described below rather than a knob. Two things were tried and are recorded so nobody tries them
