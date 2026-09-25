@@ -153,6 +153,16 @@ resolve names itself, and the document still pointed at the old ones.
   `reload` had the same blind spot from the other side: it publishes only when the digest moves, so
   a mode change alone decided there was nothing to publish. The digest now identifies *what a
   client will be shown* rather than which tools exist. Found by writing a test for something else.
+- **A connection failure was reported as a policy refusal, with the wrong remedy attached.** When a
+  name resolved to several addresses and lotsman skipped a private one, the error returned for the
+  *public* address failing to answer was the policy refusal —
+  `resolved to 10.1.2.3, which is private or link-local; set execution.allowPrivateNetworks to
+  permit it`. So an operator whose upstream was simply unreachable was advised to open the
+  private-network door, which is the worst kind of wrong advice on a security control because
+  following it appears to work often enough to become habit. An attempt that was made and failed is
+  now reported as what it was, with the skipped addresses named so nothing is lost; the refusal is
+  kept for the case where every answer was refused and no connection was ever tried. Found because
+  the comment above the test promised a behaviour the test did not check.
 - **The reason a configured credential did not fit was written and then thrown away twice.**
   `internal/auth` says exactly what is wrong — "the API carries the key in the query",
   "unsupported security scheme type mutualTLS", "the document defines no such security scheme" — and
