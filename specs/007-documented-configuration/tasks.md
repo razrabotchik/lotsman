@@ -35,18 +35,23 @@ last field is handled.
 
 ## Step 2: The execution budgets  ✅ CHECKPOINT: a security budget can be tightened
 
-- [ ] T604 config + egress: `execution.timeout` builds the budget, instead of `DefaultBudget()`
+- [x] T604 config + egress: `execution.timeout` builds the budget, instead of `DefaultBudget()`
       being the only possibility
       → `DefaultBudget()` already cites `execution.timeout: 30s` in its doc comment. This is that
-        comment becoming true.
-- [ ] T605 response: `FromHTTP` takes the byte limit; `MaxBodyBytes` stays as the default *and* as
+        comment becoming true — and the comment said more than the code did: it claimed the
+        per-phase limits were *derived* from the total, while they were four independent numbers.
+        Fixed phases would have given an operator asking for 5s a 20s response-header limit, so
+        `BudgetFor` now derives them in the same proportions the documented default used.
+- [x] T605 response: `FromHTTP` takes the byte limit; `MaxBodyBytes` stays as the default *and* as
       the ceiling a configured value may not exceed
       → A parameter rather than a field on the caller, so that a caller which forgets it does not
         compile. The cap bounds memory; an operator raising it is asking for a promise this
         runtime does not make, so raising it is refused.
-- [ ] T606 [P] each budget tested at a *configured* value different from the default
+- [x] T606 [P] each budget tested at a *configured* value different from the default
       → A test at the default proves only that the default still works. And the mutation check has
-        to keep catching a removed bound now that the bound arrives as an argument.
+        to keep catching a removed bound now that the bound arrives as an argument: it reported
+        `PATTERN GONE` on the very line this task changed, which is the behaviour that rule exists
+        for.
 
 ## Step 3: The verified enums  ✅ CHECKPOINT: a setting lotsman cannot honour says so
 

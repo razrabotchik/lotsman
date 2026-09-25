@@ -25,15 +25,32 @@ type Budget struct {
 	IdleConnection time.Duration
 }
 
-// DefaultBudget matches the example configuration in docs/spec.md
-// (execution.timeout: 30s) with per-phase limits derived from it.
-func DefaultBudget() Budget {
+// DefaultTimeout is `execution.timeout` from the example configuration in
+// docs/spec.md §5.1.
+const DefaultTimeout = 30 * time.Second
+
+// DefaultBudget is the budget for the documented timeout.
+func DefaultBudget() Budget { return BudgetFor(DefaultTimeout) }
+
+// BudgetFor derives the per-phase limits from a total (FR-32).
+//
+// The fractions are the ones the documented default already used -- a 30s
+// total gave 10s to connect, 10s to the TLS handshake, 20s to the response
+// header and 60s to an idle connection -- expressed as the derivation the doc
+// comment always claimed rather than as four independent numbers. That matters
+// as soon as the total is configurable: an operator asking for 5s must not end
+// up with a 20s response-header limit, which is what fixed phases would have
+// given them.
+func BudgetFor(total time.Duration) Budget {
+	if total <= 0 {
+		total = DefaultTimeout
+	}
 	return Budget{
-		Total:          30 * time.Second,
-		Connect:        10 * time.Second,
-		TLSHandshake:   10 * time.Second,
-		ResponseHeader: 20 * time.Second,
-		IdleConnection: 60 * time.Second,
+		Total:          total,
+		Connect:        total / 3,
+		TLSHandshake:   total / 3,
+		ResponseHeader: total * 2 / 3,
+		IdleConnection: total * 2,
 	}
 }
 

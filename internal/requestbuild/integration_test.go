@@ -37,7 +37,7 @@ func TestExecuteGETEndToEnd(t *testing.T) {
 		t.Fatalf("Do: %v", err)
 	}
 
-	result, err := response.FromHTTP(resp)
+	result, err := response.FromHTTP(resp, 0)
 	if err != nil {
 		t.Fatalf("FromHTTP: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestExecuteGETUpstream4xxIsError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}
-	result, err := response.FromHTTP(resp)
+	result, err := response.FromHTTP(resp, 0)
 	if err != nil {
 		t.Fatalf("FromHTTP: %v", err)
 	}
