@@ -52,8 +52,20 @@ test: ## Run tests with the race detector
 	$(GO) test -race -shuffle=on -count=1 $(PKG)
 
 .PHONY: cover
-cover: ## Run tests and write coverage.out
-	$(GO) test -race -count=1 -coverprofile=coverage.out -covermode=atomic $(PKG)
+cover: ## Run tests and write coverage.out (includes the CLI's subprocesses)
+	# The CLI is tested through the real binary in a subprocess, which
+	# -coverprofile cannot see: without the second half of this target,
+	# cmd/lotsman reads 0% and the total understates the suite by a quarter.
+	# LOTSMAN_CLI_COVERDIR makes the test harness build an instrumented binary
+	# and point its counters here; covdata then converts them into a profile
+	# that is appended to the in-process one (a profile is a mode line plus
+	# lines, so the second mode line is dropped).
+	rm -rf coverage-cli && mkdir -p coverage-cli
+	LOTSMAN_CLI_COVERDIR=$(CURDIR)/coverage-cli \
+		$(GO) test -count=1 -coverprofile=coverage-unit.out -covermode=atomic -coverpkg=./... $(PKG)
+	$(GO) tool covdata textfmt -i=coverage-cli -o=coverage-cli.out
+	cp coverage-unit.out coverage.out
+	tail -n +2 coverage-cli.out >> coverage.out
 	$(GO) tool cover -func=coverage.out | tail -1
 
 .PHONY: fuzz
@@ -120,4 +132,4 @@ image-check: ## Prove the image runs nonroot on a read-only filesystem (criterio
 
 .PHONY: clean
 clean: ## Remove build and coverage artifacts
-	rm -rf bin coverage.out
+	rm -rf bin coverage.out coverage-unit.out coverage-cli.out coverage-cli

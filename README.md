@@ -372,6 +372,7 @@ make build          # bin/lotsman
 make check          # lint + race tests
 make corpus         # fetch the pinned vendor documents
 make bench
+make cover          # coverage including the CLI's subprocesses
 make fuzz           # run every fuzz target briefly (FUZZTIME=30s)
 make mutate         # switch off each security control and check a test notices
 ```

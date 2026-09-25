@@ -7,8 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -17,24 +15,6 @@ import (
 
 	"github.com/razrabotchik/lotsman/internal/domain"
 )
-
-// buildBinary compiles the CLI once per test binary and returns its path.
-func buildBinary(t *testing.T) string {
-	t.Helper()
-	if testing.Short() {
-		t.Skip("short mode: skipping the subprocess e2e test")
-	}
-
-	bin := filepath.Join(t.TempDir(), "lotsman")
-	if runtime.GOOS == "windows" {
-		bin += ".exe"
-	}
-	build := exec.Command("go", "build", "-o", bin, ".")
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("go build: %v\n%s", err, out)
-	}
-	return bin
-}
 
 // TestStdioEndToEnd drives the real binary over stdio with the official MCP
 // client — the same channel Claude Desktop uses (T003/T004; the full suite of

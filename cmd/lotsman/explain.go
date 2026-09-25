@@ -265,6 +265,18 @@ func describeCredential(credential *auth.Credential) string {
 			where = string(credential.Profile.In)
 		}
 		return fmt.Sprintf("%s %s: <%s>", where, name, credential.Profile.TokenRef)
+	case config.SchemeOAuth2ClientCredentials:
+		// This one is not read from a reference but fetched, so the useful
+		// answer names where it comes from as well as where it goes. `explain`
+		// exists to say what would happen, and "unknown scheme" -- which is what
+		// this printed before feature 006's scheme was added here -- said the
+		// opposite of what the runtime does with it.
+		scopes := "no scopes"
+		if len(credential.Profile.Scopes) > 0 {
+			scopes = "scopes " + strings.Join(credential.Profile.Scopes, ", ")
+		}
+		return fmt.Sprintf("header Authorization: Bearer <minted from %s as %s, %s>",
+			credential.Profile.TokenURL, credential.Profile.ClientID, scopes)
 	default:
 		return "unknown scheme"
 	}
