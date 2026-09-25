@@ -461,14 +461,3 @@ type BodySpec struct {
 	Description string `json:"description,omitempty"` // untrusted, sanitized downstream
 	Schema      Schema `json:"schema"`
 }
-
-// ParametersIn returns the parameters at one location, preserving order.
-func (m InputModel) ParametersIn(in ParameterLocation) []Parameter {
-	var out []Parameter
-	for _, p := range m.Parameters {
-		if p.In == in {
-			out = append(out, p)
-		}
-	}
-	return out
-}

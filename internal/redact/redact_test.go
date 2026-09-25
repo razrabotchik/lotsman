@@ -99,3 +99,37 @@ func TestHandlerKeepsOrdinaryLogsIntact(t *testing.T) {
 		t.Errorf("ordinary logging was damaged:\n%s", buf.String())
 	}
 }
+
+// `logger.WithGroup("x")` is a different path from a `slog.Group` attribute:
+// the first asks the handler for a new handler, the second is a value the
+// handler walks. The walking one was tested; the handler one was not, and it is
+// the one where redaction is lost by returning the inner handler instead of a
+// wrapped one -- after which every attribute logged under that group reaches the
+// output as written.
+//
+// A group is where a subsystem logs, so this is exactly where a credential
+// would travel: `logger.WithGroup("upstream").Debug("...", "authorization", …)`.
+func TestHandlerKeepsRedactingUnderAGroup(t *testing.T) {
+	Default.Add(canary)
+
+	var buf bytes.Buffer
+	logger := slog.New(NewHandler(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	grouped := logger.WithGroup("upstream")
+	grouped.Info("calling "+canary, slog.String("authorization", "Bearer "+canary))
+	// And a group inside a group, with the attribute preset rather than passed:
+	// each hop has to keep the registry, not only the first.
+	grouped.WithGroup("token").With(slog.String("value", canary)).Info("minted")
+
+	if strings.Contains(buf.String(), canary) {
+		t.Fatalf("a secret reached the output under a group:\n%s", buf.String())
+	}
+	if !strings.Contains(buf.String(), Placeholder) {
+		t.Errorf("nothing was marked as redacted, so the test proved nothing:\n%s", buf.String())
+	}
+	// The group is still there: redaction replaces values, it does not drop
+	// structure a reader needs to know where a line came from.
+	if !strings.Contains(buf.String(), "upstream.authorization=") {
+		t.Errorf("the group was flattened or lost:\n%s", buf.String())
+	}
+}
