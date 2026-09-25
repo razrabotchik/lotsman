@@ -21,9 +21,16 @@
 #
 # Each package runs under a timeout, because some of these mutations remove the
 # very bound that stops a test from running for ever -- an unlimited read, a
-# redirect loop. A timeout counts as caught: the test did notice. The bound is
-# go test's own -timeout rather than a signal, so a hang reports itself instead
-# of being killed and printing "Terminated" over the results.
+# redirect loop.
+#
+# A killed run is INCONCLUSIVE, not caught, and counts as a failure. The earlier
+# wording here claimed go test's own -timeout made this impossible; a run then
+# printed "Terminated" over the results and was counted as a pass. What it
+# actually found was a weak test: the redirect fake answered 302 for ever, and a
+# client whose CheckRedirect returns nil has no hop limit either, so removing the
+# guard hung the package instead of failing it -- for 51 seconds, until something
+# outside killed it. The fake is bounded now. The accounting stays honest anyway,
+# because "something killed us" is not an observation about the tests.
 #
 # Usage: make mutate   (about two minutes: every mutation rebuilds a package
 #                       and runs its tests)
@@ -36,7 +43,7 @@ failures=0
 # and everything copied is put back unconditionally on the way out -- normal
 # exit, Ctrl-C, or a kill.
 #
-# Two lessons are built into that sentence, both learned the hard way here.
+# Three lessons are built into that sentence, all learned the hard way here.
 # The first version restored only the file it was working on, and only after
 # the test it was waiting for returned, so an interrupted run walked away
 # leaving a security control switched off in the working tree. The second
@@ -44,7 +51,36 @@ failures=0
 # that had to agree with the mutations, which it stopped doing the moment a
 # mutation was added without its file. A file is therefore snapshotted by the
 # code that mutates it, and by nothing else.
-pristine=$(mktemp -d)
+#
+# The third: a trap does not run when the process is killed outright, and the
+# snapshot lived in a temporary directory nobody could find afterwards. A run
+# that died that way left the redirect guard switched off and its only copy of
+# the original in /tmp under a random name. So the snapshot lives at a known
+# path in the repository, and the next run restores from it before doing
+# anything else -- an interrupted run is repaired by the next invocation
+# instead of waiting to be noticed.
+pristine=".mutate-pristine"
+
+# recover puts back whatever a previous run left mutated. It runs before any
+# mutation, so the baseline this run measures against is the committed code.
+recover() {
+	[ -d "$pristine" ] || return 0
+	local file recovered=0
+	while IFS= read -r -d '' file; do
+		local original="${file#"$pristine/"}"
+		if [ -f "$original" ] && ! cmp -s "$file" "$original"; then
+			cp "$file" "$original"
+			printf 'recovered %s from an interrupted run\n' "$original"
+			recovered=1
+		fi
+	done < <(find "$pristine" -type f -print0 2>/dev/null)
+	rm -rf "$pristine"
+	if [ "$recovered" -eq 1 ]; then
+		printf 'a previous run did not finish; the tree is repaired. Re-read the diff before trusting it.\n\n'
+	fi
+}
+recover
+mkdir -p "$pristine"
 
 snapshot() {
 	local file="$1"
@@ -94,8 +130,22 @@ mutate() {
 	if ! go build "$pkg" >/dev/null 2>&1; then
 		printf '%-48s DOES NOT COMPILE — the mutation is wrong\n' "$name"
 		failures=$((failures + 1))
-	elif timeout 180 go test -count=1 -timeout 100s "$pkg" >/dev/null 2>&1; then
+		cp "$pristine/$file" "$file"
+		return
+	fi
+
+	local status=0
+	timeout --signal=TERM --kill-after=10 180 go test -count=1 -timeout 100s "$pkg" >/dev/null 2>&1 || status=$?
+	if [ "$status" -eq 0 ]; then
 		printf '%-48s NOT CAUGHT\n' "$name"
+		failures=$((failures + 1))
+	elif [ "$status" -eq 124 ] || [ "$status" -eq 137 ] || [ "$status" -eq 143 ]; then
+		# Killed rather than failed. That is not evidence any test noticed: the
+		# run was stopped from outside, and what the tests would have concluded
+		# is unknown. It is also a warning about the test itself -- a control
+		# whose absence hangs instead of failing costs three minutes and names
+		# nothing.
+		printf '%-48s INCONCLUSIVE — the run was killed, not failed\n' "$name"
 		failures=$((failures + 1))
 	else
 		printf '%-48s caught\n' "$name"
@@ -202,6 +252,39 @@ mutate "transport: believe forwarding headers from anyone" \
 	"if !fromTrustedProxy(r.RemoteAddr, trusted) {" \
 	"if false && !fromTrustedProxy(r.RemoteAddr, trusted) {" \
 	./internal/inbound/
+
+mutate "transport: no cross-origin protection" \
+	internal/httpserver/server.go \
+	"allowHosts(protection.Handler(handler), opts.AllowedHosts)" \
+	"allowHosts(handler, opts.AllowedHosts)" \
+	./internal/httpserver/
+
+mutate "inbound: require no scopes" \
+	internal/inbound/oauth.go \
+	"Scopes: oauth.RequiredScopes," "Scopes: nil," \
+	./internal/inbound/
+
+mutate "JWKS: refetch on every unknown kid" \
+	internal/inbound/jwks.go \
+	'if !justFetched && k.now().Sub(k.lastUnknownKid) >= unknownKidCooldown {' \
+	'if justFetched || true {' \
+	./internal/inbound/
+
+mutate "response: return every upstream header" \
+	internal/response/response.go \
+	"if headerAllowlist[strings.ToLower(name)] {" "if true {" \
+	./internal/response/
+
+mutate "refs: a remote reference is an ordinary file path" \
+	internal/openapi/files.go \
+	"if isRemote(target) {" "if false {" \
+	./internal/openapi/
+
+mutate "auth: refresh the credential on any status" \
+	internal/mcpserver/runner.go \
+	'if resp.StatusCode == http.StatusUnauthorized && r.refreshable() != "" {' \
+	'if r.refreshable() != "" {' \
+	./internal/mcpserver/
 
 mutate "reload: publish a candidate without comparing it" \
 	internal/reload/reload.go \
