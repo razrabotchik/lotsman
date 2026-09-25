@@ -335,8 +335,15 @@ lotsman inspect SPEC [--json] [--fail-on-rejected] [--config FILE] [--mode MODE]
 lotsman validate SPEC [--quiet]
 lotsman operations SPEC [--supported | --rejected] [--config FILE]
 lotsman explain-call OPERATION --spec SPEC [--args FILE] [--config FILE]
+lotsman config check FILE [--quiet]
+lotsman config export FILE
 lotsman version [--json]
 ```
+
+`config export` prints the configuration that is actually in force, after defaults, the file, the
+environment and the flags have all had their say — which is the one question a configuration file
+cannot answer by being read. It is a document you can paste back: reading it produces the same
+runtime. No secret is resolved, because a configuration only ever holds the reference.
 
 Exit codes are a contract: `0` success, `1` runtime, `2` usage or configuration, `3` the document
 is unusable, `4` valid but nothing is permitted or supported, `5` a credential could not be
