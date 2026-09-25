@@ -372,6 +372,7 @@ make build          # bin/lotsman
 make check          # lint + race tests
 make corpus         # fetch the pinned vendor documents
 make bench
+make fuzz           # run every fuzz target briefly (FUZZTIME=30s)
 make mutate         # switch off each security control and check a test notices
 ```
 
@@ -381,7 +382,7 @@ schema sanitizer — and expects a failure each time. It found a real one on its
 that searched `json.Marshal` output for `"<script>"` and could never match, because `encoding/json`
 escapes `<`.
 
-Go ≥ 1.25. Four direct dependencies. Apache-2.0.
+Go ≥ 1.25. Six direct dependencies, two of them only for OAuth. Apache-2.0.
 
 ## Design notes
 
