@@ -25,7 +25,8 @@
 # go test's own -timeout rather than a signal, so a hang reports itself instead
 # of being killed and printing "Terminated" over the results.
 #
-# Usage: make mutate
+# Usage: make mutate   (about two minutes: every mutation rebuilds a package
+#                       and runs its tests)
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -246,6 +247,33 @@ mutate "search: a read tool may call a mutation" \
 	internal/mcpserver/search.go \
 	"		case kind == readOnlyCall && !isRead:" "		case false:" \
 	./internal/mcpserver/
+
+mutate "approval: proceed when the client cannot be asked" \
+	internal/mcpserver/approval.go \
+	"	if !clientCanBeAsked(req.Session) {" "	if false {" \
+	./internal/mcpserver/
+
+mutate "policy: an unknown effect is fine" \
+	internal/policy/gate.go \
+	'if effect.Effect == domain.EffectUnknown || effect.Effect == "" {' "if false {" \
+	./internal/policy/
+
+mutate "selection: an excluded tag filter selects everything" \
+	internal/catalog/overlay.go \
+	"	if len(tags) == 0 {" "	if true {" \
+	./internal/catalog/
+
+mutate "auth: pick the first of several satisfiable credentials" \
+	internal/auth/select.go \
+	"			Reason: domain.ReasonAmbiguousSecurity," \
+	"			Reason: domain.ReasonCode(\"\")," \
+	./internal/auth/
+
+mutate "secrets: accept a literal instead of a reference" \
+	internal/config/secret.go \
+	"func ParseSecretRef(value string) (SecretRef, error) {" \
+	"func ParseSecretRef(value string) (SecretRef, error) { return SecretRef(value), nil" \
+	./internal/config/
 
 echo
 if [ "$failures" -ne 0 ]; then
