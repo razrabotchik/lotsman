@@ -3,6 +3,7 @@ package egress
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -70,8 +71,20 @@ type redirectTransport struct {
 	calls int
 }
 
+// RoundTrip answers one redirect and then refuses to play along.
+//
+// The bound is the point. An endless 302 is what an upstream would send, and
+// `CheckRedirect` returning nil -- which is what a caller writes when they mean
+// "follow" -- removes the standard library's ten-hop cap as well, so a client
+// without the guard loops for ever rather than failing. That turned this test
+// from "fails in a millisecond" into "hangs until something kills it", and a
+// hang teaches nobody which control went missing. Answering the second call
+// with an error makes the same property fail fast instead.
 func (t *redirectTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	t.calls++
+	if t.calls > 1 {
+		return nil, fmt.Errorf("the client followed a redirect (call %d)", t.calls)
+	}
 	return &http.Response{
 		StatusCode: http.StatusFound,
 		Header:     http.Header{"Location": []string{"https://other.example/private"}},
