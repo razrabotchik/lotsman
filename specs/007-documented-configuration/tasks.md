@@ -55,12 +55,17 @@ last field is handled.
 
 ## Step 3: The verified enums  ✅ CHECKPOINT: a setting lotsman cannot honour says so
 
-- [ ] T607 config: `execution.redirects` and `spec.remoteRefs` accept the one value lotsman
+- [x] T607 config: `execution.redirects` and `spec.remoteRefs` accept the one value lotsman
       delivers and refuse every other *by name*, saying what lotsman does instead
       → Accepting a field is not implementing it. The gain is that `redirects: follow` stops being
         an unknown-field error that explains nothing and becomes a refusal that explains the rule
         (FR-33, FR-5).
-- [ ] T608 config: `execution.defaultPolicy`, and the contradiction rule against `allowMutations`
+      → T611 came forward into this step, because leaving it for later would have meant accepting
+        `spec.strict` without honouring it — the silent-ignore this whole feature exists to avoid.
+        `strict: false` is now the file spelling of `--lax`, and the flag wins in both directions.
+      → The refused-fields list got *more precise* rather than shorter here: `spec` became `source`
+        and `root`, because the section now exists and only those two fields do not.
+- [x] T608 config: `execution.defaultPolicy`, and the contradiction rule against `allowMutations`
       → Two spellings of one setting must not disagree silently. `read-only` with
         `allowMutations: true` is refused as a contradiction, not resolved by a precedence an
         operator would have to learn.
@@ -76,7 +81,7 @@ last field is handled.
 - [ ] T610 `spec.root`, refused when the source is stdin
       → A piped document has no directory, and giving it one would let a document arriving over a
         pipe read the filesystem relative to a path written for a different document.
-- [ ] T611 [P] `spec.strict` is the file spelling of `--lax` inverted, with the same contradiction
+- [x] T611 [P] `spec.strict` is the file spelling of `--lax` inverted, with the same contradiction
       rule as `defaultPolicy`
 
 ## Step 5: The example  ✅ CHECKPOINT: the specification is usable

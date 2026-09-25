@@ -36,12 +36,9 @@ func TestTheSpecificationsOwnExampleDoesNotParseYet(t *testing.T) {
 
 	// Every field the parser refuses, and nothing else.
 	want := []string{
-		// The document to serve is named on the command line today (T609).
-		"spec",
-		// Implemented as `execution.allowMutations: false`, said twice (T608).
-		"defaultPolicy",
-		// Implemented as an unconditional refusal; only `deny` is possible (T607).
-		"redirects",
+		// The document to serve is named on the command line today (T609, T610).
+		"root",
+		"source",
 	}
 	if got := refusedFields(err.Error()); !equalStrings(got, want) {
 		t.Errorf("the parser refuses %v; this test expects %v.\n"+

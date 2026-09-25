@@ -37,7 +37,11 @@ type Runtime struct {
 	// MaxResponseBytes bounds one response (FR-36). Zero means the response
 	// package's documented default.
 	MaxResponseBytes int
-	AuthProfiles     map[string]Profile
+	// Lax serves the supported subset instead of refusing a document that has
+	// any unsupported operation. It is `spec.strict: false` and `--lax`, which
+	// are the same request in two places.
+	Lax          bool
+	AuthProfiles map[string]Profile
 	// Server is how the runtime is reached. It is never zero after Resolve --
 	// the transport defaults to stdio, the bind to loopback and the drain to
 	// a bounded wait -- so no caller downstream has to decide what an unset
@@ -80,7 +84,9 @@ type ServerRuntime struct {
 type Overrides struct {
 	AllowMutations *bool
 	// Mode is the `--mode` flag, which wins over the file (FR-62).
-	Mode     *string
+	Mode *string
+	// Lax is the `--lax` flag, which wins over `spec.strict`.
+	Lax      *bool
 	BaseURL  *string
 	Approval *Approval
 	// The server layer. Each is a pointer for the same reason as the rest:
@@ -97,6 +103,8 @@ type Overrides struct {
 // The environment layer is intentionally narrow: LOTSMAN_* bindings exist for
 // operational settings, never for credentials, because an environment variable
 // holding a token is exactly the literal secret FR-59 forbids in a flag.
+//
+//nolint:gocritic // hugeParam: Overrides is the flag layer, copied per call so that no callee holds a pointer to what the command line said.
 func Resolve(file *File, env Environment, flags Overrides) Runtime {
 	// defaults: read-only, no base URL, no credentials, a mutation asks
 	// before it happens, and the transport is the one that cannot be reached
@@ -128,6 +136,9 @@ func Resolve(file *File, env Environment, flags Overrides) Runtime {
 		runtime.AllowedOrigins = append([]string(nil), file.Execution.AllowedOrigins...)
 		runtime.AllowPrivateNetworks = file.Execution.AllowPrivateNetworks
 		runtime.MaxResponseBytes = file.Execution.MaxResponseBytes
+		if file.Spec.Strict != nil {
+			runtime.Lax = !*file.Spec.Strict
+		}
 		if file.Execution.Timeout != "" {
 			// Validated at load; an unparseable value never reaches here.
 			if timeout, err := time.ParseDuration(file.Execution.Timeout); err == nil {
@@ -161,6 +172,9 @@ func Resolve(file *File, env Environment, flags Overrides) Runtime {
 	}
 	if flags.Mode != nil {
 		runtime.Mode = *flags.Mode
+	}
+	if flags.Lax != nil {
+		runtime.Lax = *flags.Lax
 	}
 	applyServerFlags(&runtime.Server, flags)
 	return runtime
@@ -196,6 +210,8 @@ func applyServerFile(resolved *ServerRuntime, file *Server) {
 }
 
 // applyServerFlags is the last word, per FR-62.
+//
+//nolint:gocritic // hugeParam: Overrides is the flag layer, copied per call so that no callee holds a pointer to what the command line said.
 func applyServerFlags(resolved *ServerRuntime, flags Overrides) {
 	if flags.Transport != nil {
 		resolved.Transport = *flags.Transport

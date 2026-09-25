@@ -204,6 +204,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 		allowPublicBind: *publicBind,
 		logLevel:        *level,
 		mode:            *mode,
+		lax:             *lax,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
@@ -254,7 +255,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 		Audit: audit.Log(logger),
 	}
 	if spec != "" {
-		cat, err := loadCatalog(ctx, spec, logger, *lax, runtime, catalogMode)
+		cat, err := loadCatalog(ctx, spec, logger, runtime.Lax, runtime, catalogMode)
 		if err != nil {
 			logger.Error("load spec failed", "class", string(errs.ClassOf(err)), "error", err)
 			return exitCode(err)
@@ -264,7 +265,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 	}
 
 	source := func(ctx context.Context) (*catalog.Catalog, error) {
-		return loadCatalog(ctx, spec, logger, *lax, runtime, catalogMode)
+		return loadCatalog(ctx, spec, logger, runtime.Lax, runtime, catalogMode)
 	}
 	if err := runTransport(ctx, runtime, &opts, source, reloadTriggers(spec, *watch)); err != nil {
 		logger.Error("serve failed", "class", string(errs.ClassOf(err)), "error", err)
@@ -478,6 +479,7 @@ type flagValues struct {
 	allowPublicBind bool
 	logLevel        string
 	mode            string
+	lax             bool
 }
 
 // serverOverrides folds the transport flags into the override layer. Each is
@@ -513,6 +515,9 @@ func serverOverrides(fs *flag.FlagSet, given *flagValues, overrides *config.Over
 	}
 	if wasSet(fs, "mode") {
 		overrides.Mode = &given.mode
+	}
+	if wasSet(fs, "lax") {
+		overrides.Lax = &given.lax
 	}
 	return nil
 }

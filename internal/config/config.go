@@ -149,6 +149,12 @@ type Execution struct {
 	// resolves into a private or link-local range. An origin written as an
 	// address needs no such permission.
 	AllowPrivateNetworks bool `yaml:"allowPrivateNetworks,omitempty"`
+	// DefaultPolicy is the execution posture. Only `read-only` exists, and it
+	// says the same thing as `allowMutations: false`; stating both and
+	// disagreeing is refused rather than resolved.
+	DefaultPolicy DefaultPolicy `yaml:"defaultPolicy,omitempty"`
+	// Redirects is what happens on a redirect. Only `deny` is possible.
+	Redirects Redirects `yaml:"redirects,omitempty"`
 	// Timeout is the outbound budget (FR-32), as a Go duration. It covers
 	// connect, TLS, header and body phases, which are derived from it.
 	Timeout string `yaml:"timeout,omitempty"`
@@ -180,6 +186,36 @@ func (t Transport) Valid() bool {
 		return false
 	}
 }
+
+// Spec is the source section of docs/spec.md §5.1: which document lotsman
+// serves and how strictly it reads it.
+//
+// The booleans are pointers because "not stated" and "stated false" are
+// different: `strict: false` is an operator asking for the lax behaviour, and
+// an absent `strict` is an operator saying nothing about it.
+type Spec struct {
+	// RemoteRefs would enable fetching references over the network. lotsman
+	// never does (FR-5), so `false` is accepted and `true` is refused by name
+	// rather than silently ignored.
+	RemoteRefs *bool `yaml:"remoteRefs,omitempty"`
+	// Strict refuses a document with any unsupported operation. `false` is the
+	// file spelling of `--lax`.
+	Strict *bool `yaml:"strict,omitempty"`
+}
+
+// Redirects is what lotsman does when an upstream answers with one.
+type Redirects string
+
+// RedirectsDeny is the only possibility (FR-33): each hop would need the
+// policy applied again, and a credential must not cross an origin.
+const RedirectsDeny Redirects = "deny"
+
+// DefaultPolicy is the execution posture. `read-only` is the only one, and it
+// is the same statement as `allowMutations: false`.
+type DefaultPolicy string
+
+// The one posture this build has.
+const DefaultPolicyReadOnly DefaultPolicy = "read-only"
 
 // InboundMode is how the HTTP endpoint decides whether a caller may talk to
 // it at all (FR-79).
@@ -397,6 +433,7 @@ type OperationOverride struct {
 type File struct {
 	APIVersion         string              `yaml:"apiVersion"`
 	Kind               string              `yaml:"kind,omitempty"`
+	Spec               Spec                `yaml:"spec,omitempty"`
 	Catalog            Catalog             `yaml:"catalog,omitempty"`
 	Execution          Execution           `yaml:"execution,omitempty"`
 	Server             Server              `yaml:"server,omitempty"`
@@ -460,6 +497,9 @@ func (f *File) validate() error {
 	if err := validateExecution(&f.Execution); err != nil {
 		return err
 	}
+	if err := validateSpec(&f.Spec); err != nil {
+		return err
+	}
 	for _, list := range []struct {
 		name  string
 		rules []Rule
@@ -478,8 +518,49 @@ func (f *File) validate() error {
 	return nil
 }
 
+// validateSpec refuses a source section this build cannot honour.
+//
+// `remoteRefs: true` is the interesting one. Accepting a field whose only
+// legal value is the current behaviour looks like ceremony, and it is not: an
+// operator who writes `true` believes remote references will be fetched, and
+// the difference between learning that from a refusal and learning it from a
+// document that silently resolves nothing is the whole point (FR-5).
+func validateSpec(spec *Spec) error {
+	if spec.RemoteRefs != nil && *spec.RemoteRefs {
+		return errs.Errorf(errs.ClassUsage,
+			"config: spec.remoteRefs cannot be true: a remote reference is never fetched, because a "+
+				"document must not be able to make lotsman issue a request of its choosing (FR-5)")
+	}
+	return nil
+}
+
 // validateExecution refuses execution settings this build cannot honour.
 func validateExecution(execution *Execution) error {
+	switch execution.Redirects {
+	case "", RedirectsDeny:
+	default:
+		return errs.Errorf(errs.ClassUsage,
+			"config: execution.redirects %q is not possible: a redirect is never followed, because "+
+				"each hop would need the policy applied again and a credential must not cross an "+
+				"origin (FR-33); only %q is", execution.Redirects, RedirectsDeny)
+	}
+	switch execution.DefaultPolicy {
+	case "", DefaultPolicyReadOnly:
+	default:
+		return errs.Errorf(errs.ClassUsage,
+			"config: execution.defaultPolicy %q is not one this build has; only %q is, and "+
+				"mutations are enabled with allowMutations rather than with a posture",
+			execution.DefaultPolicy, DefaultPolicyReadOnly)
+	}
+	// The one cross-field rule in this package, and it is here because the
+	// specification created it: two spellings of one setting must not disagree
+	// silently. A second rule of this kind would be a reason to reconsider the
+	// field rather than to add another rule.
+	if execution.DefaultPolicy == DefaultPolicyReadOnly && execution.AllowMutations {
+		return errs.Errorf(errs.ClassUsage,
+			"config: execution.defaultPolicy is %q and allowMutations is true; these contradict, "+
+				"and lotsman will not pick one for you", DefaultPolicyReadOnly)
+	}
 	if execution.MaxResponseBytes < 0 {
 		return errs.Errorf(errs.ClassUsage,
 			"config: execution.maxResponseBytes is %d; a cap may be omitted but not negative",
