@@ -31,49 +31,37 @@ cd "$(dirname "$0")/.."
 
 failures=0
 
-# Every file any mutation touches, saved once before anything is changed and
-# put back unconditionally on the way out -- normal exit, Ctrl-C, or a kill.
+# Every file a mutation touches is copied aside the first time it is touched,
+# and everything copied is put back unconditionally on the way out -- normal
+# exit, Ctrl-C, or a kill.
 #
+# Two lessons are built into that sentence, both learned the hard way here.
 # The first version restored only the file it was working on, and only after
-# the test it was waiting for returned. An interrupted run therefore walked
-# away leaving a security control switched off in the working tree, which is
-# the most dangerous thing a script like this could do. It did exactly that
-# the first time somebody interrupted it.
-TOUCHES=(
-	internal/inbound/oauth.go
-	internal/inbound/jwks.go
-	internal/inbound/inbound.go
-	internal/inbound/forwarded.go
-	internal/mcpserver/search.go
-	internal/mcpserver/runner.go
-	internal/mcpserver/approval.go
-	internal/catalog/inputschema.go
-	internal/catalog/catalog.go
-	internal/catalog/overlay.go
-	internal/openapi/openapi.go
-	internal/openapi/parameters.go
-	internal/egress/policy.go
-	internal/response/response.go
-	internal/policy/gate.go
-	internal/httpserver/bind.go
-	internal/httpserver/server.go
-	internal/reload/reload.go
-)
-
+# the test it was waiting for returned, so an interrupted run walked away
+# leaving a security control switched off in the working tree. The second
+# version kept a hand-written list of the files to snapshot -- a second list
+# that had to agree with the mutations, which it stopped doing the moment a
+# mutation was added without its file. A file is therefore snapshotted by the
+# code that mutates it, and by nothing else.
 pristine=$(mktemp -d)
-for f in "${TOUCHES[@]}"; do
-	mkdir -p "$pristine/$(dirname "$f")"
-	cp "$f" "$pristine/$f"
-done
+
+snapshot() {
+	local file="$1"
+	if [ ! -f "$pristine/$file" ]; then
+		mkdir -p "$pristine/$(dirname "$file")"
+		cp "$file" "$pristine/$file"
+	fi
+}
 
 restore() {
-	local changed=0
-	for f in "${TOUCHES[@]}"; do
-		if ! cmp -s "$pristine/$f" "$f"; then
-			cp "$pristine/$f" "$f"
+	local changed=0 file
+	while IFS= read -r -d '' file; do
+		local original="${file#"$pristine/"}"
+		if ! cmp -s "$file" "$original"; then
+			cp "$file" "$original"
 			changed=1
 		fi
-	done
+	done < <(find "$pristine" -type f -print0 2>/dev/null)
 	[ "$changed" -eq 1 ] && echo "restored the working tree"
 	rm -rf "$pristine"
 	return 0
@@ -84,6 +72,7 @@ trap 'restore; exit 130' INT TERM
 # mutate NAME FILE FROM TO PACKAGE
 mutate() {
 	local name="$1" file="$2" from="$3" to="$4" pkg="$5"
+	snapshot "$file"
 
 	if ! python3 - "$file" "$from" "$to" <<-'PY'
 		import pathlib, sys
@@ -228,6 +217,35 @@ mutate "overrides: an override matching nothing is fine" \
 	"	claimed := make(map[domain.OperationKey]int, len(overrides))" \
 	"	if true { return nil }; claimed := make(map[domain.OperationKey]int, len(overrides))" \
 	./internal/catalog/
+
+mutate "redaction: pass every string through unchanged" \
+	internal/redact/redact.go \
+	"func (r *Registry) String(s string) string {" \
+	"func (r *Registry) String(s string) string { return s" \
+	./internal/redact/
+
+mutate "arguments: validate nothing" \
+	internal/argvalidate/argvalidate.go \
+	"func (v *Validator) Validate(args map[string]any) error {" \
+	"func (v *Validator) Validate(args map[string]any) error { return nil" \
+	./internal/argvalidate/
+
+mutate "serialization: stop percent-encoding path values" \
+	internal/requestbuild/serialize.go \
+	"func percentEncode(s string, allowReserved bool) string {" \
+	"func percentEncode(s string, allowReserved bool) string { return s" \
+	./internal/requestbuild/
+
+mutate "\$ref: a path outside the root is inside it" \
+	internal/openapi/files.go \
+	"func within(root, path string) bool {" \
+	"func within(root, path string) bool { return true" \
+	./internal/openapi/
+
+mutate "search: a read tool may call a mutation" \
+	internal/mcpserver/search.go \
+	"		case kind == readOnlyCall && !isRead:" "		case false:" \
+	./internal/mcpserver/
 
 echo
 if [ "$failures" -ne 0 ]; then
