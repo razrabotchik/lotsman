@@ -74,21 +74,31 @@ last field is handled.
 
 ## Step 4: The document itself  ✅ CHECKPOINT: one file describes a deployment
 
-- [ ] T609 config + cmd: `spec.source` names the document when the command line gives none; the
+- [x] T609 config + cmd: `spec.source` names the document when the command line gives none; the
       command line wins when it does (FR-62)
       → The path resolves relative to the configuration file, not the working directory: a
-        deployment's file should mean the same thing from any directory.
-- [ ] T610 `spec.root`, refused when the source is stdin
+        deployment's file should mean the same thing from any directory, including wherever a
+        service manager starts the process. Asserted by running the binary from a third directory.
+      → Reading the configuration before the document meant reordering `inspect`, `operations` and
+        `validate`, which all parsed the document first. Leaving them would have given a configured
+        source that worked in `serve` and not in `inspect` — a trap, and `inspect` disagreeing with
+        `serve` about which document it is looking at is worse than useless.
+- [x] T610 `spec.root`, refused when the source is stdin
       → A piped document has no directory, and giving it one would let a document arriving over a
         pipe read the filesystem relative to a path written for a different document.
+      → The root must exist and the source must be inside it. A configuration whose entry document
+        is already outside its own confinement boundary cannot mean what it says.
 - [x] T611 [P] `spec.strict` is the file spelling of `--lax` inverted, with the same contradiction
       rule as `defaultPolicy`
 
 ## Step 5: The example  ✅ CHECKPOINT: the specification is usable
 
-- [ ] T612 replace `TestTheSpecificationsOwnExampleDoesNotParseYet` with its opposite: §5.1, read
+- [x] T612 replace `TestTheSpecificationsOwnExampleDoesNotParseYet` with its opposite: §5.1, read
       out of the document, parses and produces the runtime it describes
       → Read out of the document rather than copied, so the test cannot drift from the
-        specification it is about.
-- [ ] T613 [P] docs: an ADR for the accept-and-verify decision, README for the fields that are now
+        specification it is about. It asserts both halves: that §5.1 parses, and that it resolves
+        to the values it names.
+      → Its predecessor was this test inverted, and it failed at every step as the refused-fields
+        list shrank — which is what made the work visible rather than a claim at the end.
+- [x] T613 [P] docs: an ADR for the accept-and-verify decision, README for the fields that are now
       real, and the release review's known-limits entry retired

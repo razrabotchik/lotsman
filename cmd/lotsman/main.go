@@ -218,6 +218,10 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 		return exitUsage
 	}
 
+	// The configuration may name the document, and the command line wins
+	// (FR-62). One file describing a deployment is the point of the field.
+	spec = pick(spec, runtime.Source)
+
 	// An HTTP endpoint with no catalog is a socket that answers tools/list
 	// with nothing, which is indistinguishable from a broken deployment. Over
 	// stdio the same state is a developer convenience with one user.
@@ -351,7 +355,7 @@ func reloadTriggers(spec string, watch bool) reload.Triggers {
 //
 //nolint:gocritic // hugeParam: Runtime is resolved configuration, copied per call so no callee holds a pointer to the decision its caller already made.
 func loadCatalog(ctx context.Context, spec string, logger *slog.Logger, lax bool, runtime config.Runtime, mode catalog.Mode) (*catalog.Catalog, error) {
-	doc, err := parseSpec(ctx, spec, logger)
+	doc, err := parseSpec(ctx, spec, runtime.Root, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -603,7 +607,7 @@ type specDoc struct {
 // `serve SPEC`, which reduces the result to a Catalog, and `operations
 // SPEC`, which prints every operation including the rejected ones a
 // Catalog would silently drop.
-func parseSpec(ctx context.Context, spec string, logger *slog.Logger) (*specDoc, error) {
+func parseSpec(ctx context.Context, spec, root string, logger *slog.Logger) (*specDoc, error) {
 	src, err := specsource.Load(ctx, spec, specsource.Options{})
 	if err != nil {
 		return nil, err
@@ -611,7 +615,16 @@ func parseSpec(ctx context.Context, spec string, logger *slog.Logger) (*specDoc,
 	// RootPath travels with the bytes: the $ref stage must know which
 	// directory the document is confined to, and stdin (empty root) is
 	// confined to nothing at all.
-	doc, err := openapi.Parse(ctx, src.Bytes, openapi.Options{Logger: logger, RootPath: src.RootPath})
+	//
+	// A configured root replaces the document's own directory. That widens
+	// what the document may read, which is why only the operator can say it
+	// -- the same shape as `--base-url` for egress. Inside the stated root a
+	// reference is still confined; outside it is still refused.
+	rootPath := src.RootPath
+	if root != "" {
+		rootPath = root
+	}
+	doc, err := openapi.Parse(ctx, src.Bytes, openapi.Options{Logger: logger, RootPath: rootPath})
 	if err != nil {
 		return nil, err
 	}

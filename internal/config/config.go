@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -194,6 +195,19 @@ func (t Transport) Valid() bool {
 // different: `strict: false` is an operator asking for the lax behaviour, and
 // an absent `strict` is an operator saying nothing about it.
 type Spec struct {
+	// Source is the document to serve, when the command line names none. A
+	// relative path resolves against the configuration file's own directory,
+	// not the working directory: a file that describes a deployment should
+	// mean the same thing from wherever it is run.
+	Source string `yaml:"source,omitempty"`
+	// Root is the directory `$ref` resolution is confined to. It defaults to
+	// the document's own directory.
+	//
+	// Setting it *widens* what the document may read, which is why it is the
+	// operator's to state and never the document's -- the same shape as
+	// `--base-url` for egress. Inside the stated root a reference is still
+	// confined, and outside it is still refused.
+	Root string `yaml:"root,omitempty"`
 	// RemoteRefs would enable fetching references over the network. lotsman
 	// never does (FR-5), so `false` is accepted and `true` is refused by name
 	// rather than silently ignored.
@@ -442,13 +456,55 @@ type File struct {
 }
 
 // Load reads and validates a configuration file.
+//
+// Paths inside it resolve against the file's own directory, which is done here
+// rather than in Parse: Parse takes bytes and touches no filesystem, and a
+// configuration that had to be next to the working directory to mean anything
+// would not be a configuration a deployment could ship.
 func Load(path string) (*File, error) {
 	// #nosec G304 -- the path is an operator-supplied CLI argument.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, errs.Errorf(errs.ClassUsage, "config: cannot read %s", path)
 	}
-	return Parse(data)
+	file, err := Parse(data)
+	if err != nil {
+		return nil, err
+	}
+	if err := file.resolvePaths(filepath.Dir(path)); err != nil {
+		return nil, err
+	}
+	return file, nil
+}
+
+// resolvePaths makes the spec section's paths absolute against base and checks
+// that they describe a document lotsman could actually read.
+func (f *File) resolvePaths(base string) error {
+	if f.Spec.Source != "" && f.Spec.Source != "-" && !filepath.IsAbs(f.Spec.Source) {
+		f.Spec.Source = filepath.Join(base, f.Spec.Source)
+	}
+	if f.Spec.Root == "" {
+		return nil
+	}
+	if !filepath.IsAbs(f.Spec.Root) {
+		f.Spec.Root = filepath.Join(base, f.Spec.Root)
+	}
+	info, err := os.Stat(f.Spec.Root)
+	if err != nil || !info.IsDir() {
+		return errs.Errorf(errs.ClassUsage, "config: spec.root %s is not a directory", f.Spec.Root)
+	}
+	// The entry document has to be inside the boundary it is confined to.
+	// Otherwise the first thing lotsman reads is already outside the root,
+	// which is a configuration that cannot mean what it says.
+	if f.Spec.Source != "" && f.Spec.Source != "-" {
+		root, rootErr := filepath.EvalSymlinks(f.Spec.Root)
+		source, sourceErr := filepath.EvalSymlinks(f.Spec.Source)
+		if rootErr == nil && sourceErr == nil && !strings.HasPrefix(source, root+string(filepath.Separator)) {
+			return errs.Errorf(errs.ClassUsage,
+				"config: spec.source %s is not inside spec.root %s", f.Spec.Source, f.Spec.Root)
+		}
+	}
+	return nil
 }
 
 // Parse decodes and validates a configuration document.
@@ -526,6 +582,14 @@ func (f *File) validate() error {
 // the difference between learning that from a refusal and learning it from a
 // document that silently resolves nothing is the whole point (FR-5).
 func validateSpec(spec *Spec) error {
+	// A document arriving over a pipe has no location, and giving it one would
+	// let it read the filesystem relative to a path written for a different
+	// document.
+	if spec.Source == "-" && spec.Root != "" {
+		return errs.Errorf(errs.ClassUsage,
+			"config: spec.root cannot be set when spec.source is stdin: a piped document has no "+
+				"directory, and a root written for another document is not its own")
+	}
 	if spec.RemoteRefs != nil && *spec.RemoteRefs {
 		return errs.Errorf(errs.ClassUsage,
 			"config: spec.remoteRefs cannot be true: a remote reference is never fetched, because a "+
