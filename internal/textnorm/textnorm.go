@@ -43,15 +43,3 @@ func Tokens(s string) []string {
 	flush()
 	return tokens
 }
-
-// Contains reports whether s contains word as a whole token. Substring
-// matching is what makes "/updates" look like the verb "update", so it is not
-// available here at all.
-func Contains(s, word string) bool {
-	for _, token := range Tokens(s) {
-		if token == word {
-			return true
-		}
-	}
-	return false
-}

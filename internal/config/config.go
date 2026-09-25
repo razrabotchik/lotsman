@@ -257,17 +257,6 @@ const (
 	InboundModeOAuth InboundMode = "oauth"
 )
 
-// Known reports whether the mode is one the specification defines. It is not
-// the same question as whether this build serves it.
-func (m InboundMode) Known() bool {
-	switch m {
-	case InboundNone, InboundStaticBearer, InboundModeOAuth:
-		return true
-	default:
-		return false
-	}
-}
-
 // InboundAuth is the inbound authorization section (docs/spec.md §8).
 type InboundAuth struct {
 	// Mode defaults to none.
