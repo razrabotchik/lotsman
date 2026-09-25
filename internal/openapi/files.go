@@ -27,6 +27,25 @@ type closure struct {
 	// document whose references cannot be followed is not a document lotsman
 	// can serve, and `inspect` exists to say why.
 	diagnostics []domain.Diagnostic
+	// refused holds those references exactly as written.
+	//
+	// The parser is handed the confined list, so a refused document is one it
+	// never receives -- and it then reports the same reference missing in its
+	// own words ("component `X` does not exist in the specification"), with no
+	// code and pointing at where the reference was used rather than where it
+	// was written. That is the same problem said twice, and the second telling
+	// is the worse one, so it is dropped by matching on this set.
+	refused map[string]bool
+}
+
+// refuse records a refusal, both as a diagnostic and as a reference the parser
+// is expected to complain about next.
+func (c *closure) refuse(code domain.ReasonCode, ref refSite, message string) {
+	c.diagnostics = append(c.diagnostics, diagnostic(code, ref, message))
+	if c.refused == nil {
+		c.refused = map[string]bool{}
+	}
+	c.refused[ref.value] = true
 }
 
 // resolveClosure walks the file references reachable from the root document.
@@ -79,14 +98,14 @@ func resolveClosure(rootBytes []byte, rootPath string, refs []refSite, limits Li
 				continue // local reference
 			}
 			if isRemote(target) {
-				result.diagnostics = append(result.diagnostics, diagnostic(domain.ReasonExternalRefUnsupported, ref,
-					"remote references are not fetched; a document may not make lotsman issue a request of its choosing"))
+				result.refuse(domain.ReasonExternalRefUnsupported, ref,
+					"remote references are not fetched; a document may not make lotsman issue a request of its choosing")
 				continue
 			}
 
 			abs, reason := confine(paths, currentDir, rootPath, target)
 			if reason != "" {
-				result.diagnostics = append(result.diagnostics, diagnostic(reason, ref, confinementText(reason, rootPath, target)))
+				result.refuse(reason, ref, confinementText(reason, rootPath, target))
 				continue
 			}
 			if seen[abs] {
@@ -96,16 +115,16 @@ func resolveClosure(rootBytes []byte, rootPath string, refs []refSite, limits Li
 
 			data, err := readConfined(abs)
 			if err != nil {
-				result.diagnostics = append(result.diagnostics, diagnostic(domain.ReasonRefUnresolvable, ref,
-					fmt.Sprintf("reference %q: %v", target, err)))
+				result.refuse(domain.ReasonRefUnresolvable, ref,
+					fmt.Sprintf("reference %q: %v", target, err))
 				continue
 			}
 
 			result.bytes += int64(len(data))
 			relative, relErr := filepath.Rel(rootPath, abs)
 			if relErr != nil {
-				result.diagnostics = append(result.diagnostics, diagnostic(domain.ReasonRefOutsideRoot, ref,
-					confinementText(domain.ReasonRefOutsideRoot, rootPath, target)))
+				result.refuse(domain.ReasonRefOutsideRoot, ref,
+					confinementText(domain.ReasonRefOutsideRoot, rootPath, target))
 				continue
 			}
 			result.files = append(result.files, filepath.ToSlash(relative))
@@ -121,8 +140,8 @@ func resolveClosure(rootBytes []byte, rootPath string, refs []refSite, limits Li
 
 			var node yaml.Node
 			if err := yaml.Unmarshal(data, &node); err != nil {
-				result.diagnostics = append(result.diagnostics, diagnostic(domain.ReasonRefUnresolvable, ref,
-					fmt.Sprintf("%s is not valid YAML or JSON", relative)))
+				result.refuse(domain.ReasonRefUnresolvable, ref,
+					fmt.Sprintf("%s is not valid YAML or JSON", relative))
 				continue
 			}
 			queue = append(queue, pending{abs: abs, refs: collectRefs(&node)})

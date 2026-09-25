@@ -200,9 +200,20 @@ func writeHumanReport(w io.Writer, report *inspectDocument) {
 	fmt.Fprintf(w, "tools:      %d published, %d executable, %d blocked by policy, %d not implemented yet\n",
 		t.Published, t.Executable, t.PolicyBlocked, t.CapabilityBlocked)
 	fmt.Fprintf(w, "effects:    %s\n", formatEffects(t.ByEffect))
-	fmt.Fprintf(w, "catalog:    mode=%s, %d tools, ~%d bytes of tools/list (budget %d), %s\n",
-		report.Catalog.Mode, report.Catalog.ToolCount, report.Catalog.SerializedBytes,
-		report.Catalog.ThresholdBytes, report.Catalog.Digest)
+	// The byte count is always one tool per operation, because that is what the
+	// mode decision is made against. In search mode that is not what a client
+	// receives -- the published list is the meta-tools and does not grow with
+	// the catalog -- so the line says so instead of calling it `tools/list`.
+	if report.Catalog.Mode == catalog.ModeSearch {
+		fmt.Fprintf(w, "catalog:    mode=%s, %d operations behind the meta-tools; one tool each "+
+			"would be ~%d bytes (budget %d), %s\n",
+			report.Catalog.Mode, report.Catalog.ToolCount, report.Catalog.SerializedBytes,
+			report.Catalog.ThresholdBytes, report.Catalog.Digest)
+	} else {
+		fmt.Fprintf(w, "catalog:    mode=%s, %d tools, ~%d bytes of tools/list (budget %d), %s\n",
+			report.Catalog.Mode, report.Catalog.ToolCount, report.Catalog.SerializedBytes,
+			report.Catalog.ThresholdBytes, report.Catalog.Digest)
+	}
 	if report.Catalog.OverBudget {
 		over := report.Catalog.SerializedBytes - report.Catalog.ThresholdBytes
 		if report.Catalog.Mode == catalog.ModeSearch {

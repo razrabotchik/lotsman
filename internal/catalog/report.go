@@ -59,22 +59,38 @@ type Totals struct {
 	ByEffect map[domain.Effect]int `json:"byEffect,omitempty"`
 }
 
-// Estimate sizes the published catalog. serializedBytes is what the tool list
-// costs a model's context, and it is the number that decides the mode (FR-52):
-// 65 Kubernetes tools weigh more than 600 DigitalOcean ones, so an operation
-// count cannot tell them apart.
+// Estimate sizes the catalog as one tool per operation. That is the number the
+// mode decision is made against (FR-52) -- 65 Kubernetes tools weigh more than
+// 600 DigitalOcean ones, so an operation count cannot tell them apart -- and it
+// is measured the same way whichever mode is in force, because a measurement
+// that changed with the answer could not be compared across two reports.
+//
+// So in search mode it is not what `tools/list` costs: the published list is
+// the meta-tools, a handful of definitions that do not grow with the catalog.
+// It is what tools mode *would* cost, which is what makes search mode the
+// answer. Readers of these fields have to keep that apart, and the report's
+// own wording says which is which.
 type Estimate struct {
 	// Mode is the mode actually in force.
 	Mode Mode `json:"mode"`
 	// Recommended is what the measurement says the catalog needs. It can
 	// differ from Mode -- an operator may pin tools mode for a catalog that
 	// exceeds the budget, and a report that hid that would be useless.
-	Recommended     Mode `json:"recommendedMode"`
-	ToolCount       int  `json:"toolCount"`
-	SerializedBytes int  `json:"serializedBytesEstimate"`
+	Recommended Mode `json:"recommendedMode"`
+	// ToolCount is the operations in the catalog, which is the number of tools
+	// published in tools mode and the number searchable in search mode.
+	ToolCount int `json:"toolCount"`
+	// SerializedBytes is what those tools cost as a `tools/list` payload: name,
+	// description and input schema, per operation. See the type comment for why
+	// this is not the published size in search mode.
+	SerializedBytes int `json:"serializedBytesEstimate"`
 	// ThresholdBytes is the budget Recommended was decided against.
-	ThresholdBytes int  `json:"thresholdBytes"`
-	OverBudget     bool `json:"overBudget"`
+	ThresholdBytes int `json:"thresholdBytes"`
+	// OverBudget reports that one tool per operation does not fit the budget,
+	// which is the reason search mode exists. In search mode it stays true --
+	// the catalog did not shrink, the publication changed -- so it reads as
+	// "this catalog needs search mode", not as "the published list is too big".
+	OverBudget bool `json:"overBudget"`
 	// DescriptionBytesPerTool is the per-tool description ceiling in force
 	// (FR-19). It is in the report for the same reason the catalog budget is:
 	// a reader comparing two reports needs to know whether a difference in

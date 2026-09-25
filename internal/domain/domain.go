@@ -210,6 +210,8 @@ const (
 	ReasonAmbiguousSecurity ReasonCode = "ambiguous_security"
 	// ReasonUnsupportedBodySchema marks a request body schema lotsman will not translate.
 	ReasonUnsupportedBodySchema ReasonCode = "unsupported_body_schema"
+	// ReasonDocumentInvalid marks a structural problem the parser reported that lotsman has no narrower code for. Every diagnostic carries a code: a machine-readable report whose entries have no code cannot be branched on (FR-11).
+	ReasonDocumentInvalid ReasonCode = "document_invalid"
 	// ReasonInvalidSchema marks a schema that is not valid JSON Schema once normalized, so no argument can be validated against it.
 	ReasonInvalidSchema ReasonCode = "invalid_schema"
 	// ReasonDisabledByOverride marks an operation the operator switched off with `enabled: false`.

@@ -10,9 +10,9 @@ refuses, is the reason a design flaw or a feature that has not been written yet?
 | Document | Operations | Supported | Executable (default policy) | Catalog (tools) | Catalog (search) | Verdict |
 |---|---|---|---|---|---|---|
 | Kubernetes `apps/v1` (v1.31.0) | 77 | 65 | 38 | 2.23 MB | **5.5 KB** | translated |
-| DigitalOcean, exploded (pinned commit) | 659 | 631 | 0 (all need auth) | 743 KB | **5.5 KB** | translated |
+| DigitalOcean, exploded (pinned commit) | 659 | 631 | 0 (all need auth) | 737 KB | **5.5 KB** | translated |
 | Stripe (v1301) | 559 | 0 | 0 | — | — | refused per matrix |
-| DigitalOcean, root only | 0 | 0 | 0 | — | — | every reference refused |
+| DigitalOcean, root only | 0 | 0 | 0 | — | — | 661 references refused by name |
 | GitLab (v17.5.0-ee) | — | — | — | — | — | refused before parsing |
 
 Numbers below were re-measured after Phase B step 8 (references, normalization, security).
@@ -51,16 +51,17 @@ is a measurement rather than an intuition.
 - `unsupported_media_type` × 559 — every Stripe request body is `application/x-www-form-urlencoded`;
 - `unsupported_parameter_style` × 367 — Stripe uses `deepObject` query parameters throughout.
 
-`authentication_not_implemented` also appears 559 times as an execution blocker. Nothing here is an
-IR problem: Stripe needs form bodies and deepObject serialization, both named as separate work
-items with their own tests.
+Nothing here is an IR problem: Stripe needs form bodies and deepObject serialization, both named as
+separate work items with their own tests. No credential diagnostic appears beside them, because
+nothing is published: `authentication_not_implemented` is an execution blocker, and an operation
+rejected while the document is read never reaches the question.
 
-Parsing the 5.2 MB document, normalizing it and producing the full report takes **0.40 s** and
-**150 MB** RSS (NFR-11 budgets 200 MiB), and two runs produce byte-identical reports.
+Parsing the 5.2 MB document, normalizing it and producing the full report takes **0.33 s** and
+**152 MB** RSS (NFR-11 budgets 200 MiB), and two runs produce byte-identical reports.
 
 ## DigitalOcean — the exploded-spec case
 
-**659 operations, 631 supported, in 0.3 s.** The root is a 112 KB index whose `$ref`s point at 662
+**659 operations, 631 supported, in 0.3 s.** The root is a 112 KB index whose `$ref`s point at 661
 sibling documents; the transitive closure is about 2,900 files and 14 MB, every one of them
 resolved relative to the document that referenced it, expanded through symlinks and checked to be
 inside the spec root before being read (ADR-0009). The parser receives the verified list as an
@@ -71,12 +72,24 @@ declared as unions, one unsupported media type and one invalid parameter. All 63
 need a bearer credential, so none is executable until the auth stage — which is the honest
 statement about an API that authenticates everything.
 
-**Found by this run:** the closure is far larger than the root suggests — 662 direct references,
+**Found by this run:** the closure is far larger than the root suggests — 661 direct references,
 ~2,900 documents transitively. `MaxRefDocuments` is now 4,096, set from this measurement.
 
 The root document *alone* is kept in the corpus as its own entry: downloading the index without
-the files it points at is a real mistake, and lotsman answers it with 662 diagnostics that each
-name the missing document and the pointer that asked for it, rather than one confusing failure.
+the files it points at is a real mistake, and lotsman answers it with 661 diagnostics — one per
+reference — that each name the missing document and the pointer that asked for it, rather than one
+confusing failure.
+
+**Found by this entry:** the list used to be twice that. A refused document is one the parser never
+receives, so it reported the same reference missing again in its own words ("component `X` does not
+exist in the specification") with no reason code and pointing at where the reference was *used*
+rather than where it was written. 1,322 diagnostics for 661 missing files, every second one a worse
+restatement of the one above it — and `code` empty on half a machine-readable report, which is the
+field a consumer branches on (FR-11). The parser's restatement is now recognised by the reference
+as written and dropped; everything else it reports gets a code, `document_invalid` when lotsman has
+no narrower word. The manifest's expectation was `documentIssuesAtLeast: 662`, which is how this
+went unnoticed: it was satisfied by the duplicates. It is now the exact count, plus an assertion
+that every entry carries a code.
 
 ## GitLab — the wrong-version case
 
@@ -92,7 +105,10 @@ and says it is not part of this release.
 ## Search mode, measured
 
 Search mode publishes five meta-tools regardless of catalog size, so `tools/list` is a constant
-**5 492 bytes** for both Kubernetes (65 operations) and DigitalOcean (631). Against tools mode that
+**5 492 bytes** for both Kubernetes (65 operations) and DigitalOcean (631) — measured over a live
+session, because that is the only place the published list exists; `inspect` reports the tools-mode
+size in either mode, since that is the measurement the mode decision is made against, and its
+wording now says which of the two it is printing. Against tools mode that
 is 406× smaller for Kubernetes and 135× for DigitalOcean — and for a catalog that did not fit at
 all, the comparison is not a ratio but a yes.
 

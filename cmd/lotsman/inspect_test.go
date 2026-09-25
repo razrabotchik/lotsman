@@ -83,6 +83,7 @@ type inspectReport struct {
 	} `json:"security"`
 	DocumentIssues []struct {
 		Severity string `json:"severity"`
+		Code     string `json:"code"`
 		Message  string `json:"message"`
 	} `json:"documentIssues"`
 	Operations []struct {
@@ -338,5 +339,36 @@ func TestInspectReportsAPinnedMode(t *testing.T) {
 	}
 	if report.Catalog.Recommended != "tools" {
 		t.Errorf("recommended = %q, want the measurement unchanged by the request", report.Catalog.Recommended)
+	}
+}
+
+// The human report's byte count is one tool per operation, whichever mode is in
+// force, because that is the measurement the mode decision is made against. In
+// search mode that is not what a client receives -- the published list is the
+// meta-tools and does not grow with the catalog -- so the line must not call it
+// the cost of `tools/list`.
+//
+// The number was right and the sentence around it was not, which is the kind of
+// report that gets quoted back as a problem that does not exist: an operator who
+// switched to search mode to fit a budget was told, on the mode line itself,
+// that their tool list still weighed the old amount.
+func TestTheCatalogLineNamesWhatItMeasured(t *testing.T) {
+	tools, _, code := runCLI(t, "inspect", miniSpecPath(t), "--mode=tools")
+	if code != 0 {
+		t.Fatalf("inspect --mode=tools exited %d", code)
+	}
+	if !strings.Contains(tools, "bytes of tools/list") {
+		t.Errorf("the tools-mode line no longer says what it measures:\n%s", tools)
+	}
+
+	search, _, code := runCLI(t, "inspect", miniSpecPath(t), "--mode=search")
+	if code != 0 {
+		t.Fatalf("inspect --mode=search exited %d", code)
+	}
+	if strings.Contains(search, "bytes of tools/list") {
+		t.Errorf("search mode reports a tools-mode size as the published list:\n%s", search)
+	}
+	if !strings.Contains(search, "one tool each") {
+		t.Errorf("the search-mode line does not say what its byte count is:\n%s", search)
 	}
 }

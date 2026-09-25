@@ -15,6 +15,7 @@ import (
 	"github.com/pb33f/libopenapi/datamodel"
 	"github.com/pb33f/libopenapi/datamodel/high/base"
 	v3 "github.com/pb33f/libopenapi/datamodel/high/v3"
+	"github.com/pb33f/libopenapi/index"
 	"github.com/pb33f/libopenapi/orderedmap"
 
 	"github.com/razrabotchik/lotsman/internal/domain"
@@ -135,10 +136,9 @@ func Parse(ctx context.Context, specBytes []byte, opts Options) (*Document, erro
 	// (pipeline.md stage 1.2: show the user the full problem list, not just
 	// the first one).
 	for _, e := range flattenErrors(parsed.buildErr) {
-		out.Diagnostics = append(out.Diagnostics, domain.Diagnostic{
-			Severity: domain.SeverityError,
-			Message:  e.Error(),
-		})
+		if d, ok := classifyBuildError(e, scan.refused); ok {
+			out.Diagnostics = append(out.Diagnostics, d)
+		}
 	}
 
 	if model.Model.Paths == nil {
@@ -450,6 +450,49 @@ func sortedPathKeys(items *orderedmap.Map[string, *v3.PathItem]) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// classifyBuildError turns one parser error into a diagnostic, or drops it.
+//
+// It exists for two reasons, both found by running `inspect` over a
+// specification whose referenced documents were missing.
+//
+// A dropped one is a reference lotsman already refused. The parser is handed a
+// confined allowlist, so a refused document is one it never sees, and it then
+// says so itself -- "component `X` does not exist in the specification" -- with
+// no reason code and pointing at the place the reference was *used* rather than
+// where it was written. The DigitalOcean index alone produced 1,322 diagnostics
+// for 661 missing files that way, every second one a worse restatement of the
+// one above it.
+//
+// The rest get a code. `code` is the field a consumer branches on (FR-11), and
+// an entry without one is not machine-readable; a parser error lotsman has no
+// narrower word for is `document_invalid` rather than nothing.
+func classifyBuildError(err error, refused map[string]bool) (domain.Diagnostic, bool) {
+	var indexing *index.IndexingError
+	if errors.As(err, &indexing) {
+		// KeyNode carries the reference as written, which is what makes this a
+		// structural comparison rather than a guess about someone else's
+		// wording.
+		if indexing.KeyNode != nil {
+			if refused[indexing.KeyNode.Value] {
+				return domain.Diagnostic{}, false
+			}
+			return domain.Diagnostic{
+				Severity: domain.SeverityError,
+				Code:     domain.ReasonRefUnresolvable,
+				Line:     indexing.KeyNode.Line,
+				Col:      indexing.KeyNode.Column,
+				Message: fmt.Sprintf("reference %q is not present in this document",
+					indexing.KeyNode.Value),
+			}, true
+		}
+	}
+	return domain.Diagnostic{
+		Severity: domain.SeverityError,
+		Code:     domain.ReasonDocumentInvalid,
+		Message:  err.Error(),
+	}, true
 }
 
 // flattenErrors unwraps an errors.Join tree (as returned by

@@ -153,6 +153,26 @@ resolve names itself, and the document still pointed at the old ones.
   `reload` had the same blind spot from the other side: it publishes only when the digest moves, so
   a mode change alone decided there was nothing to publish. The digest now identifies *what a
   client will be shown* rather than which tools exist. Found by writing a test for something else.
+- **Half of a machine-readable diagnostic list had no reason code, and every entry was said
+  twice.** A `$ref` lotsman refuses is a document the parser never receives, so it reported the same
+  reference missing in its own vocabulary — "component `X` does not exist in the specification" —
+  with no code and pointing at where the reference was used rather than where it was written.
+  Downloading the DigitalOcean index without its files produced 1,322 diagnostics for 661 missing
+  documents that way. The restatement is now matched by the reference as written and dropped, and
+  every parser error lotsman has no narrower word for is `document_invalid` rather than codeless:
+  `code` is the field a consumer branches on (FR-11). The corpus expectation was
+  `documentIssuesAtLeast: 662` and passed on the duplicates, so it is now the exact count with an
+  assertion that no entry is codeless.
+- **`inspect` called a tools-mode measurement the cost of `tools/list` in search mode.** The byte
+  count is deliberately one tool per operation whichever mode is in force — that is what the mode
+  decision is made against, and a measurement that changed with the answer could not be compared
+  across two reports — but the line printed it as "bytes of `tools/list`" next to `mode=search`,
+  where the published list is the meta-tools and does not grow with the catalog. An operator who
+  switched to search mode to fit a budget was told on the mode line itself that their tool list
+  still weighed the old amount. The number is unchanged and the sentence around it now says which
+  of the two it is. What `inspect` still does not report is the published meta-tool list's own size
+  (5 492 bytes, constant): it exists only in a live session, and measuring it would mean building
+  one inside a read-only command.
 - **There is no outbound rate limit, and two documents said there was.** §7.5's pipeline order
   lists `rate limit` as a stage between the egress destination check and auth application, and
   `docs/pipeline.md` described it as the first RoundTripper in the chain. Nothing implements it:
