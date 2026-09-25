@@ -150,15 +150,21 @@ func bind(alternative domain.SecurityAlternative, profiles Profiles) (binding Bi
 			return Binding{}, fmt.Sprintf("no profile for scheme %q", requirement.Scheme), ""
 		}
 		var matched []Credential
+		// Why each candidate was turned down, in order, deduplicated: with one
+		// configured profile -- the ordinary case -- this is the one sentence
+		// `compatible` wrote for it, and it is more use than a summary of it.
+		var mismatches []string
 		for i := range candidates {
 			if mismatch := compatible(&candidates[i].Profile, requirement); mismatch != "" {
+				mismatches = append(mismatches, mismatch)
 				continue
 			}
 			matched = append(matched, candidates[i])
 		}
 		switch len(matched) {
 		case 0:
-			return Binding{}, fmt.Sprintf("profile for %q does not match how the API carries it", requirement.Scheme), ""
+			return Binding{}, fmt.Sprintf("profile for scheme %q cannot satisfy it: %s",
+				requirement.Scheme, strings.Join(unique(mismatches), "; ")), ""
 		case 1:
 		default:
 			names := make([]string, len(matched))

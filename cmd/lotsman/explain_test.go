@@ -185,3 +185,69 @@ authProfiles:
 	t.Setenv("LOTSMAN_CANARY", canarySecret)
 	return specPath, configPath
 }
+
+// A credential that exists and does not fit is the one blocker an operator can
+// act on today, and the code alone does not tell them how: they have a profile
+// configured, and `authentication_not_implemented` reads as lotsman's gap rather
+// than as "your key goes in the query string, not a header".
+//
+// The sentence was being written all along, in internal/auth, and then dropped
+// twice on the way out -- once by the selector's caller and once by the catalog.
+func TestTheReportSaysWhyAConfiguredProfileDoesNotFit(t *testing.T) {
+	dir := t.TempDir()
+	specPath := filepath.Join(dir, "openapi.yaml")
+	if err := os.WriteFile(specPath, []byte(`openapi: 3.0.3
+info: { title: Keys, version: "1.0" }
+security:
+  - queryKey: []
+paths:
+  /things:
+    get: { operationId: listThings, responses: { "200": { description: ok } } }
+components:
+  securitySchemes:
+    queryKey: { type: apiKey, in: query, name: sig }
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dir, "lotsman.yaml")
+	if err := os.WriteFile(configPath, []byte(`apiVersion: lotsman.dev/v1alpha1
+authProfiles:
+  queryKey:
+    scheme: apikey
+    in: header
+    name: X-Sig
+    tokenRef: env:LOTSMAN_CANARY
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LOTSMAN_CANARY", canarySecret)
+
+	stdout, stderr, code := runCLI(t, "inspect", specPath, "--config", configPath, "--json")
+	if code != 0 {
+		t.Fatalf("inspect failed (%d): %s", code, stderr)
+	}
+	report := decodeReport(t, stdout)
+	if len(report.Operations) != 1 {
+		t.Fatalf("expected one operation, got %d", len(report.Operations))
+	}
+	var detail string
+	for _, reason := range report.Operations[0].Reasons {
+		if reason.Code == "authentication_not_implemented" {
+			detail = reason.Detail
+		}
+	}
+	if !strings.Contains(detail, "carries the key in the query") {
+		t.Errorf("the report does not say where the API reads the key: %q", detail)
+	}
+
+	// The same answer from `explain-call`, which is where an operator looks
+	// when the report has told them there is a problem.
+	explained, _, code := runCLI(t, "explain-call", "list_things",
+		"--spec", specPath, "--config", configPath, "--base-url", "https://api.example.com")
+	if code != 0 {
+		t.Fatalf("explain-call exited %d", code)
+	}
+	if !strings.Contains(explained, "carries the key in the query") {
+		t.Errorf("explain-call does not say why the profile does not fit:\n%s", explained)
+	}
+}

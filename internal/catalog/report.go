@@ -191,6 +191,16 @@ func buildReport(operations []domain.Operation, tools []Tool, excluded map[domai
 			// only be decided with the configuration in hand (auth), which is
 			// what a reader needs to see.
 			verdict.ExecutionBlockers = append([]domain.ReasonCode(nil), tool.ExecutionBlockers...)
+			if tool.AuthMessage != "" {
+				// The credential blocker arrives as a code alone, and the code
+				// is the category rather than the answer: a reader with a
+				// configured profile needs to know it is in the wrong place,
+				// not that authentication is "not implemented".
+				verdict.Reasons = append(verdict.Reasons, Reason{
+					Code:   domain.ReasonAuthenticationNotImplemented,
+					Detail: tool.AuthMessage,
+				})
+			}
 		}
 
 		report.Totals.ByEffect[op.Effect.Effect]++

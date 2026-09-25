@@ -238,6 +238,12 @@ func argumentLines(arguments requestbuild.Arguments) []string {
 // variable has to be set on the machine that will run this.
 func authLine(tool *catalog.Tool) string {
 	if len(tool.AuthBinding.Credentials) == 0 {
+		// "-" is right for an operation that needs nothing. An operation that
+		// needs something lotsman could not supply is a different answer, and
+		// `explain` is the command whose job is to give it.
+		if tool.AuthMessage != "" {
+			return "none bound: " + tool.AuthMessage
+		}
 		return "-"
 	}
 	var parts []string

@@ -65,6 +65,12 @@ type Tool struct {
 	ExecutionBlockers []domain.ReasonCode `json:"executionBlockers,omitempty"`
 	PolicyBlockers    []domain.ReasonCode `json:"policyBlockers,omitempty"`
 	PolicyMessage     string              `json:"policyMessage,omitempty"`
+	// AuthMessage says why no configured credential satisfies this operation,
+	// in the document's own terms -- "the API carries the key in the query",
+	// not "authentication_not_implemented". The code says which category the
+	// problem is in; this says which line of the configuration to change, and
+	// the two are different questions. It used to be computed and dropped here.
+	AuthMessage string `json:"authMessage,omitempty"`
 }
 
 // Catalog is the deterministic, immutable snapshot built from parsed
@@ -224,6 +230,7 @@ func Build(specDigest string, operations []domain.Operation, opts Options) Catal
 			// Published, never executable: the operation is translatable and
 			// permitted, but lotsman has no way to authenticate it.
 			tool.ExecutionBlockers = append(tool.ExecutionBlockers, credentials.Reason)
+			tool.AuthMessage = credentials.Message
 			tool.Executable = false
 		} else {
 			tool.AuthBinding = credentials.Binding
