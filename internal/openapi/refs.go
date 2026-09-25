@@ -27,6 +27,8 @@ type refScan struct {
 	// files are the confined file references the parser is allowed to read,
 	// relative to the spec root.
 	files []string
+	// manifest is the same list with a digest each (FR-13b).
+	manifest []domain.RefDocument
 	// refused are the references this scan turned down, as written. The parser
 	// never receives those documents and reports them missing in its own
 	// words, so the scan's set is how that restatement is recognised and
@@ -69,6 +71,7 @@ func scanRefs(specBytes []byte, rootPath string, limits Limits) (*refScan, error
 		return nil, err
 	}
 	scan.files = files.files
+	scan.manifest = files.documents
 	scan.documents = 1 + len(files.files)
 	scan.bytes = files.bytes
 	scan.diagnostics = append(scan.diagnostics, files.diagnostics...)

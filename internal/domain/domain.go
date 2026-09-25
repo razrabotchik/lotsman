@@ -1,6 +1,12 @@
 package domain
 
-import "strings"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"sort"
+	"strings"
+)
 
 // OperationKey is the stable identity of an operation: independent of
 // operationId, because real specs duplicate or omit it.
@@ -172,6 +178,42 @@ const (
 	SeverityWarning Severity = "warning"
 	SeverityInfo    Severity = "info"
 )
+
+// RefDocument is one document a specification pulls in through a `$ref`,
+// with the digest of the bytes lotsman actually read (FR-13b).
+//
+// It exists because a root document's digest answers a different question than
+// the one an operator asks. For an exploded specification -- a small index over
+// hundreds of files, which is how large vendors publish -- editing a referenced
+// document leaves the root byte-identical, so `specDigest` alone reports two
+// different specifications as the same one.
+type RefDocument struct {
+	// Path is relative to the spec root, slash-separated, so the manifest is
+	// the same on every platform and says nothing about the host.
+	Path string `json:"path"`
+	// Digest is "sha256:<hex>" of the document's bytes.
+	Digest string `json:"digest"`
+}
+
+// ManifestDigest identifies a specification and everything it read.
+//
+// The root is named "." rather than by filename: the manifest answers "are
+// these the same bytes", and a document that was moved or renamed on the way in
+// is the same specification. Referenced documents keep their paths, because a
+// `$ref` resolving to a different file *is* a different specification.
+func ManifestDigest(rootDigest string, references []RefDocument) string {
+	var canonical strings.Builder
+	fmt.Fprintf(&canonical, ".\x00%s\n", rootDigest)
+	// The caller sorts; sorting again here makes the digest independent of that
+	// promise, because a digest that depends on caller order is not an identity.
+	sorted := append([]RefDocument(nil), references...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Path < sorted[j].Path })
+	for i := range sorted {
+		fmt.Fprintf(&canonical, "%s\x00%s\n", sorted[i].Path, sorted[i].Digest)
+	}
+	sum := sha256.Sum256([]byte(canonical.String()))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
 
 // ReasonCode is a machine-readable diagnostic or rejection code
 // (data-model.md), stable across releases so consumers can branch on it.

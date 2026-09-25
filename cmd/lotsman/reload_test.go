@@ -207,3 +207,62 @@ func TestToolsListCarriesCacheHints(t *testing.T) {
 		t.Errorf("the digest changed without the catalog: %q then %q", digest, second)
 	}
 }
+
+// An exploded specification is the shape large vendors publish: a small index
+// over hundreds of documents. Every edit an operator makes is to one of those
+// documents, and `--watch` used to poll the index alone -- so the feature
+// appeared to work and noticed nothing they actually did.
+//
+// The reload itself was always correct: it re-reads the whole closure. What was
+// missing was the trigger.
+func TestWatchNoticesAChangeInAReferencedDocument(t *testing.T) {
+	dir := t.TempDir()
+	referenced := filepath.Join(dir, "pet.yaml")
+	if err := os.WriteFile(referenced, []byte(`type: object
+properties:
+  name: { type: string }
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	specPath := filepath.Join(dir, "openapi.yaml")
+	if err := os.WriteFile(specPath, []byte(`openapi: 3.0.3
+info: { title: Exploded, version: "1.0" }
+paths:
+  /pets:
+    post:
+      operationId: createPet
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: './pet.yaml' }
+      responses: { "201": { description: created } }
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	endpoint, stderr := serveHTTPEnv(t, nil, "--listen", "127.0.0.1:0", specPath,
+		"--watch", "--log-level", "debug")
+	if got := toolNames(t, endpoint); len(got) == 0 {
+		t.Fatalf("nothing was published at startup\nstderr:\n%s", stderr.String())
+	}
+
+	// The index is untouched. Only the document it points at changes, and the
+	// change is one a client can see: a second property in the tool's schema.
+	if err := os.WriteFile(referenced, []byte(`type: object
+properties:
+  name: { type: string }
+  colour: { type: string }
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(stderr.String(), "catalog reloaded") {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("a change to a referenced document never republished the catalog\nstderr:\n%s",
+		stderr.String())
+}

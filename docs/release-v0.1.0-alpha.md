@@ -153,6 +153,24 @@ resolve names itself, and the document still pointed at the old ones.
   `reload` had the same blind spot from the other side: it publishes only when the digest moves, so
   a mode change alone decided there was nothing to publish. The digest now identifies *what a
   client will be shown* rather than which tools exist. Found by writing a test for something else.
+- **`--watch` watched the index of an exploded specification, which is the one file nobody edits.**
+  A large vendor publishes a small root document that references hundreds of others — DigitalOcean's
+  is 112 KB over 661 files — and every edit an operator makes lands in one of those files. The
+  watcher polled the root alone, so the feature appeared to work (it did reload when the index
+  changed) and noticed nothing they actually did. The reload itself was always correct: it re-reads
+  the whole closure. It now watches the whole closure too, re-asked each interval because a reload
+  can change the set, at one stat per document per interval — 2,910 documents measure at about 3 ms,
+  so completeness is cheaper here than the surprise was.
+- **FR-13b's manifest did not exist, so two different specifications reported the same digest.** The
+  requirement asks for a deterministic manifest of the root and its references with a digest per
+  document, and nothing implemented it: `specDigest` was the sha256 of the root document's bytes
+  alone. For an exploded specification that answers "am I serving what I think I am serving" with
+  the wrong answer, because editing a referenced document leaves the index byte-identical. Every
+  document is now digested where its bytes are already in hand — no second read — and `inspect`
+  reports a manifest digest beside the root digest, with the documents themselves in `--json`. The
+  catalog digest still identifies what a client will be shown rather than what the parser read:
+  those are different questions, and one value answering both would be worse than two that each say
+  what they mean.
 - **A connection failure was reported as a policy refusal, with the wrong remedy attached.** When a
   name resolved to several addresses and lotsman skipped a private one, the error returned for the
   *public* address failing to answer was the policy refusal —

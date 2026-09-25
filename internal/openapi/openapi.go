@@ -50,9 +50,13 @@ type Document struct {
 	// Version is the document's own `openapi` value, reported as authored so
 	// a reader can tell a 3.0 document (which needs translation) from a 3.1
 	// one (which mostly does not).
-	Version     string              `json:"version,omitempty"`
-	Operations  []domain.Operation  `json:"operations"`
-	Diagnostics []domain.Diagnostic `json:"diagnostics,omitempty"`
+	Version    string             `json:"version,omitempty"`
+	Operations []domain.Operation `json:"operations"`
+	// References are the documents this one pulled in, with a digest each
+	// (FR-13b). Empty for a single-file specification and for one read from
+	// stdin, which has no directory to resolve a reference against.
+	References  []domain.RefDocument `json:"references,omitempty"`
+	Diagnostics []domain.Diagnostic  `json:"diagnostics,omitempty"`
 }
 
 // HasErrors reports whether parsing or model construction produced a
@@ -130,7 +134,11 @@ func Parse(ctx context.Context, specBytes []byte, opts Options) (*Document, erro
 	}
 	model := parsed.model
 
-	out := &Document{Version: model.Model.Version, Diagnostics: scan.diagnostics}
+	out := &Document{
+		Version:     model.Model.Version,
+		References:  scan.manifest,
+		Diagnostics: scan.diagnostics,
+	}
 	// libopenapi collects every structural error via errors.Join instead of
 	// failing fast, so a partial model can still enumerate whatever parsed
 	// (pipeline.md stage 1.2: show the user the full problem list, not just

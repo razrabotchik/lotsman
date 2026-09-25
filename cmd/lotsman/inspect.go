@@ -44,9 +44,18 @@ type lotsmanIdentity struct {
 }
 
 type specIdentity struct {
-	Source  string `json:"source"`
-	Digest  string `json:"digest"`
-	OpenAPI string `json:"openapi,omitempty"`
+	Source string `json:"source"`
+	Digest string `json:"digest"`
+	// ManifestDigest identifies the root and every document it read (FR-13b).
+	// For an exploded specification -- an index over hundreds of files, which is
+	// how large vendors publish -- the root digest alone reports two different
+	// specifications as the same one, because editing a referenced document
+	// leaves the index byte-identical.
+	ManifestDigest string `json:"manifestDigest"`
+	// References are those documents, each with its own digest, so a reader can
+	// see *which* one moved rather than only that something did.
+	References []domain.RefDocument `json:"references,omitempty"`
+	OpenAPI    string               `json:"openapi,omitempty"`
 }
 
 // documentIssue is a diagnostic that belongs to the document rather than to
@@ -113,9 +122,15 @@ func inspect(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 	info := buildinfo.Get()
 	report := inspectDocument{
-		SchemaVersion:  cat.Report.SchemaVersion,
-		Lotsman:        lotsmanIdentity{Version: info.Version, MCPProtocol: []string{info.MCPProtocolVersion}},
-		Spec:           specIdentity{Source: spec, Digest: doc.digest, OpenAPI: doc.Version},
+		SchemaVersion: cat.Report.SchemaVersion,
+		Lotsman:       lotsmanIdentity{Version: info.Version, MCPProtocol: []string{info.MCPProtocolVersion}},
+		Spec: specIdentity{
+			Source:         spec,
+			Digest:         doc.digest,
+			ManifestDigest: doc.manifestDigest(),
+			References:     doc.References,
+			OpenAPI:        doc.Version,
+		},
 		Totals:         cat.Report.Totals,
 		ByReason:       cat.Report.ByReason,
 		Catalog:        cat.Report.Estimate,
@@ -189,6 +204,13 @@ func writeCredentials(w io.Writer, credentials []auth.Summary) {
 func writeHumanReport(w io.Writer, report *inspectDocument) {
 	fmt.Fprintf(w, "spec:     %s\n", report.Spec.Source)
 	fmt.Fprintf(w, "digest:   %s\n", report.Spec.Digest)
+	if len(report.Spec.References) > 0 {
+		// The count is the part a reader acts on: it says this is an exploded
+		// specification, so the digest above identifies an index and the one
+		// below identifies what was actually read.
+		fmt.Fprintf(w, "manifest: %s (%d referenced documents)\n",
+			report.Spec.ManifestDigest, len(report.Spec.References))
+	}
 	if report.Spec.OpenAPI != "" {
 		fmt.Fprintf(w, "openapi:  %s\n", report.Spec.OpenAPI)
 	}
