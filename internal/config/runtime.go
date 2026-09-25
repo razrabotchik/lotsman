@@ -19,6 +19,12 @@ type Runtime struct {
 	DenyRules           []Rule
 	// IncludeTags is the publication filter; empty publishes everything.
 	IncludeTags []string
+	// Mode, MaxSerializedBytes and DescriptionBytesPerTool are the catalog
+	// settings of docs/spec.md §5.1. Zero means the deriving package's
+	// documented default, decided there rather than duplicated here.
+	Mode                    string
+	MaxSerializedBytes      int
+	DescriptionBytesPerTool int
 	// Overrides are the operator's per-operation statements, in file order.
 	Overrides []OperationOverride
 	// AllowedOrigins is the egress allowlist. The base URL is added to it, so
@@ -67,8 +73,10 @@ type ServerRuntime struct {
 // distinction the whole precedence model rests on.
 type Overrides struct {
 	AllowMutations *bool
-	BaseURL        *string
-	Approval       *Approval
+	// Mode is the `--mode` flag, which wins over the file (FR-62).
+	Mode     *string
+	BaseURL  *string
+	Approval *Approval
 	// The server layer. Each is a pointer for the same reason as the rest:
 	// a flag nobody passed must not overwrite a file that said something.
 	Transport                      *Transport
@@ -106,6 +114,9 @@ func Resolve(file *File, env Environment, flags Overrides) Runtime {
 		runtime.AllowRules = append([]Rule(nil), file.Execution.AllowRules...)
 		runtime.DenyRules = append([]Rule(nil), file.Execution.DenyRules...)
 		runtime.IncludeTags = append([]string(nil), file.Catalog.IncludeTags...)
+		runtime.Mode = file.Catalog.Mode
+		runtime.MaxSerializedBytes = file.Catalog.MaxSerializedBytes
+		runtime.DescriptionBytesPerTool = file.Catalog.DescriptionBytesPerTool
 		runtime.Overrides = append([]OperationOverride(nil), file.OperationOverrides...)
 		runtime.BaseURL = file.Execution.BaseURL
 		runtime.AllowedOrigins = append([]string(nil), file.Execution.AllowedOrigins...)
@@ -134,6 +145,9 @@ func Resolve(file *File, env Environment, flags Overrides) Runtime {
 	}
 	if flags.Approval != nil {
 		runtime.InteractiveApproval = *flags.Approval
+	}
+	if flags.Mode != nil {
+		runtime.Mode = *flags.Mode
 	}
 	applyServerFlags(&runtime.Server, flags)
 	return runtime

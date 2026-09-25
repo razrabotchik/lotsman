@@ -9,19 +9,29 @@ last field is handled.
 
 ## Step 1: The catalog block  ✅ CHECKPOINT: the budgets an operator is shown are the budgets they can set
 
-- [ ] T601 config: `catalog.mode`, `catalog.maxSerializedBytes`, `catalog.descriptionBytesPerTool`
+- [x] T601 config: `catalog.mode`, `catalog.maxSerializedBytes`, `catalog.descriptionBytesPerTool`
       with strict decoding and validation; resolved under the flags (FR-62)
       → A budget of zero or less is refused rather than read as "no budget". The documented values
         become the defaults they already are, in one place, so that `Resolve` and the catalog do
         not each have an opinion.
-- [ ] T602 catalog: `descriptionBytesPerTool` becomes an `Options` field
+- [x] T602 catalog: `descriptionBytesPerTool` becomes an `Options` field
       → It is a constant used inside the sanitizers today. Zero means the default in exactly one
         place; a test asserts a zero value behaves like 1 200 rather than like no limit, because
         that is the way this kind of change goes wrong.
-- [ ] T603 [P] the report shows the description budget in force, as it already shows the catalog
+- [x] T603 [P] the report shows the description budget in force, as it already shows the catalog
       budget, and a golden test pins that changing either moves the digest
       → It moves the digest on purpose: prose is part of what a model sees, so a client that
         cached the longer descriptions would notice (FR-74).
+      → Writing that test found something bigger. The digest did not include the **mode**, and
+        `tools/list` differs entirely between the two — one tool per operation, or five meta-tools
+        over the same catalog. So a client could cache a tool list against a digest, the operator
+        could flip the mode, and the digest would say nothing had changed. `reload` had the same
+        blind spot from the other side: it publishes only when the digest moves, so a mode change
+        alone decided there was nothing to publish. The mode is now part of what the digest
+        identifies, which is "what a client will be shown" rather than "which tools exist".
+      → The catalog budget on its own does *not* move the digest, and that is correct: it changes
+        no tool. It moves it when it flips the mode. Both halves are asserted, because the
+        interesting one is the half that must not move.
 
 ## Step 2: The execution budgets  ✅ CHECKPOINT: a security budget can be tightened
 

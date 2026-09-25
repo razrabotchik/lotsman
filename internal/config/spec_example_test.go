@@ -23,7 +23,9 @@ import (
 //
 // The list below is therefore a to-do in test form. Implementing any of these
 // fields makes this test fail, which is the point: the gap should shrink
-// visibly, and nobody should have to rediscover it.
+// visibly, and nobody should have to rediscover it. It has already shrunk once
+// -- the three `catalog` fields came off it in step 1 of feature 007 -- and the
+// remaining names carry the task that will take them off.
 func TestTheSpecificationsOwnExampleDoesNotParseYet(t *testing.T) {
 	example := specExample(t)
 
@@ -34,21 +36,15 @@ func TestTheSpecificationsOwnExampleDoesNotParseYet(t *testing.T) {
 
 	// Every field the parser refuses, and nothing else.
 	want := []string{
-		// The document to serve is named on the command line today.
+		// The document to serve is named on the command line today (T609).
 		"spec",
-		// Implemented, not configurable: `--mode` is a flag.
-		"mode",
-		// Implemented as catalog.DefaultMaxSerializedBytes.
-		"maxSerializedBytes",
-		// Implemented as catalog's descriptionByteBudget.
-		"descriptionBytesPerTool",
-		// Implemented as `execution.allowMutations: false`, said twice.
+		// Implemented as `execution.allowMutations: false`, said twice (T608).
 		"defaultPolicy",
-		// Implemented as egress.DefaultBudget().
+		// Implemented as egress.DefaultBudget() (T604).
 		"timeout",
-		// Implemented as response.MaxBodyBytes.
+		// Implemented as response.MaxBodyBytes (T605).
 		"maxResponseBytes",
-		// Implemented as an unconditional refusal; only `deny` is possible.
+		// Implemented as an unconditional refusal; only `deny` is possible (T607).
 		"redirects",
 	}
 	if got := refusedFields(err.Error()); !equalStrings(got, want) {

@@ -72,7 +72,7 @@ func inspect(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	asJSON := fs.Bool("json", false, "machine-readable report (schemaVersion 1)")
 	allowMutations := fs.Bool("allow-mutations", false, "report as if mutations were enabled at serve time")
 	configPath := fs.String("config", "", "configuration file (auth profiles, execution settings)")
-	mode := fs.String("mode", string(catalog.ModeAuto), "catalog mode: tools|search|auto")
+	mode := fs.String("mode", "", "catalog mode: tools|search|auto (default auto)")
 	failOnRejected := fs.Bool("fail-on-rejected", false, "exit non-zero when any operation is rejected (CI helper)")
 	spec, err := parseWithTrailingSpec(fs, args)
 	if err != nil {
@@ -95,7 +95,7 @@ func inspect(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
 		return exitCode(err)
 	}
-	catalogMode, err := parseMode(*mode)
+	catalogMode, err := parseMode(pick(*mode, runtime.Mode))
 	if err != nil {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
 		return exitCode(err)

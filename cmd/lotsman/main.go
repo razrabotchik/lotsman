@@ -169,7 +169,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 	configPath := fs.String("config", "", "configuration file (auth profiles, execution settings)")
 	allowPrivate := fs.Bool("allow-private-network", false,
 		"permit an allowed origin whose hostname resolves into a private or link-local range")
-	mode := fs.String("mode", string(catalog.ModeAuto), "catalog mode: tools|search|auto")
+	mode := fs.String("mode", "", "catalog mode: tools|search|auto (default auto)")
 	approval := fs.String("approval", "",
 		"ask before a mutating call: always|client-capability|never (default always, FR-44)")
 	transport := fs.String("transport", "",
@@ -203,6 +203,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 		drainTimeout:    *drainTimeout,
 		allowPublicBind: *publicBind,
 		logLevel:        *level,
+		mode:            *mode,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
@@ -231,7 +232,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 			"a stdio session serves one client from one process")
 		return exitUsage
 	}
-	catalogMode, err := parseMode(*mode)
+	catalogMode, err := parseMode(runtime.Mode)
 	if err != nil {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
 		return exitCode(err)
@@ -375,9 +376,22 @@ func loadCatalog(ctx context.Context, spec string, logger *slog.Logger, lax bool
 // maxLoggedDiagnostics bounds how many spec diagnostics reach the log.
 const maxLoggedDiagnostics = 10
 
+// pick is the flag when it was given, the file otherwise (FR-62). The flag's
+// zero value is the empty string precisely so that "not given" is a state
+// rather than a guess.
+func pick(fromFlag, fromFile string) string {
+	if fromFlag != "" {
+		return fromFlag
+	}
+	return fromFile
+}
+
 // parseMode validates the requested catalog mode.
 func parseMode(requested string) (catalog.Mode, error) {
 	switch catalog.Mode(requested) {
+	case "":
+		// Nobody said anything, in the file or on the command line.
+		return catalog.ModeAuto, nil
 	case catalog.ModeTools, catalog.ModeSearch, catalog.ModeAuto:
 		return catalog.Mode(requested), nil
 	default:
@@ -461,6 +475,7 @@ type flagValues struct {
 	drainTimeout    string
 	allowPublicBind bool
 	logLevel        string
+	mode            string
 }
 
 // serverOverrides folds the transport flags into the override layer. Each is
@@ -494,6 +509,9 @@ func serverOverrides(fs *flag.FlagSet, given *flagValues, overrides *config.Over
 	if wasSet(fs, "log-level") {
 		overrides.LogLevel = &given.logLevel
 	}
+	if wasSet(fs, "mode") {
+		overrides.Mode = &given.mode
+	}
 	return nil
 }
 
@@ -511,11 +529,16 @@ func catalogOptions(runtime config.Runtime, mode catalog.Mode, operations []doma
 		return catalog.Options{}, err
 	}
 	return catalog.Options{
-		Mode:        mode,
-		Policy:      policyConfig(runtime),
-		Auth:        auth.NewProfiles(runtime.AuthProfiles),
-		IncludeTags: runtime.IncludeTags,
-		Overrides:   runtime.Overrides,
+		Mode:   mode,
+		Policy: policyConfig(runtime),
+		Auth:   auth.NewProfiles(runtime.AuthProfiles),
+		// Zero means the catalog package's documented default. The number is
+		// decided there and read here; two places with an opinion about a
+		// budget is how they come to disagree.
+		MaxSerializedBytes:      runtime.MaxSerializedBytes,
+		DescriptionBytesPerTool: runtime.DescriptionBytesPerTool,
+		IncludeTags:             runtime.IncludeTags,
+		Overrides:               runtime.Overrides,
 	}, nil
 }
 
