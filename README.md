@@ -132,9 +132,9 @@ lotsman serve ./openapi.yaml --mode=search --base-url https://api.example.com
 | | `tools/list` |
 |---|---|
 | Kubernetes `apps/v1`, 65 operations, tools mode | 2.23 MB |
-| the same in search mode | **5.5 KB** |
-| DigitalOcean, 631 operations, tools mode | 743 KB |
-| the same in search mode | **5.5 KB** |
+| the same in search mode | **5.3 KB** |
+| DigitalOcean, 631 operations, tools mode | 737 KB |
+| the same in search mode | **5.3 KB** |
 
 The five tools are `search_operations`, `describe_operation`, `list_tags`, `call_read_operation`
 and `call_mutating_operation` (the last only when mutations are enabled). A search result is

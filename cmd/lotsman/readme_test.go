@@ -1,10 +1,12 @@
 package main_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -269,5 +271,52 @@ func quotedGoStrings(line string) []string {
 		}
 		out = append(out, rest[:end])
 		line = rest[end+1:]
+	}
+}
+
+// `--help` quotes a measurement, and a measurement in prose is a claim that
+// rots: this one said 5.5 KB after the published list had become 5 297 bytes,
+// and it had been corrected in three documents and not here. So the number is
+// checked against a live session rather than against whoever last remembered.
+//
+// The tolerance is for rounding to one decimal, not for drift: a change that
+// moves the real payload by more than a few percent fails here and has to be
+// stated, which is the whole point of quoting a number at all.
+func TestTheHelpTextQuotesTheRealSearchModeSize(t *testing.T) {
+	help, _, code := runCLI(t, "help")
+	if code != 0 {
+		t.Fatalf("help exited %d", code)
+	}
+	claim := regexp.MustCompile(`(\d+\.\d+) KB whether the API has`).FindStringSubmatch(help)
+	if claim == nil {
+		t.Fatal("the help text no longer quotes a search-mode size; update or remove this test")
+	}
+	claimed, err := strconv.ParseFloat(claim[1], 64)
+	if err != nil {
+		t.Fatalf("parse %q: %v", claim[1], err)
+	}
+
+	// Measured on the wire, over a sessionless POST, because that is what the
+	// number means: what a client receives. Marshalling the SDK's own result
+	// struct instead adds fields the wire never carried -- `resultType` is
+	// internal to the client -- and overstates the payload by about 2%, which
+	// is how a measurement can be both careful and wrong.
+	endpoint, _ := serveHTTP(t, miniSpecPath(t), "--lax", "--mode=search",
+		"--base-url", "https://api.example.com")
+	frame := sessionless(t, endpoint, "tools/list", "1")
+	result, ok := frame["result"]
+	if !ok {
+		t.Fatalf("tools/list returned no result: %+v", frame)
+	}
+	onTheWire, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	measured := float64(len(onTheWire)) / 1000
+	if delta := measured - claimed; delta > 0.1 || delta < -0.1 {
+		t.Errorf("the help text claims %.1f KB and a client receives %.1f KB (%d bytes); "+
+			"if the change was intended, say the new number in --help, README.md and docs/corpus.md",
+			claimed, measured, len(onTheWire))
 	}
 }

@@ -531,9 +531,11 @@ func TestTheSearchModeToolListDoesNotGrowWithTheCatalog(t *testing.T) {
 	// Tool descriptions are what a model reads to use the mode at all, so this
 	// is a budget rather than a target.
 	//
-	// This is the definitions alone. What a client receives adds the envelope and
-	// the `_meta` digest -- 5 183 bytes read-only and 6 171 with the mutating
-	// tool published, measured over stdio and recorded in docs/corpus.md.
+	// This is the definitions alone. What a client of the advertised protocol
+	// receives is the whole result -- 5 297 bytes read-only and 6 285 with the
+	// mutating tool published, measured from a sessionless POST and recorded in
+	// docs/corpus.md, where `--help` quotes it and a test holds the two
+	// together.
 	const definitionBytes = 6017
 	if len(first) != definitionBytes {
 		t.Errorf("the published definitions are %d bytes, recorded as %d; if the change was "+
