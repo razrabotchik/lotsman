@@ -13,6 +13,17 @@ import (
 // into the request lotsman actually sends. Everything else in the pipeline
 // decides *whether* to send something; this decides what.
 //
+// FuzzParameterEncoding beside it fuzzes one value through a path and a query
+// slot and asserts it round-trips. This one adds the header location, which no
+// fuzz target reached, and gives each slot a value of its own, so a value that
+// leaks from one into another is visible.
+//
+// The group keys come from `domain` rather than being spelled here. The first
+// version of this test spelled them, wrote "header" where the group is
+// "headers", and therefore fuzzed 20 million header values that were never
+// applied to anything -- which is the reason a literal that has to agree with
+// another package is worth not writing twice.
+//
 // So the invariants are about what can never come out, whatever goes in:
 //
 //   - a path value cannot add a segment, a query or a fragment: `../admin` and
@@ -48,9 +59,9 @@ func FuzzBuildKeepsArgumentsInTheirSlot(f *testing.F) {
 			},
 		}
 		args := requestbuild.Arguments{
-			"path":   map[string]any{"id": pathValue},
-			"query":  map[string]any{"q": queryValue},
-			"header": map[string]any{"X-Trace": headerValue},
+			domain.GroupPath:    map[string]any{"id": pathValue},
+			domain.GroupQuery:   map[string]any{"q": queryValue},
+			domain.GroupHeaders: map[string]any{"X-Trace": headerValue},
 		}
 
 		req, err := requestbuild.Build(t.Context(), op, args, requestbuild.Options{})
@@ -88,6 +99,13 @@ func FuzzBuildKeepsArgumentsInTheirSlot(f *testing.F) {
 		}
 		if _, ok := req.Header["X-Injected"]; ok {
 			t.Fatal("an argument added a header of its own")
+		}
+		// And the value did arrive, which is what keeps the two assertions above
+		// from passing on a request that simply has no such header: CR and LF are
+		// refused rather than stripped, so a build that succeeded carries the
+		// value as given.
+		if got := req.Header.Get("X-Trace"); got != headerValue {
+			t.Fatalf("the header argument was not applied as given: %q, want %q", got, headerValue)
 		}
 	})
 }
