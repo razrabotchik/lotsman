@@ -146,6 +146,14 @@ resolve names itself, and the document still pointed at the old ones.
   `descriptionsOmitted`. The prune now recurses solely where a value is known to be a schema, and
   leaves instance data and unrecognised keywords exactly as found. Found by writing the test the
   function never had.
+- **The specification's own example configuration does not parse.** Copying the YAML from
+  docs/spec.md §5.1 gets a startup error listing eight unknown fields — and several of them
+  describe settings lotsman does implement at exactly the documented values: the catalog budget of
+  120 000 bytes, the per-tool description ceiling of 1 200, the response cap of 524 288, the 30s
+  timeout. Each of those constants carries a comment saying it came from this example. The values
+  were taken from the specification; the ability to set them was not. The gap is pinned by
+  `TestTheSpecificationsOwnExampleDoesNotParseYet`, which reads §5.1 out of the document and fails
+  if the list of refused fields changes in either direction.
 - **Criterion 5's evidence was not testing criterion 5.** `TestCallReadOperationRefusesNonReads`
   called the POST and the DELETE with no arguments, so both were refused — by argument validation,
   for a missing required field. The test therefore passed with the effect gate removed, and a
