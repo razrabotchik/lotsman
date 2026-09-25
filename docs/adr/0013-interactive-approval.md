@@ -64,3 +64,11 @@ which is exactly what FR-44 already said ("input-required/MRTR"), discovered fro
   input request by calling `elicitation/create` itself. Both paths end in the same handler.
 - `--approval` on `serve` mirrors `execution.interactiveApproval` for the operator who wants to
   state it on the command line.
+
+## Since then (2026-09-25)
+
+Point 7's deferral ended: feature 004 gave `internal/audit` its sink, so an approval decision now
+reaches a schema-versioned event (`decision: executed | refused | input_required`) as well as the
+log line, and the same events are counted behind `/metrics`. The decision recorded above did not
+change — arguments still never appear, and the prompt is still not a security boundary — only the
+condition it waited on. See [ADR-0014](0014-http-transport-and-inbound-authorization.md).
