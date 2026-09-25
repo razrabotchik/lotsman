@@ -217,14 +217,25 @@ func (p *Policy) dial(dialer *net.Dialer) func(context.Context, string, string) 
 			}
 			lastDialErr = dialErr
 		}
+		// An address was tried and the connection failed: that failure is the
+		// answer, even when another answer was refused by policy. Reporting the
+		// refusal instead would tell an operator to open their private-network
+		// door to fix a name whose public address simply did not respond -- the
+		// worst kind of wrong advice, because following it works often enough to
+		// become habit. The skipped addresses are named, so the diagnostic is
+		// not lost, but the class stays what it is: not a policy denial.
+		if lastDialErr != nil {
+			if len(refusals) > 0 {
+				return nil, fmt.Errorf("%w (skipped %s: private or link-local)",
+					lastDialErr, strings.Join(refusals, ", "))
+			}
+			return nil, lastDialErr
+		}
 		if len(refusals) > 0 {
 			return nil, fmt.Errorf("%w: %q resolved to %s, which is private or link-local; "+
 				"set execution.allowPrivateNetworks to permit it", ErrDenied, host, strings.Join(refusals, ", "))
 		}
-		if lastDialErr == nil {
-			lastDialErr = fmt.Errorf("%w: %q resolved to no usable address", ErrDenied, host)
-		}
-		return nil, lastDialErr
+		return nil, fmt.Errorf("%w: %q resolved to no usable address", ErrDenied, host)
 	}
 }
 

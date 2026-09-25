@@ -171,6 +171,8 @@ func TestHostnameResolvingIntoAPrivateRangeIsRefused(t *testing.T) {
 		"100.64.0.1",      // carrier-grade NAT
 		"::1",             // IPv6 loopback
 		"fd00::1",         // IPv6 unique local
+		"fc00::1",         // the other half of fc00::/7
+		"fe80::1",         // IPv6 link-local
 		"0.0.0.0",         // unspecified
 	} {
 		t.Run(address, func(t *testing.T) {
@@ -288,5 +290,72 @@ func TestDefaultBudgetIsAppliedWhenUnset(t *testing.T) {
 	client := empty.Client(nil)
 	if client.Timeout != DefaultBudget().Total {
 		t.Errorf("timeout = %v, want the default budget", client.Timeout)
+	}
+}
+
+// The claim above the previous test -- that a private answer is skipped rather
+// than making the whole name unusable -- was only half checked: it asserted the
+// all-private case and never the mixed one, which is the half a reader relies
+// on. A name with one private answer and one public answer is usable, and the
+// connection goes to the public address.
+func TestAPrivateAnswerDoesNotPoisonAUsableName(t *testing.T) {
+	// The private answer comes first. With the opt-in off it is refused, and the
+	// question is what happens next: the name is still usable through its other
+	// answer, so the failure that comes back must be the connection's and not
+	// the policy's.
+	policy := resolving(t, "https://api.example.com", "10.1.2.3", "203.0.113.10")
+	err := dialing(t, &policy, "https://api.example.com/widgets")
+	if err == nil {
+		t.Skip("203.0.113.10 answered, which this test cannot control")
+	}
+	if errors.Is(err, ErrDenied) {
+		t.Errorf("one private answer made the whole name unusable: %v", err)
+	}
+	// The skipped address is still named: the operator loses no information,
+	// only the wrong remedy.
+	if !strings.Contains(err.Error(), "10.1.2.3") {
+		t.Errorf("the skipped address is not mentioned: %v", err)
+	}
+	if strings.Contains(err.Error(), "allowPrivateNetworks") {
+		t.Errorf("the error advises opening private networks for a connection failure: %v", err)
+	}
+}
+
+// A name that resolves to nothing is refused in lotsman's own words, because
+// "no address" and "an address we would not call" are different facts and the
+// operator acts on them differently.
+func TestANameThatResolvesToNothingIsRefusedByName(t *testing.T) {
+	policy := Policy{
+		AllowedOrigins: []string{"https://api.example.com"},
+		resolver:       fakeResolver{addresses: nil},
+		Budget:         Budget{Connect: 50 * time.Millisecond},
+	}
+	err := dialing(t, &policy, "https://api.example.com/widgets")
+	if !errors.Is(err, ErrDenied) {
+		t.Fatalf("error = %v, want ErrDenied", err)
+	}
+	if !strings.Contains(err.Error(), "resolved to no address") {
+		t.Errorf("error = %q, want it to say the name resolved to nothing", err)
+	}
+}
+
+// A resolver failure is the resolver's error, not a policy refusal: the
+// distinction is what tells an operator whether to fix their DNS or their
+// configuration.
+func TestAResolverFailureIsNotAPolicyRefusal(t *testing.T) {
+	policy := Policy{
+		AllowedOrigins: []string{"https://api.example.com"},
+		resolver:       fakeResolver{err: errors.New("SERVFAIL")},
+		Budget:         Budget{Connect: 50 * time.Millisecond},
+	}
+	err := dialing(t, &policy, "https://api.example.com/widgets")
+	if err == nil {
+		t.Fatal("a resolver failure was not reported")
+	}
+	if errors.Is(err, ErrDenied) {
+		t.Errorf("a resolver failure was reported as a policy refusal: %v", err)
+	}
+	if !strings.Contains(err.Error(), "SERVFAIL") {
+		t.Errorf("error = %q, want the resolver's own reason", err)
 	}
 }
