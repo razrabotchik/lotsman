@@ -27,17 +27,21 @@ type refScan struct {
 	// files are the confined file references the parser is allowed to read,
 	// relative to the spec root.
 	files []string
+	// refused are the references this scan turned down, as written. The parser
+	// never receives those documents and reports them missing in its own
+	// words, so the scan's set is how that restatement is recognised and
+	// dropped (classifyBuildError).
+	refused map[string]bool
 }
 
 // scanRefs enforces the ref closure budget and refuses every reference that
 // leaves the root document.
 //
-// rootPath is the confinement root a file reference would have to stay inside
-// (specsource.Source.RootPath). It is recorded but not yet honoured as an
-// allowance: until T025 implements root confinement, symlink escape and cycle
-// truncation, every external reference is refused outright -- resolving one
-// means reading a file or making a request chosen by an untrusted document
-// (Constitution V).
+// rootPath is the confinement root a file reference has to stay inside
+// (specsource.Source.RootPath): a reference is followed only when it resolves,
+// symlinks expanded, to a readable file within it. Everything else is refused
+// by name, because resolving it means reading a file or making a request chosen
+// by an untrusted document (Constitution V, ADR-0009).
 func scanRefs(specBytes []byte, rootPath string, limits Limits) (*refScan, error) {
 	var root yaml.Node
 	if err := yaml.Unmarshal(specBytes, &root); err != nil {
@@ -68,11 +72,16 @@ func scanRefs(specBytes []byte, rootPath string, limits Limits) (*refScan, error
 	scan.documents = 1 + len(files.files)
 	scan.bytes = files.bytes
 	scan.diagnostics = append(scan.diagnostics, files.diagnostics...)
+	scan.refused = files.refused
 	if rootPath == "" {
+		if scan.refused == nil {
+			scan.refused = map[string]bool{}
+		}
 		for _, ref := range refs {
 			if externalDocument(ref.value) != "" {
 				scan.diagnostics = append(scan.diagnostics, diagnostic(domain.ReasonExternalRefUnsupported, ref,
 					"reference leaves the document, and a spec read from stdin has no directory to resolve it against"))
+				scan.refused[ref.value] = true
 			}
 		}
 	}

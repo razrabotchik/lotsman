@@ -51,13 +51,14 @@
       "url": "https://raw.githubusercontent.com/DigitalOcean/openapi/87e82da6548bb4df718745c241b66061185e2d0c/specification/DigitalOcean-public.v2.yaml",
       "digest": "sha256:4ce7b0b809e1029ad24420f5dcd5c550120f06f54388178a7fdf944ef880ffc0",
       "bytes": 111890,
-      "note": "Exploded spec, root document only -- the case of downloading the index and none of the 662 files it points at. Every reference is refused by name.",
+      "note": "Exploded spec, root document only -- the case of downloading the index and none of the 661 files it points at. Every reference is refused by name, once, with a code.",
       "expect": {
         "outcome": "reported",
         "found": 0,
         "supported": 0,
         "rejected": 0,
-        "documentIssuesAtLeast": 662
+        "documentIssues": 661,
+        "documentIssuesAllCoded": true
       }
     },
     {

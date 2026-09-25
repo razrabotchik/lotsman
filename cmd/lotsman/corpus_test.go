@@ -28,6 +28,16 @@ type corpusSpec struct {
 		ByReason              []string `json:"byReason"`
 		Message               string   `json:"message"`
 		DocumentIssuesAtLeast int      `json:"documentIssuesAtLeast"`
+		// DocumentIssues is the exact count, for a document whose diagnostics
+		// are one per refused reference and countable. It is the pair of
+		// AtLeast rather than a stricter version of it: the loose bound catches
+		// diagnostics going missing, and this one catches them multiplying --
+		// which is how libopenapi's restatement of a reference lotsman had
+		// already refused went unnoticed while the count said 662.
+		DocumentIssues int `json:"documentIssues"`
+		// DocumentIssuesAllCoded asserts every entry carries a reason code,
+		// which is the field a consumer branches on (FR-11).
+		DocumentIssuesAllCoded bool `json:"documentIssuesAllCoded"`
 	} `json:"expect"`
 }
 
@@ -99,6 +109,18 @@ func TestCorpus(t *testing.T) {
 			}
 			if want := spec.Expect.DocumentIssuesAtLeast; want > 0 && len(report.DocumentIssues) < want {
 				t.Errorf("documentIssues = %d, want at least %d", len(report.DocumentIssues), want)
+			}
+			if want := spec.Expect.DocumentIssues; want > 0 && len(report.DocumentIssues) != want {
+				t.Errorf("documentIssues = %d, want exactly %d (one per refused reference)",
+					len(report.DocumentIssues), want)
+			}
+			if spec.Expect.DocumentIssuesAllCoded {
+				for i, issue := range report.DocumentIssues {
+					if issue.Code == "" {
+						t.Errorf("documentIssues[%d] has no code: %s", i, issue.Message)
+						break
+					}
+				}
 			}
 		})
 	}
