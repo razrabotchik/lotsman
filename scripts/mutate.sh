@@ -19,18 +19,71 @@
 #     it" proves nothing about the tests, and usually means the mutation was
 #     written wrong.
 #
+# Each package runs under a timeout, because some of these mutations remove the
+# very bound that stops a test from running for ever -- an unlimited read, a
+# redirect loop. A timeout counts as caught: the test did notice. The bound is
+# go test's own -timeout rather than a signal, so a hang reports itself instead
+# of being killed and printing "Terminated" over the results.
+#
 # Usage: make mutate
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
 failures=0
-backup=$(mktemp)
-trap 'rm -f "$backup"' EXIT
+
+# Every file any mutation touches, saved once before anything is changed and
+# put back unconditionally on the way out -- normal exit, Ctrl-C, or a kill.
+#
+# The first version restored only the file it was working on, and only after
+# the test it was waiting for returned. An interrupted run therefore walked
+# away leaving a security control switched off in the working tree, which is
+# the most dangerous thing a script like this could do. It did exactly that
+# the first time somebody interrupted it.
+TOUCHES=(
+	internal/inbound/oauth.go
+	internal/inbound/jwks.go
+	internal/inbound/inbound.go
+	internal/inbound/forwarded.go
+	internal/mcpserver/search.go
+	internal/mcpserver/runner.go
+	internal/mcpserver/approval.go
+	internal/catalog/inputschema.go
+	internal/catalog/catalog.go
+	internal/catalog/overlay.go
+	internal/openapi/openapi.go
+	internal/openapi/parameters.go
+	internal/egress/policy.go
+	internal/response/response.go
+	internal/policy/gate.go
+	internal/httpserver/bind.go
+	internal/httpserver/server.go
+	internal/reload/reload.go
+)
+
+pristine=$(mktemp -d)
+for f in "${TOUCHES[@]}"; do
+	mkdir -p "$pristine/$(dirname "$f")"
+	cp "$f" "$pristine/$f"
+done
+
+restore() {
+	local changed=0
+	for f in "${TOUCHES[@]}"; do
+		if ! cmp -s "$pristine/$f" "$f"; then
+			cp "$pristine/$f" "$f"
+			changed=1
+		fi
+	done
+	[ "$changed" -eq 1 ] && echo "restored the working tree"
+	rm -rf "$pristine"
+	return 0
+}
+trap restore EXIT
+trap 'restore; exit 130' INT TERM
 
 # mutate NAME FILE FROM TO PACKAGE
 mutate() {
 	local name="$1" file="$2" from="$3" to="$4" pkg="$5"
-	cp "$file" "$backup"
 
 	if ! python3 - "$file" "$from" "$to" <<-'PY'
 		import pathlib, sys
@@ -44,20 +97,20 @@ mutate() {
 	then
 		printf '%-48s PATTERN GONE — update this mutation\n' "$name"
 		failures=$((failures + 1))
-		cp "$backup" "$file"
+		cp "$pristine/$file" "$file"
 		return
 	fi
 
-	if ! go build ./... >/dev/null 2>&1; then
+	if ! go build "$pkg" >/dev/null 2>&1; then
 		printf '%-48s DOES NOT COMPILE — the mutation is wrong\n' "$name"
 		failures=$((failures + 1))
-	elif go test "$pkg" >/dev/null 2>&1; then
+	elif timeout 180 go test -count=1 -timeout 100s "$pkg" >/dev/null 2>&1; then
 		printf '%-48s NOT CAUGHT\n' "$name"
 		failures=$((failures + 1))
 	else
 		printf '%-48s caught\n' "$name"
 	fi
-	cp "$backup" "$file"
+	cp "$pristine/$file" "$file"
 }
 
 mutate "JWT: any algorithm the token names" \
@@ -123,6 +176,58 @@ mutate "runtime: never ask for approval" \
 	internal/mcpserver/approval.go \
 	"return a.mode != config.ApprovalNever && !tool.Effect.IsRead()" "return false" \
 	./internal/mcpserver/
+
+mutate "egress: follow redirects" \
+	internal/egress/policy.go \
+	"return http.ErrUseLastResponse" "return nil" \
+	./internal/egress/
+
+mutate "egress: private ranges are ordinary addresses" \
+	internal/egress/policy.go \
+	"func isPrivate(ip net.IP) bool {" "func isPrivate(ip net.IP) bool { return false" \
+	./internal/egress/
+
+mutate "response: read a body of any size" \
+	internal/response/response.go \
+	"io.LimitReader(resp.Body, MaxBodyBytes+1)" "resp.Body" \
+	./internal/response/
+
+mutate "policy: a deny rule decides nothing" \
+	internal/policy/gate.go \
+	"	for _, rule := range c.Deny {" "	for _, rule := range []Rule(nil) {" \
+	./internal/policy/
+
+mutate "transport: a public bind needs nothing" \
+	internal/httpserver/bind.go \
+	"if loopback || authenticated || optIn {" "if loopback || true || authenticated || optIn {" \
+	./internal/httpserver/
+
+mutate "transport: any Host header is fine" \
+	internal/httpserver/server.go \
+	"if !permitted[strings.ToLower(r.Host)] {" "if false {" \
+	./internal/httpserver/
+
+mutate "transport: believe forwarding headers from anyone" \
+	internal/inbound/forwarded.go \
+	"if !fromTrustedProxy(r.RemoteAddr, trusted) {" \
+	"if false && !fromTrustedProxy(r.RemoteAddr, trusted) {" \
+	./internal/inbound/
+
+mutate "reload: publish a candidate without comparing it" \
+	internal/reload/reload.go \
+	"if candidate.Digest == before.catalog.Digest {" "if false {" \
+	./internal/reload/
+
+mutate "headers: let a document parameterize Authorization" \
+	internal/openapi/parameters.go \
+	"if in == domain.LocationHeader && domain.IsProtectedHeader(key.name) {" "if false {" \
+	./internal/openapi/
+
+mutate "overrides: an override matching nothing is fine" \
+	internal/catalog/overlay.go \
+	"	claimed := make(map[domain.OperationKey]int, len(overrides))" \
+	"	if true { return nil }; claimed := make(map[domain.OperationKey]int, len(overrides))" \
+	./internal/catalog/
 
 echo
 if [ "$failures" -ne 0 ]; then
