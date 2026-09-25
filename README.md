@@ -377,6 +377,11 @@ make fuzz           # run every fuzz target briefly (FUZZTIME=30s)
 make mutate         # switch off each security control and check a test notices
 ```
 
+Fuzzing covers the six surfaces NFR-6 names: document load, `$ref` confinement, tool-name
+normalization, parameter serialization, URL policy and response truncation. The `$ref` target keeps a
+canary file outside the spec root and fails if any spelling of a reference reaches it; the URL target
+asserts that a target is allowed only when its origin is one the operator authorized.
+
 `make mutate` answers the question a green suite does not: *could* these tests fail. It switches
 off one control at a time — the algorithm allowlist, the egress check, the approval gate, the
 schema sanitizer — and expects a failure each time. It found a real one on its first run: a test

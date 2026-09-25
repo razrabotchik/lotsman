@@ -61,6 +61,40 @@ jobs:
       - name: Test (race, shuffled)
         run: go test -race -shuffle=on -count=1 ./...
 
+  cross:
+    # NFR-2 names the platforms this release claims: Linux amd64 and arm64,
+    # macOS arm64 and amd64, Windows amd64. The test matrix above runs on three
+    # of them and no runner exists here for Linux arm64, so the claim was one
+    # nothing could fail on. Compiling for each is cheap and catches the usual
+    # way a platform claim breaks: a syscall or a build tag that only exists
+    # where it was written.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: darwin, goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: windows, goarch: amd64 }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Build for ${{ matrix.target.goos }}/${{ matrix.target.goarch }}
+        env:
+          GOOS: ${{ matrix.target.goos }}
+          GOARCH: ${{ matrix.target.goarch }}
+        run: go build ./...
+      - name: Vet for ${{ matrix.target.goos }}/${{ matrix.target.goarch }}
+        env:
+          GOOS: ${{ matrix.target.goos }}
+          GOARCH: ${{ matrix.target.goarch }}
+        run: go vet ./...
+
   corpus:
     # The corpus is the regression test for translation *support*: it answers
     # "did this change move what lotsman can do to a real API, and which way?"
