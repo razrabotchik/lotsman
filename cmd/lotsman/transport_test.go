@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -108,10 +110,7 @@ func serveHTTPProcess(t *testing.T, env []string, args ...string) (endpoint stri
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	t.Cleanup(func() {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-	})
+	t.Cleanup(func() { stopGracefully(t, cmd) })
 
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
@@ -126,6 +125,41 @@ func serveHTTPProcess(t *testing.T, env []string, args ...string) (endpoint stri
 	t.Fatalf("the server never reported a listening address\nstderr:\n%s", stderr.String())
 	return "", stderr, nil
 }
+
+// stopGracefully ends a served process the way a container runtime does.
+//
+// SIGKILL was easier and tested nothing: the signal path in `main` and the
+// drain in `httpserver` are what happens on every real shutdown, and killing
+// the process skipped both -- and, once coverage counted subprocesses, skipped
+// flushing their counters too, which is how the drain looked untested when the
+// package test for it had existed all along.
+//
+// The fallback stays: a process that will not leave on its own must not hold up
+// the suite, and a test that hangs teaches less than one that fails.
+func stopGracefully(t *testing.T, cmd *exec.Cmd) {
+	t.Helper()
+	if cmd.Process == nil {
+		return
+	}
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case <-done:
+	case <-time.After(gracefulStopBudget):
+		_ = cmd.Process.Kill()
+		<-done
+		t.Errorf("the server did not exit within %s of SIGTERM", gracefulStopBudget)
+	}
+}
+
+// gracefulStopBudget is generous: the default drain is ten seconds, and this is
+// about a process that ignores the signal, not one that takes its time.
+const gracefulStopBudget = 15 * time.Second
 
 // newJSONAPI is an upstream that answers every request the same way and
 // reports that it was called.
@@ -377,4 +411,79 @@ func exitCodeOf(t *testing.T, err error) int {
 		t.Fatalf("not an exit error: %v", err)
 	}
 	return exit.ExitCode()
+}
+
+// A container stops a process with SIGTERM, every time, and what happens next
+// is the only shutdown an operator will ever see: stop accepting, let the call
+// already in flight finish, exit 0 within the drain budget. `httpserver` has a
+// package test for the drain; nothing had ever sent the real binary the signal.
+//
+// The upstream here answers slowly on purpose, so the request is provably still
+// in flight when the signal arrives.
+func TestSIGTERMDrainsAnInFlightCall(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SIGTERM is not delivered on Windows")
+	}
+
+	const upstreamDelay = 700 * time.Millisecond
+	reached := make(chan struct{}, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case reached <- struct{}{}:
+		default:
+		}
+		time.Sleep(upstreamDelay)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"pets":[]}`))
+	}))
+	defer upstream.Close()
+
+	endpoint, stderr, process := serveHTTPProcess(t, nil,
+		"--listen", "127.0.0.1:0", miniSpecPath(t), "--lax",
+		"--base-url", upstream.URL, "--drain-timeout", "10s", "--log-level", "debug")
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "lotsman-drain", Version: "v0"}, approving())
+	session, err := client.Connect(t.Context(), &mcp.StreamableClientTransport{Endpoint: endpoint}, nil)
+	if err != nil {
+		t.Fatalf("connect: %v\nstderr:\n%s", err, stderr.String())
+	}
+	defer func() { _ = session.Close() }()
+
+	type outcome struct {
+		res *mcp.CallToolResult
+		err error
+	}
+	answered := make(chan outcome, 1)
+	go func() {
+		res, err := session.CallTool(t.Context(), &mcp.CallToolParams{
+			Name:      "list_pets",
+			Arguments: map[string]any{},
+		})
+		answered <- outcome{res, err}
+	}()
+
+	// The signal must arrive while the call is upstream, or this test would be
+	// about an idle server instead.
+	select {
+	case <-reached:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("the upstream was never called\nstderr:\n%s", stderr.String())
+	}
+	if err := process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("signal: %v", err)
+	}
+
+	got := <-answered
+	if got.err != nil {
+		t.Fatalf("the in-flight call did not survive the shutdown: %v\nstderr:\n%s",
+			got.err, stderr.String())
+	}
+	if got.res.IsError {
+		t.Errorf("the in-flight call was answered with an error:\n%+v", got.res.Content)
+	}
+	if !strings.Contains(stderr.String(), "draining") {
+		t.Errorf("the server did not report a drain:\n%s", stderr.String())
+	}
+	// And it leaves on its own, with the exit code of a normal stop. The
+	// cleanup installed by serveHTTPProcess asserts the second half.
 }

@@ -252,9 +252,10 @@ func TestStdioConformance(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
+		// Closing stdin is how a stdio client leaves; the process should follow
+		// it out rather than need a signal, and stopGracefully says so.
 		_ = stdin.Close()
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		stopGracefully(t, cmd)
 	})
 
 	send := func(line string) {
