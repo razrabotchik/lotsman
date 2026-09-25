@@ -19,7 +19,7 @@ OAuth — the M3 tail) and 006 (service OAuth upstream — M4a), all complete �
 | 2 | Local OAS 3.0 and 3.1 work over stdio; GET and JSON POST serialize correctly | **met** | `TestAcceptanceUS1` (live server, both verbs in one session) |
 | 3 | Path/query arrays and required parameters covered e2e; unsupported styles never approximated | **met** | `TestAcceptanceUS1` (repeated-key arrays), `TestSerializationTable`, `TestUnsupportedStylesRejectTheOperation` |
 | 4 | In read-only mode, write/destructive/unknown never reach the upstream | **met** | `TestServeMutationPolicyEndToEnd`, `TestMutationBlockedByDefault` (zero RoundTrips asserted), and per-operation rules on top: `TestDeniedByRuleNeverReachesTheNetworkInToolsMode`, `TestAllowListRefusesTheUnlistedMutationEndToEnd` |
-| 5 | Search mode cannot call a mutation through a read tool | **met** | `TestCallReadOperationRefusesNonReads` (zero RoundTrips for a POST and a DELETE), `TestServeSearchModeEndToEnd`, `TestMutatingToolIsAbsentWhenMutationsAreNotAllowed` |
+| 5 | Search mode cannot call a mutation through a read tool | **met** | `TestCallReadOperationRefusesNonReads` (zero RoundTrips for a POST and a DELETE, called with valid arguments so the effect gate is the only thing that can refuse, and asserted to refuse *by name*), `TestServeSearchModeEndToEnd`, `TestMutatingToolIsAbsentWhenMutationsAreNotAllowed` |
 | 6 | Interactive approval fails closed without client capability | **met** | `TestServeMutationPolicyEndToEnd/fails_closed_when_the_client_cannot_be_asked` (real binary over stdio, zero upstream requests), `TestApprovalFailsClosedWithoutClientCapability`, `TestApprovalFailsClosedInSearchMode`, `TestDeclinedApprovalRefusesBeforeTheNetwork` |
 | 7 | A canary secret appears in no stdout, stderr, result, error or report | **met** | `TestCanarySecretNeverLeaks` (four channels, live credential), `internal/redact` |
 | 8 | A redirect to another origin or a private address is blocked; Authorization is not forwarded | **met** | `TestClientDeniesRedirects`, `TestHostnameResolvingIntoAPrivateRangeIsRefused`, `TestHostnameIsNeverTreatedAsLiteral`, `TestResolvedSecretsAreRegisteredForRedaction` (the credential is applied by the innermost round tripper, so no layer above a refused hop ever holds it) |
@@ -146,6 +146,11 @@ resolve names itself, and the document still pointed at the old ones.
   `descriptionsOmitted`. The prune now recurses solely where a value is known to be a schema, and
   leaves instance data and unrecognised keywords exactly as found. Found by writing the test the
   function never had.
+- **Criterion 5's evidence was not testing criterion 5.** `TestCallReadOperationRefusesNonReads`
+  called the POST and the DELETE with no arguments, so both were refused — by argument validation,
+  for a missing required field. The test therefore passed with the effect gate removed, and a
+  mutation called with *valid* arguments would have gone through. It now passes valid arguments and
+  asserts the refusal names the effect class. Found by `make mutate`.
 - **Nothing asserted that a response body is bounded on the way *in*.** `MaxBodyBytes` cuts the
   body that is handed back, and the truncation tests covered that — but without the limiting
   reader, `io.ReadAll` pulls the whole thing into memory first and the result is cut afterwards, so

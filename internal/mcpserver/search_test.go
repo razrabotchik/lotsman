@@ -285,18 +285,53 @@ func TestCallReadOperationRefusesNonReads(t *testing.T) {
 	cat := searchCatalog(t, "https://api.example.com", true)
 	session := searchSession(t, &cat, &http.Client{Transport: transport}, "https://api.example.com")
 
-	for _, id := range []string{"ns:POST:/pets", "ns:DELETE:/pets/{petId}"} {
+	// The arguments are valid on purpose. An earlier version of this test
+	// called both operations with none, and both were refused -- by argument
+	// validation, for a missing required field. It therefore passed with the
+	// effect gate removed, which made it evidence for criterion 5 only by
+	// accident. A test naming one control has to be the only thing that can
+	// refuse.
+	for _, call := range []struct {
+		id        string
+		arguments map[string]any
+	}{
+		{id: "ns:POST:/pets", arguments: map[string]any{"body": map[string]any{"name": "Murka"}}},
+		{id: "ns:DELETE:/pets/{petId}", arguments: map[string]any{"path": map[string]any{"petId": "p-1"}}},
+	} {
 		res, err := session.CallTool(t.Context(), &mcp.CallToolParams{
 			Name:      "call_read_operation",
-			Arguments: map[string]any{"id": id},
+			Arguments: map[string]any{"id": call.id, "arguments": call.arguments},
 		})
 		if err == nil && !res.IsError {
-			t.Errorf("call_read_operation called %s", id)
+			t.Fatalf("call_read_operation called %s", call.id)
+		}
+		// And refused for the right reason: anything else would mean the
+		// effect gate is not what is holding.
+		if got := refusalText(res, err); !strings.Contains(got, "never calls another effect class") {
+			t.Errorf("%s was refused, but not by the effect gate: %s", call.id, got)
 		}
 	}
 	if transport.calls != 0 {
 		t.Fatalf("RoundTrip calls = %d, want zero", transport.calls)
 	}
+}
+
+// refusalText is how a refusal reaches a caller: either a transport error or
+// an error result carrying text.
+func refusalText(res *mcp.CallToolResult, err error) string {
+	if err != nil {
+		return err.Error()
+	}
+	if res == nil {
+		return "<no result>"
+	}
+	var out strings.Builder
+	for _, item := range res.Content {
+		if text, ok := item.(*mcp.TextContent); ok {
+			out.WriteString(text.Text)
+		}
+	}
+	return out.String()
 }
 
 func TestCallReadOperationExecutes(t *testing.T) {
