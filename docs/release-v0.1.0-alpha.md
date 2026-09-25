@@ -153,6 +153,16 @@ resolve names itself, and the document still pointed at the old ones.
   `reload` had the same blind spot from the other side: it publishes only when the digest moves, so
   a mode change alone decided there was nothing to publish. The digest now identifies *what a
   client will be shown* rather than which tools exist. Found by writing a test for something else.
+- **The reason a configured credential did not fit was written and then thrown away twice.**
+  `internal/auth` says exactly what is wrong — "the API carries the key in the query",
+  "unsupported security scheme type mutualTLS", "the document defines no such security scheme" — and
+  its caller replaced all of it with one sentence about the profile not matching "how the API
+  carries it", which the catalog then dropped as well. An operator saw
+  `authentication_not_implemented`, which reads as a gap in lotsman rather than as a key configured
+  for a header that the API reads from the query string; and for a scheme type lotsman does not
+  implement, the generic sentence was simply untrue. The reason now reaches the three places the
+  policy message already reached: the tool's refusal, the report's reasons, and `explain-call`'s
+  auth line.
 - **`explain-call` called a supported credential "unknown scheme".** The command exists to say what
   a call would do before it does it, and for the one scheme where the interesting part is a request
   lotsman makes on the operator's behalf — `oauth2-client-credentials` — it said the opposite of
