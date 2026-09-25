@@ -49,6 +49,10 @@ type runner struct {
 	// Nil when nothing in this operation's binding can be re-minted.
 	minter *auth.Minter
 
+	// maxResponseBytes bounds what a response may spend of this process's
+	// memory (FR-36). Zero means the response package's documented default.
+	maxResponseBytes int
+
 	// refusal, when set, is why this operation cannot be called at all. The
 	// operation is still published -- discovery is not permission, and a model
 	// that can read the refusal is better off than one guessing why an
@@ -210,7 +214,7 @@ func (r *runner) execute(ctx context.Context, invocation *mcp.CallToolRequest, a
 		}
 	}
 
-	result, err := response.FromHTTP(resp)
+	result, err := response.FromHTTP(resp, r.maxResponseBytes)
 	if err != nil {
 		return response.Result{}, how, redact.Error(err)
 	}
@@ -272,7 +276,7 @@ func subjectOf(ctx context.Context) string {
 
 // newRunners prepares one runner per published tool, in catalog order.
 func newRunners(tools []catalog.Tool, client *http.Client, baseURL string, outbound *egress.Policy,
-	log logger, approval approver, sink audit.Sink) []runner {
+	log logger, approval approver, sink audit.Sink, maxResponseBytes int) []runner {
 	// One minter for the whole catalog: a token belongs to the credential,
 	// not to the operation, so two hundred tools bound to one profile hold
 	// one token between them.
@@ -280,7 +284,10 @@ func newRunners(tools []catalog.Tool, client *http.Client, baseURL string, outbo
 	runners := make([]runner, 0, len(tools))
 	for i := range tools {
 		tool := &tools[i]
-		prepared := runner{tool: tool, baseURL: baseURL, egress: outbound, approval: approval, audit: sink}
+		prepared := runner{
+			tool: tool, baseURL: baseURL, egress: outbound, approval: approval,
+			audit: sink, maxResponseBytes: maxResponseBytes,
+		}
 
 		switch {
 		case len(tool.PolicyBlockers) > 0:

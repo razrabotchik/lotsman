@@ -40,10 +40,6 @@ func TestTheSpecificationsOwnExampleDoesNotParseYet(t *testing.T) {
 		"spec",
 		// Implemented as `execution.allowMutations: false`, said twice (T608).
 		"defaultPolicy",
-		// Implemented as egress.DefaultBudget() (T604).
-		"timeout",
-		// Implemented as response.MaxBodyBytes (T605).
-		"maxResponseBytes",
 		// Implemented as an unconditional refusal; only `deny` is possible (T607).
 		"redirects",
 	}

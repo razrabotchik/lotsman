@@ -68,19 +68,29 @@ type Result struct {
 
 // FromHTTP reads resp's body under MaxBodyBytes and shapes it into a Result.
 // It always closes resp.Body.
-func FromHTTP(resp *http.Response) (Result, error) {
+// maxBytes bounds how much of the body is read. Zero means MaxBodyBytes.
+//
+// It is a parameter rather than a field on the caller so that a call path
+// which forgets the bound does not compile. The *ceiling* -- that a configured
+// value may not exceed MaxBodyBytes -- is enforced where the configuration is
+// read, because that is where an operator can be told about it; this function
+// honours the bound it is given.
+func FromHTTP(resp *http.Response, maxBytes int) (Result, error) {
+	if maxBytes <= 0 {
+		maxBytes = MaxBodyBytes
+	}
 	defer resp.Body.Close()
 
 	// One byte past the limit is what tells "exactly the limit" and
 	// "truncated" apart without buffering the excess.
-	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxBodyBytes+1))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxBytes)+1))
 	if err != nil {
 		return Result{}, errs.Errorf(errs.ClassUpstream, "response: read body: %w", err)
 	}
 
-	truncated := len(body) > MaxBodyBytes
+	truncated := len(body) > maxBytes
 	if truncated {
-		body = body[:MaxBodyBytes]
+		body = body[:maxBytes]
 		body = trimPartialRune(body)
 	}
 

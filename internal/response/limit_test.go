@@ -45,7 +45,7 @@ func TestNoMoreThanTheLimitIsEverReadIntoMemory(t *testing.T) {
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/plain"}},
 		Body:       body,
-	})
+	}, 0)
 	if err != nil {
 		t.Fatalf("FromHTTP: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestASmallBodyIsReadWhole(t *testing.T) {
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/plain"}},
 		Body:       body,
-	})
+	}, 0)
 	if err != nil {
 		t.Fatalf("FromHTTP: %v", err)
 	}
@@ -84,5 +84,30 @@ func TestASmallBodyIsReadWhole(t *testing.T) {
 	}
 	if result.Body != strings.Repeat("a", size) {
 		t.Errorf("Body is %d bytes, want %d", len(result.Body), size)
+	}
+}
+
+// A configured cap is the one that holds, which is the point of it being a
+// parameter: an operator lowering the bound gets the lower number, not the
+// package default.
+func TestAConfiguredLimitHolds(t *testing.T) {
+	const tighter = 4096
+	body := &counting{remaining: MaxBodyBytes}
+	result, err := FromHTTP(&http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/plain"}},
+		Body:       body,
+	}, tighter)
+	if err != nil {
+		t.Fatalf("FromHTTP: %v", err)
+	}
+	if body.read > tighter+1 {
+		t.Errorf("read %d bytes with a %d-byte cap configured", body.read, tighter)
+	}
+	if len(result.Body) != tighter {
+		t.Errorf("Body is %d bytes, want the configured %d", len(result.Body), tighter)
+	}
+	if !result.Truncated {
+		t.Error("a body over the configured cap was not reported as truncated")
 	}
 }

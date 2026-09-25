@@ -179,7 +179,7 @@ mutate "egress: private ranges are ordinary addresses" \
 
 mutate "response: read a body of any size" \
 	internal/response/response.go \
-	"io.LimitReader(resp.Body, MaxBodyBytes+1)" "resp.Body" \
+	"io.LimitReader(resp.Body, int64(maxBytes)+1)" "resp.Body" \
 	./internal/response/
 
 mutate "policy: a deny rule decides nothing" \

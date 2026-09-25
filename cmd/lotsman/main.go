@@ -237,7 +237,8 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
 		return exitCode(err)
 	}
-	egressPolicy, err := egress.PolicyFromBaseURL(runtime.BaseURL, egress.Budget{}, runtime.AllowPrivateNetworks)
+	egressPolicy, err := egress.PolicyFromBaseURL(runtime.BaseURL,
+		egress.BudgetFor(runtime.Timeout), runtime.AllowPrivateNetworks)
 	egressPolicy.AllowedOrigins = append(egressPolicy.AllowedOrigins, runtime.AllowedOrigins...)
 	if err != nil {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
@@ -246,7 +247,8 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 
 	opts := mcpserver.Options{
 		Logger: logger, BaseURL: runtime.BaseURL, Egress: egressPolicy,
-		Approval: runtime.InteractiveApproval,
+		Approval:         runtime.InteractiveApproval,
+		MaxResponseBytes: runtime.MaxResponseBytes,
 		// Through the logger, so an event inherits redaction and the stdout
 		// ban instead of re-deriving both (FR-61, FR-68).
 		Audit: audit.Log(logger),

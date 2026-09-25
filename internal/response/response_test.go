@@ -27,7 +27,7 @@ func TestFromHTTPSuccess(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	result, err := FromHTTP(doGet(t, srv))
+	result, err := FromHTTP(doGet(t, srv), 0)
 	if err != nil {
 		t.Fatalf("FromHTTP: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestFromHTTPClientError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	result, err := FromHTTP(doGet(t, srv))
+	result, err := FromHTTP(doGet(t, srv), 0)
 	if err != nil {
 		t.Fatalf("FromHTTP: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestFromHTTPServerError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	result, err := FromHTTP(doGet(t, srv))
+	result, err := FromHTTP(doGet(t, srv), 0)
 	if err != nil {
 		t.Fatalf("FromHTTP: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestFromHTTPTruncatesLargeBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	result, err := FromHTTP(doGet(t, srv))
+	result, err := FromHTTP(doGet(t, srv), 0)
 	if err != nil {
 		t.Fatalf("FromHTTP: %v", err)
 	}
@@ -115,7 +115,7 @@ func respond(t *testing.T, status int, header http.Header, body string) Result {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := FromHTTP(resp)
+	result, err := FromHTTP(resp, 0)
 	if err != nil {
 		t.Fatalf("FromHTTP: %v", err)
 	}

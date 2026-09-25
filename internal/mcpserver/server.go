@@ -66,6 +66,10 @@ type Options struct {
 	// The empty value is the documented default, `always`.
 	Approval config.Approval
 
+	// MaxResponseBytes bounds what one response may read into memory (FR-36).
+	// Zero means the response package's documented default.
+	MaxResponseBytes int
+
 	// Audit receives one event per completed call (§7.5). Nil records
 	// nothing, which is what a one-off `explain-call` wants and what a
 	// deployed server must not be left with by accident -- so `serve` sets
@@ -175,7 +179,8 @@ func New(opts *Options) *mcp.Server {
 
 	outbound := opts.egressPolicy()
 	runners := newRunners(catalogTools(opts.Catalog), opts.httpClient(), opts.BaseURL, &outbound,
-		opts.logger(), approver{mode: opts.approval(), log: opts.logger()}, opts.auditSink())
+		opts.logger(), approver{mode: opts.approval(), log: opts.logger()}, opts.auditSink(),
+		opts.MaxResponseBytes)
 
 	// Two front doors, one call path. In search mode the catalog is too large
 	// to publish as tools, so five meta-tools stand in front of the same

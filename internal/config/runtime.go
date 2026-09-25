@@ -31,7 +31,13 @@ type Runtime struct {
 	// the common single-origin case needs no configuration at all.
 	AllowedOrigins       []string
 	AllowPrivateNetworks bool
-	AuthProfiles         map[string]Profile
+	// Timeout is the outbound budget (FR-32). Zero means the egress package's
+	// documented default, decided there.
+	Timeout time.Duration
+	// MaxResponseBytes bounds one response (FR-36). Zero means the response
+	// package's documented default.
+	MaxResponseBytes int
+	AuthProfiles     map[string]Profile
 	// Server is how the runtime is reached. It is never zero after Resolve --
 	// the transport defaults to stdio, the bind to loopback and the drain to
 	// a bounded wait -- so no caller downstream has to decide what an unset
@@ -121,6 +127,13 @@ func Resolve(file *File, env Environment, flags Overrides) Runtime {
 		runtime.BaseURL = file.Execution.BaseURL
 		runtime.AllowedOrigins = append([]string(nil), file.Execution.AllowedOrigins...)
 		runtime.AllowPrivateNetworks = file.Execution.AllowPrivateNetworks
+		runtime.MaxResponseBytes = file.Execution.MaxResponseBytes
+		if file.Execution.Timeout != "" {
+			// Validated at load; an unparseable value never reaches here.
+			if timeout, err := time.ParseDuration(file.Execution.Timeout); err == nil {
+				runtime.Timeout = timeout
+			}
+		}
 		applyServerFile(&runtime.Server, &file.Server)
 		if len(file.AuthProfiles) > 0 {
 			runtime.AuthProfiles = make(map[string]Profile, len(file.AuthProfiles))

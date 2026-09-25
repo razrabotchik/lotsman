@@ -13,6 +13,7 @@ import (
 
 	"github.com/razrabotchik/lotsman/internal/domain"
 	"github.com/razrabotchik/lotsman/internal/errs"
+	"github.com/razrabotchik/lotsman/internal/response"
 )
 
 // APIVersion is the configuration schema this build understands. An unknown
@@ -148,6 +149,14 @@ type Execution struct {
 	// resolves into a private or link-local range. An origin written as an
 	// address needs no such permission.
 	AllowPrivateNetworks bool `yaml:"allowPrivateNetworks,omitempty"`
+	// Timeout is the outbound budget (FR-32), as a Go duration. It covers
+	// connect, TLS, header and body phases, which are derived from it.
+	Timeout string `yaml:"timeout,omitempty"`
+	// MaxResponseBytes bounds what one response may read into memory (FR-36).
+	// Zero means the documented default. It may be lowered and not raised:
+	// the cap exists to bound memory, and an operator raising it is asking
+	// for a promise this runtime does not make.
+	MaxResponseBytes int `yaml:"maxResponseBytes,omitempty"`
 }
 
 // Transport is how a client reaches lotsman (docs/spec.md 5.1).
@@ -448,6 +457,9 @@ func (f *File) validate() error {
 	if err := validateCatalog(&f.Catalog); err != nil {
 		return err
 	}
+	if err := validateExecution(&f.Execution); err != nil {
+		return err
+	}
 	for _, list := range []struct {
 		name  string
 		rules []Rule
@@ -461,6 +473,34 @@ func (f *File) validate() error {
 	for i := range f.OperationOverrides {
 		if err := f.validateOverride(i, &f.OperationOverrides[i]); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// validateExecution refuses execution settings this build cannot honour.
+func validateExecution(execution *Execution) error {
+	if execution.MaxResponseBytes < 0 {
+		return errs.Errorf(errs.ClassUsage,
+			"config: execution.maxResponseBytes is %d; a cap may be omitted but not negative",
+			execution.MaxResponseBytes)
+	}
+	if execution.MaxResponseBytes > response.MaxBodyBytes {
+		return errs.Errorf(errs.ClassUsage,
+			"config: execution.maxResponseBytes %d is above the ceiling of %d; the cap bounds "+
+				"memory this process has to find, so it can be lowered and not raised",
+			execution.MaxResponseBytes, response.MaxBodyBytes)
+	}
+	if execution.Timeout != "" {
+		timeout, err := time.ParseDuration(execution.Timeout)
+		if err != nil {
+			return errs.Errorf(errs.ClassUsage,
+				"config: execution.timeout %q is not a duration (for example \"30s\")", execution.Timeout)
+		}
+		if timeout <= 0 {
+			return errs.Errorf(errs.ClassUsage,
+				"config: execution.timeout %q is not positive; a call needs some time to happen in",
+				execution.Timeout)
 		}
 	}
 	return nil
