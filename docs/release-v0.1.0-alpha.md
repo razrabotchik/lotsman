@@ -153,6 +153,16 @@ resolve names itself, and the document still pointed at the old ones.
   `reload` had the same blind spot from the other side: it publishes only when the digest moves, so
   a mode change alone decided there was nothing to publish. The digest now identifies *what a
   client will be shown* rather than which tools exist. Found by writing a test for something else.
+- **`explain-call` called a supported credential "unknown scheme".** The command exists to say what
+  a call would do before it does it, and for the one scheme where the interesting part is a request
+  lotsman makes on the operator's behalf — `oauth2-client-credentials` — it said the opposite of
+  what the runtime does. Feature 006 taught the runtime to mint a token; this printer was never
+  told. It now names where the token comes from, as whom, and with which scopes. The same summary
+  in `inspect` was correct and had no test either; both do now. Found by measuring coverage
+  honestly: the CLI is exercised through the real binary in a subprocess, which `-coverprofile`
+  cannot see, so `make cover` reported that package at 0% and the total at 76% while most of what
+  it called was covered. With the subprocess counters merged the total is 89.4%, and the twelve
+  points that appeared are where this was hiding.
 - **Half of a machine-readable diagnostic list had no reason code, and every entry was said
   twice.** A `$ref` lotsman refuses is a document the parser never receives, so it reported the same
   reference missing in its own vocabulary — "component `X` does not exist in the specification" —
