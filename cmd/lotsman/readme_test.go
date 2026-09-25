@@ -180,3 +180,94 @@ func definedFlags(t *testing.T) map[string]bool {
 	}
 	return out
 }
+
+// The same rule for flags as for settings: a message that tells someone to pass
+// `--allow-mutations` has to name a flag that exists, or the advice sends them
+// to a usage error and teaches them to distrust the next hint.
+//
+// Flags are named from every package -- a refusal in internal/policy tells an
+// operator about `--allow-mutations` -- so the search is the whole module while
+// the definitions live here.
+func TestEveryFlagNamedInAMessageExists(t *testing.T) {
+	defined := definedFlags(t)
+	// `--help` is the shell's way of asking, handled before any flag set, and
+	// the transport-less commands take it too.
+	defined["help"] = true
+
+	mentioned := flagsMentionedInSource(t)
+	if len(mentioned) < 10 {
+		t.Fatalf("only %d flags were found in messages, so this test proves nothing", len(mentioned))
+	}
+	for _, ref := range mentioned {
+		if !defined[ref.flag] {
+			t.Errorf("%s names --%s, and no command defines it", ref.where, ref.flag)
+		}
+	}
+}
+
+type flagRef struct {
+	flag  string
+	where string
+}
+
+var flagPattern = regexp.MustCompile(`--([a-z][a-z0-9-]*)`)
+
+func flagsMentionedInSource(t *testing.T) []flagRef {
+	t.Helper()
+	root := filepath.Join("..", "..")
+	var found []flagRef
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", "bin", "testdata", "coverage-cli":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		for i, line := range strings.Split(string(data), "\n") {
+			for _, literal := range quotedGoStrings(line) {
+				// A flag being *defined* or parsed is spelled without dashes;
+				// only prose mentions them, which is what this is about.
+				for _, match := range flagPattern.FindAllStringSubmatch(literal, -1) {
+					found = append(found, flagRef{
+						flag:  match[1],
+						where: fmt.Sprintf("%s:%d", filepath.ToSlash(path), i+1),
+					})
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	return found
+}
+
+// quotedGoStrings returns the double-quoted literals on a line.
+func quotedGoStrings(line string) []string {
+	var out []string
+	for {
+		start := strings.Index(line, `"`)
+		if start < 0 {
+			return out
+		}
+		rest := line[start+1:]
+		end := strings.Index(rest, `"`)
+		if end < 0 {
+			return out
+		}
+		out = append(out, rest[:end])
+		line = rest[end+1:]
+	}
+}
