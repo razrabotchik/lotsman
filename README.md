@@ -66,6 +66,32 @@ The value is read at the moment a request is made, registered for redaction, and
 last code that touches the request before the wire. A canary-secret test suite checks that it
 appears in no log, result, error or report.
 
+### One file for a deployment
+
+Everything above can live in a configuration file, and the file can name the document too — so a
+deployment is one file and a path that means the same thing from any directory.
+
+```yaml
+apiVersion: lotsman.dev/v1alpha1
+spec:
+  source: ./openapi.yaml          # relative to *this file*, not your shell
+  strict: true                    # false is the file spelling of --lax
+catalog:
+  mode: auto                      # tools | search | auto
+  maxSerializedBytes: 120000      # the budget auto measures against
+  descriptionBytesPerTool: 1200
+execution:
+  allowMutations: false
+  timeout: 30s                    # connect, TLS, header and body derive from this
+  maxResponseBytes: 524288        # may be lowered, not raised
+```
+
+Every one of those is from the specification's own example (docs/spec.md §5.1), and a test reads
+that example out of the document to check it still parses. A setting lotsman cannot honour is
+refused by name rather than ignored: `redirects: follow` tells you redirects are never followed and
+why, instead of failing as an unknown field. And two spellings of one thing may not disagree —
+`defaultPolicy: read-only` with `allowMutations: true` is a refusal, not a precedence puzzle.
+
 ### APIs that issue their own tokens
 
 An API whose `security` is an OAuth2 client-credentials flow needs a token minted rather than

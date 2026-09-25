@@ -60,7 +60,7 @@ func explainCall(ctx context.Context, args []string, stdout, stderr io.Writer) i
 	}
 
 	logger := slog.New(redact.NewHandler(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelError})))
-	doc, err := parseSpec(ctx, *specPath, logger)
+	doc, err := parseSpec(ctx, pick(*specPath, runtime.Source), runtime.Root, logger)
 	if err != nil {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
 		return exitCode(err)

@@ -18,7 +18,15 @@ func runCLI(t *testing.T, args ...string) (stdout, stderr string, code int) {
 // runCLIEnv is the same, with an environment.
 func runCLIEnv(t *testing.T, env []string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
+	return runCLIEnvDir(t, "", env, args...)
+}
+
+// runCLIEnvDir is the same again, with a working directory -- which matters for
+// the paths a configuration file resolves relative to itself.
+func runCLIEnvDir(t *testing.T, dir string, env []string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
 	cmd := exec.Command(buildBinary(t), args...)
+	cmd.Dir = dir
 	if len(env) > 0 {
 		cmd.Env = append(os.Environ(), env...)
 	}

@@ -4,46 +4,67 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
-	"strings"
 	"testing"
+	"time"
 )
 
 // The example configuration in the frozen specification (docs/spec.md §5.1)
-// does not parse, and this test says exactly which of its fields are refused.
+// parses, and produces the runtime it describes.
 //
-// That is a drift worth pinning rather than discovering: an operator's first
-// move is to copy the example, and strict decoding then rejects it with a list
-// of eight unknown fields. Several of those fields describe settings lotsman
-// *does* implement, at exactly the documented values -- the catalog budget is
-// 120 000 bytes, the per-tool description ceiling is 1 200, the response cap is
-// 524 288, the timeout budget is 30s, and every one of those constants carries
-// a comment saying it came from this example. The values were taken from the
-// specification; the ability to set them was not.
+// It did not, for a long time. Strict decoding refused eight fields, and
+// lotsman implemented most of what it refused at exactly the documented
+// values -- the catalog budget of 120 000 bytes, the per-tool description
+// ceiling of 1 200, the response cap of 524 288, the 30s timeout -- with each
+// constant carrying a comment saying it came from this example. The values
+// were taken from the specification; the ability to set them was not.
 //
-// The list below is therefore a to-do in test form. Implementing any of these
-// fields makes this test fail, which is the point: the gap should shrink
-// visibly, and nobody should have to rediscover it. It has already shrunk once
-// -- the three `catalog` fields came off it in step 1 of feature 007 -- and the
-// remaining names carry the task that will take them off.
-func TestTheSpecificationsOwnExampleDoesNotParseYet(t *testing.T) {
+// The example is read out of the document rather than copied into this file,
+// so the test cannot drift from the specification it is about. A field added
+// to §5.1 fails here until the field is real.
+func TestTheSpecificationsOwnExampleParses(t *testing.T) {
 	example := specExample(t)
 
-	_, err := Parse(example)
-	if err == nil {
-		t.Fatal("the example parses now — remove this test and assert it parses instead")
+	file, err := Parse(example)
+	if err != nil {
+		t.Fatalf("the specification's own example does not parse: %v", err)
 	}
 
-	// Every field the parser refuses, and nothing else.
-	want := []string{
-		// The document to serve is named on the command line today (T609, T610).
-		"root",
-		"source",
+	// And it means what it says. Each of these is a value from §5.1 that used
+	// to be a constant nobody could reach.
+	runtime := Resolve(file, Environment{}, Overrides{})
+	for _, check := range []struct {
+		field string
+		got   any
+		want  any
+	}{
+		{"catalog.mode", runtime.Mode, "auto"},
+		{"catalog.maxSerializedBytes", runtime.MaxSerializedBytes, 120000},
+		{"catalog.descriptionBytesPerTool", runtime.DescriptionBytesPerTool, 1200},
+		{"execution.timeout", runtime.Timeout, 30 * time.Second},
+		{"execution.maxResponseBytes", runtime.MaxResponseBytes, 524288},
+		{"execution.allowMutations", runtime.AllowMutations, false},
+		{"execution.interactiveApproval", runtime.InteractiveApproval, ApprovalAlways},
+		{"server.transport", runtime.Server.Transport, TransportStdio},
+		{"server.logLevel", runtime.Server.LogLevel, "info"},
+		{"spec.strict", runtime.Lax, false},
+	} {
+		if check.got != check.want {
+			t.Errorf("%s resolved to %v, want %v", check.field, check.got, check.want)
+		}
 	}
-	if got := refusedFields(err.Error()); !equalStrings(got, want) {
-		t.Errorf("the parser refuses %v; this test expects %v.\n"+
-			"If a field was implemented, take it off the list. If one was added to the "+
-			"specification, put it on.", got, want)
+
+	// The parts that are lists rather than scalars.
+	if len(runtime.IncludeTags) != 2 {
+		t.Errorf("catalog.includeTags = %v, want two tags", runtime.IncludeTags)
+	}
+	if len(runtime.AllowedOrigins) != 1 {
+		t.Errorf("execution.allowedOrigins = %v, want one origin", runtime.AllowedOrigins)
+	}
+	if len(runtime.Overrides) != 2 {
+		t.Errorf("operationOverrides = %d, want two", len(runtime.Overrides))
+	}
+	if _, ok := runtime.AuthProfiles["example"]; !ok {
+		t.Errorf("authProfiles = %v, want the example profile", runtime.AuthProfiles)
 	}
 }
 
@@ -62,22 +83,4 @@ func specExample(t *testing.T) []byte {
 		t.Fatal("docs/spec.md §5.1 no longer contains a YAML example")
 	}
 	return section[1]
-}
-
-// refusedFields pulls the field names out of the decoder's complaint.
-var unknownField = regexp.MustCompile(`field (\S+) not found`)
-
-func refusedFields(message string) []string {
-	var fields []string
-	for _, match := range unknownField.FindAllStringSubmatch(message, -1) {
-		fields = append(fields, match[1])
-	}
-	sort.Strings(fields)
-	return fields
-}
-
-func equalStrings(got, want []string) bool {
-	sorted := append([]string(nil), want...)
-	sort.Strings(sorted)
-	return strings.Join(got, ",") == strings.Join(sorted, ",")
 }

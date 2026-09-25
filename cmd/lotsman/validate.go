@@ -29,13 +29,23 @@ func validate(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	if err != nil {
 		return exitUsage
 	}
+	// The configuration may name the document, so it is read first even
+	// though only part of it is used below.
+	configured, configErr := resolveConfig(*configPath, fs, &flagValues{})
+	if configErr != nil {
+		if !*quiet {
+			fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(configErr), configErr)
+		}
+		return exitCode(configErr)
+	}
+	spec = pick(spec, configured.Source)
 	if spec == "" {
 		fmt.Fprintf(stderr, "lotsman: validate requires SPEC\n\n%s", usage)
 		return exitUsage
 	}
 
 	logger := slog.New(redact.NewHandler(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelError})))
-	doc, err := parseSpec(ctx, spec, logger)
+	doc, err := parseSpec(ctx, spec, configured.Root, logger)
 	if err != nil {
 		if !*quiet {
 			fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
@@ -49,20 +59,14 @@ func validate(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	// publish.
 	overlay := catalog.Overlaid{Operations: doc.Operations}
 	if *configPath != "" {
-		runtime, err := resolveConfig(*configPath, fs, &flagValues{})
-		if err == nil {
-			var opts catalog.Options
-			opts, err = catalogOptions(runtime, catalog.ModeTools, doc.Operations)
-			if err == nil {
-				overlay = catalog.Overlay(doc.Operations, opts)
-			}
-		}
-		if err != nil {
+		opts, optErr := catalogOptions(configured, catalog.ModeTools, doc.Operations)
+		if optErr != nil {
 			if !*quiet {
-				fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
+				fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(optErr), optErr)
 			}
-			return exitCode(err)
+			return exitCode(optErr)
 		}
+		overlay = catalog.Overlay(doc.Operations, opts)
 	}
 
 	var documentErrors, rejected, supported, excluded int

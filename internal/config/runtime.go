@@ -40,7 +40,13 @@ type Runtime struct {
 	// Lax serves the supported subset instead of refusing a document that has
 	// any unsupported operation. It is `spec.strict: false` and `--lax`, which
 	// are the same request in two places.
-	Lax          bool
+	Lax bool
+	// Source is the document the configuration names, if it names one. The
+	// command line still wins (FR-62).
+	Source string
+	// Root is the directory `$ref` resolution is confined to, when the
+	// operator states one. Empty means the document's own directory.
+	Root         string
 	AuthProfiles map[string]Profile
 	// Server is how the runtime is reached. It is never zero after Resolve --
 	// the transport defaults to stdio, the bind to loopback and the drain to
@@ -139,6 +145,8 @@ func Resolve(file *File, env Environment, flags Overrides) Runtime {
 		if file.Spec.Strict != nil {
 			runtime.Lax = !*file.Spec.Strict
 		}
+		runtime.Source = file.Spec.Source
+		runtime.Root = file.Spec.Root
 		if file.Execution.Timeout != "" {
 			// Validated at load; an unparseable value never reaches here.
 			if timeout, err := time.ParseDuration(file.Execution.Timeout); err == nil {

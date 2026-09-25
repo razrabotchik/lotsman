@@ -78,19 +78,23 @@ func inspect(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return exitUsage
 	}
+	// The configuration is read first, because it may name the document and
+	// the directory references resolve against. `inspect` that disagreed with
+	// `serve` about which document it was looking at would be worse than
+	// useless.
+	runtime, err := resolveConfig(*configPath, fs, &flagValues{allowMutations: *allowMutations})
+	if err != nil {
+		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
+		return exitCode(err)
+	}
+	spec = pick(spec, runtime.Source)
 	if spec == "" {
 		fmt.Fprintf(stderr, "lotsman: inspect requires SPEC\n\n%s", usage)
 		return exitUsage
 	}
 
 	logger := slog.New(redact.NewHandler(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelError})))
-	doc, err := parseSpec(ctx, spec, logger)
-	if err != nil {
-		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
-		return exitCode(err)
-	}
-
-	runtime, err := resolveConfig(*configPath, fs, &flagValues{allowMutations: *allowMutations})
+	doc, err := parseSpec(ctx, spec, runtime.Root, logger)
 	if err != nil {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
 		return exitCode(err)

@@ -31,12 +31,23 @@ func operations(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	if err != nil {
 		return exitUsage
 	}
-	if spec == "" {
-		fmt.Fprintf(stderr, "lotsman: operations requires SPEC\n\n%s", usage)
-		return exitUsage
-	}
 	if *rejectedOnly && *supportedOnly {
 		fmt.Fprintln(stderr, "lotsman: operations: --supported and --rejected are mutually exclusive")
+		return exitUsage
+	}
+
+	// EXECUTABLE answers the operator's actual question -- would this run? --
+	// so it accounts for policy as well as capability, under the same default
+	// (read-only) the server uses. It is read before the document because it
+	// may also name which document.
+	runtime, err := resolveConfig(*configPath, fs, &flagValues{allowMutations: *allowMutations})
+	if err != nil {
+		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
+		return exitCode(err)
+	}
+	spec = pick(spec, runtime.Source)
+	if spec == "" {
+		fmt.Fprintf(stderr, "lotsman: operations requires SPEC\n\n%s", usage)
 		return exitUsage
 	}
 
@@ -45,16 +56,7 @@ func operations(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	// land here.
 	logger := slog.New(redact.NewHandler(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelWarn})))
 
-	doc, err := parseSpec(ctx, spec, logger)
-	if err != nil {
-		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
-		return exitCode(err)
-	}
-
-	// EXECUTABLE answers the operator's actual question -- would this run? --
-	// so it accounts for policy as well as capability, under the same default
-	// (read-only) the server uses.
-	runtime, err := resolveConfig(*configPath, fs, &flagValues{allowMutations: *allowMutations})
+	doc, err := parseSpec(ctx, spec, runtime.Root, logger)
 	if err != nil {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
 		return exitCode(err)
