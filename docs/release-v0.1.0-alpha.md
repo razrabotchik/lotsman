@@ -153,6 +153,23 @@ resolve names itself, and the document still pointed at the old ones.
   `reload` had the same blind spot from the other side: it publishes only when the digest moves, so
   a mode change alone decided there was nothing to publish. The digest now identifies *what a
   client will be shown* rather than which tools exist. Found by writing a test for something else.
+- **There is no outbound rate limit, and two documents said there was.** §7.5's pipeline order
+  lists `rate limit` as a stage between the egress destination check and auth application, and
+  `docs/pipeline.md` described it as the first RoundTripper in the chain. Nothing implements it:
+  the only `ratelimit` strings in the code are response-header names in the allowlist that returns
+  an API's own rate-limit information to the model. So an agent's enthusiasm is bounded by the
+  upstream API's willingness to say no, and by nothing on this side — worth knowing before someone
+  points a loop at a metered endpoint. `docs/pipeline.md` now says the stage is absent instead of
+  describing it; §7.5 is frozen and still lists it, which is the honest state of affairs: the
+  specification asks for something this build does not have. Deciding the shape of it (per origin,
+  per operation, per profile; what a refused call looks like to a model) is design work, not a
+  patch.
+- **`docs/pipeline.md` had drifted three features behind the code.** It still explained why M0
+  required an explicit `--base-url` — superseded by 003's `allowedOrigins` — pointed at a task
+  number from a plan that has since been completed, and had no stages at all for the things 004-006
+  added: inbound authorization, catalog reload, the audit counters behind `/metrics`, and upstream
+  token minting with FR-35's one refresh and one retry. A design document that describes an
+  earlier build is worse than no design document, because it is read as current.
 - **Criterion 5's evidence was not testing criterion 5.** `TestCallReadOperationRefusesNonReads`
   called the POST and the DELETE with no arguments, so both were refused — by argument validation,
   for a missing required field. The test therefore passed with the effect gate removed, and a
