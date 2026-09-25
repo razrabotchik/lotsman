@@ -1,9 +1,11 @@
 package mcpserver_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -448,5 +450,94 @@ func TestSearchModeRespectsThePolicyGate(t *testing.T) {
 	}
 	if transport.calls != 0 {
 		t.Fatalf("RoundTrip calls = %d, want zero", transport.calls)
+	}
+}
+
+// The published list does not grow with the catalog. That is the whole claim of
+// search mode -- not "smaller", but *constant* -- and it was the one thing about
+// the mode that no test held: the sizes in docs/corpus.md were measured by hand
+// and then quoted as the reason the mode exists.
+//
+// Byte-identical is the right assertion rather than "within a margin": the
+// meta-tool definitions are written in this package and mention nothing about
+// the document, so any difference at all means something leaked from the
+// catalog into the list.
+func TestTheSearchModeToolListDoesNotGrowWithTheCatalog(t *testing.T) {
+	small := catalog.Build("sha256:small", searchOperations("https://api.example.com"),
+		catalog.Options{Mode: catalog.ModeSearch, Policy: policy.Config{AllowMutations: true}})
+
+	// Two hundred operations over the same shapes: a catalog no tools-mode
+	// client would accept, which is the case the mode is for.
+	many := searchOperations("https://api.example.com")
+	for i := 0; i < 50; i++ {
+		for _, op := range searchOperations("https://api.example.com") {
+			op.Key = domain.NewOperationKey("ns", op.Method,
+				op.PathTemplate+"/"+strconv.Itoa(i))
+			op.PathTemplate += "/" + strconv.Itoa(i)
+			op.SourceOperationID += strconv.Itoa(i)
+			op.Summary += strconv.Itoa(i)
+			many = append(many, op)
+		}
+	}
+	large := catalog.Build("sha256:large", many,
+		catalog.Options{Mode: catalog.ModeSearch, Policy: policy.Config{AllowMutations: true}})
+	if len(large.Tools) <= len(small.Tools) {
+		t.Fatalf("the large catalog is not larger: %d vs %d tools", len(large.Tools), len(small.Tools))
+	}
+
+	// Two measurements from one call: the tool definitions, which is what must
+	// not move, and the whole result, which is what a model actually pays for and
+	// what docs/corpus.md quotes.
+	list := func(cat *catalog.Catalog) (tools []byte, payload int, digest string) {
+		t.Helper()
+		session := searchSession(t, cat, nil, "https://api.example.com")
+		res, err := session.ListTools(t.Context(), nil)
+		if err != nil {
+			t.Fatalf("tools/list: %v", err)
+		}
+		encoded, err := json.Marshal(res.Tools)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Meta != nil {
+			digest, _ = res.Meta["lotsman/catalogDigest"].(string)
+		}
+		whole, err := json.Marshal(res)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return encoded, len(whole), digest
+	}
+
+	first, payload, smallDigest := list(&small)
+	second, largePayload, largeDigest := list(&large)
+	if payload != largePayload {
+		t.Errorf("the published payload grew with the catalog: %d then %d bytes", payload, largePayload)
+	}
+	if !bytes.Equal(first, second) {
+		t.Errorf("the published list changed with the catalog:\n%d bytes for %d operations\n%d bytes for %d operations",
+			len(first), len(small.Tools), len(second), len(large.Tools))
+	}
+	// The digest does differ, and that is not a contradiction: it identifies the
+	// catalog a model can reach through those tools, not the literal list. A
+	// client that cached search results against it has to know the catalog moved
+	// even though `tools/list` did not (FR-74).
+	if smallDigest == "" || smallDigest == largeDigest {
+		t.Errorf("the catalog digest did not distinguish two different catalogs: %q vs %q",
+			smallDigest, largeDigest)
+	}
+	// The size is quoted in docs/corpus.md as the reason the mode exists, so it
+	// is recorded here too: a change is allowed, and going unnoticed is not.
+	// Tool descriptions are what a model reads to use the mode at all, so this
+	// is a budget rather than a target.
+	//
+	// This is the definitions alone. What a client receives adds the envelope and
+	// the `_meta` digest -- 5 183 bytes read-only and 6 171 with the mutating
+	// tool published, measured over stdio and recorded in docs/corpus.md.
+	const definitionBytes = 6017
+	if len(first) != definitionBytes {
+		t.Errorf("the published definitions are %d bytes, recorded as %d; if the change was "+
+			"intended, update this number and the measurement in docs/corpus.md",
+			len(first), definitionBytes)
 	}
 }

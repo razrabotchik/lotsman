@@ -9,8 +9,8 @@ refuses, is the reason a design flaw or a feature that has not been written yet?
 
 | Document | Operations | Supported | Executable (default policy) | Catalog (tools) | Catalog (search) | Verdict |
 |---|---|---|---|---|---|---|
-| Kubernetes `apps/v1` (v1.31.0) | 77 | 65 | 38 | 2.23 MB | **5.5 KB** | translated |
-| DigitalOcean, exploded (pinned commit) | 659 | 631 | 0 (all need auth) | 737 KB | **5.5 KB** | translated |
+| Kubernetes `apps/v1` (v1.31.0) | 77 | 65 | 38 | 2.23 MB | **5.2 KB** | translated |
+| DigitalOcean, exploded (pinned commit) | 659 | 631 | 0 (all need auth) | 737 KB | **5.2 KB** | translated |
 | Stripe (v1301) | 559 | 0 | 0 | — | — | refused per matrix |
 | DigitalOcean, root only | 0 | 0 | 0 | — | — | 661 references refused by name |
 | GitLab (v17.5.0-ee) | — | — | — | — | — | refused before parsing |
@@ -104,27 +104,34 @@ and says it is not part of this release.
 
 ## Search mode, measured
 
-Search mode publishes five meta-tools regardless of catalog size, so `tools/list` is a constant
-**5 492 bytes** for both Kubernetes (65 operations) and DigitalOcean (631) — measured over a live
-session, because that is the only place the published list exists; `inspect` reports the tools-mode
-size in either mode, since that is the measurement the mode decision is made against, and its
-wording now says which of the two it is printing. Against tools mode that
-is 406× smaller for Kubernetes and 135× for DigitalOcean — and for a catalog that did not fit at
-all, the comparison is not a ratio but a yes.
+Search mode publishes the meta-tools regardless of catalog size, so `tools/list` is a constant
+**5 183 bytes** — **6 171** when the mutating call tool is published too — for both Kubernetes (65
+operations) and DigitalOcean (631). Measured over stdio, because a live session is the only place
+the published list exists: `inspect` reports the tools-mode size in either mode, that being the
+measurement the mode decision is made against, and its wording says which of the two it prints.
+
+Against tools mode that is 431× smaller for Kubernetes and 142× for DigitalOcean — and for a catalog
+that did not fit at all, the comparison is not a ratio but a yes.
+
+"Constant" is the claim the mode rests on, and it is now a test rather than a measurement
+(`TestTheSearchModeToolListDoesNotGrowWithTheCatalog`): two catalogs, 4 operations and 204, publish
+byte-identical tool definitions. The catalog digest does differ between them, which is not a
+contradiction — it identifies the catalog a model can reach *through* those tools, so a client that
+cached search results against it learns the catalog moved even though the list did not (FR-74).
 
 What a model then pays per step:
 
 | Step | Kubernetes | DigitalOcean |
 |---|---|---|
-| `tools/list` | 5.5 KB | 5.5 KB |
-| `search_operations` (5 hits) | 3.4 KB | 3.3 KB |
-| `describe_operation` (create a Deployment) | 87 KB on the wire, `schemaBytes` 38.9 KB | — |
+| `tools/list` | 5 183 B | 5 183 B |
+| `search_operations` (5 hits) | 3 266 B | 2 944 B |
+| `describe_operation` (create a Deployment) | 84.6 KB on the wire, `schemaBytes` 38 895 | — |
 
 **Found by this measurement:** an MCP result is carried twice — once as `structuredContent` and
 once as the text fallback the SDK generates for clients that predate it — so the wire cost of a
 response is roughly double its payload. The 24 KB describe budget therefore buys about 50 KB on the
 wire, and the Kubernetes Deployment schema exceeds it even after every description is dropped
-(38.9 KB of pure constraints). That is the honest cost of knowing how to create a Deployment; the
+(38 895 bytes of pure constraints). That is the honest cost of knowing how to create a Deployment; the
 alternative is a schema a model cannot rely on, and `schemaBytes` is reported so that asking again
 is an informed decision rather than a surprise.
 
