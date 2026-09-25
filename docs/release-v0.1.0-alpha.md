@@ -146,6 +146,11 @@ resolve names itself, and the document still pointed at the old ones.
   `descriptionsOmitted`. The prune now recurses solely where a value is known to be a schema, and
   leaves instance data and unrecognised keywords exactly as found. Found by writing the test the
   function never had.
+- **Nothing asserted that a response body is bounded on the way *in*.** `MaxBodyBytes` cuts the
+  body that is handed back, and the truncation tests covered that — but without the limiting
+  reader, `io.ReadAll` pulls the whole thing into memory first and the result is cut afterwards, so
+  every assertion still held while an upstream chose this process's footprint. There is now a test
+  that counts the bytes actually read. It was found by `make mutate`, not by reading the code.
 - **An MCP result is carried twice** — as `structuredContent` and as the text fallback for clients
   that predate it — so a response costs roughly double its payload on the wire. The 24 KB
   `describe_operation` budget therefore buys about 50 KB.
