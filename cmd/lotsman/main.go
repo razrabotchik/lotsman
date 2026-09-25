@@ -12,7 +12,9 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -254,6 +256,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 		return exitUsage
 	}
 
+	watched := &watchSet{}
 	opts := mcpserver.Options{
 		Logger: logger, BaseURL: runtime.BaseURL, Egress: egressPolicy,
 		Approval:         runtime.InteractiveApproval,
@@ -263,7 +266,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 		Audit: audit.Log(logger),
 	}
 	if spec != "" {
-		cat, err := loadCatalog(ctx, spec, logger, runtime.Lax, runtime, catalogMode)
+		cat, err := loadCatalog(ctx, spec, logger, runtime.Lax, runtime, catalogMode, watched)
 		if err != nil {
 			logger.Error("load spec failed", "class", string(errs.ClassOf(err)), "error", err)
 			return exitCode(err)
@@ -273,9 +276,9 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 	}
 
 	source := func(ctx context.Context) (*catalog.Catalog, error) {
-		return loadCatalog(ctx, spec, logger, runtime.Lax, runtime, catalogMode)
+		return loadCatalog(ctx, spec, logger, runtime.Lax, runtime, catalogMode, watched)
 	}
-	if err := runTransport(ctx, runtime, &opts, source, reloadTriggers(spec, *watch)); err != nil {
+	if err := runTransport(ctx, runtime, &opts, source, reloadTriggers(spec, *watch, watched)); err != nil {
 		logger.Error("serve failed", "class", string(errs.ClassOf(err)), "error", err)
 		return exitCode(err)
 	}
@@ -346,22 +349,60 @@ func runTransport(ctx context.Context, runtime config.Runtime, opts *mcpserver.O
 // what a sidecar or a config-map reloader already sends. Watching is opt-in
 // because it is a poll, and it needs a file to poll -- a document read from
 // stdin was consumed at startup and there is nothing left to watch.
-func reloadTriggers(spec string, watch bool) reload.Triggers {
+func reloadTriggers(spec string, watch bool, watched *watchSet) reload.Triggers {
 	triggers := reload.Triggers{Signal: true}
 	if watch && spec != "" && spec != "-" {
 		triggers.Watch = spec
+		// And every document the specification read. For an exploded spec the
+		// root is an index nobody edits, so watching it alone noticed nothing an
+		// operator actually does.
+		triggers.Documents = watched.documents
 	}
 	return triggers
+}
+
+// watchSet remembers which documents the last successful load actually read, so
+// `--watch` polls the specification rather than only its index (FR-13b).
+//
+// It is written by the loader and read by the watcher's ticker, hence the
+// atomic: the two are on different goroutines by construction, and a reload
+// replaces the whole set at once rather than editing it in place.
+type watchSet struct{ paths atomic.Pointer[[]string] }
+
+// record stores the absolute path of every document a load read.
+func (w *watchSet) record(root string, references []domain.RefDocument) {
+	paths := make([]string, 0, len(references))
+	for i := range references {
+		if root == "" {
+			continue // stdin: nothing on disk to watch
+		}
+		paths = append(paths, filepath.Join(root, filepath.FromSlash(references[i].Path)))
+	}
+	w.paths.Store(&paths)
+}
+
+// documents is what the watcher asks for on each interval.
+func (w *watchSet) documents() []string {
+	if current := w.paths.Load(); current != nil {
+		return *current
+	}
+	return nil
 }
 
 // loadCatalog runs pipeline stages 0-4 (specsource, openapi, catalog) for
 // `serve SPEC`.
 //
 //nolint:gocritic // hugeParam: Runtime is resolved configuration, copied per call so no callee holds a pointer to the decision its caller already made.
-func loadCatalog(ctx context.Context, spec string, logger *slog.Logger, lax bool, runtime config.Runtime, mode catalog.Mode) (*catalog.Catalog, error) {
+func loadCatalog(ctx context.Context, spec string, logger *slog.Logger, lax bool, runtime config.Runtime, mode catalog.Mode, watched *watchSet) (*catalog.Catalog, error) {
 	doc, err := parseSpec(ctx, spec, runtime.Root, logger)
 	if err != nil {
 		return nil, err
+	}
+	if watched != nil {
+		// Recorded before the checks below: a document that referenced others
+		// and then failed validation is still the one an operator is editing,
+		// and the next edit is what should be noticed.
+		watched.record(doc.rootPath, doc.References)
 	}
 	opts, err := catalogOptions(runtime, mode, doc.Operations)
 	if err != nil {
@@ -605,6 +646,18 @@ func wasSet(fs *flag.FlagSet, name string) bool {
 type specDoc struct {
 	*openapi.Document
 	digest string
+	// rootPath is the directory references were confined to, so a caller that
+	// watches the specification knows where its documents live.
+	rootPath string
+}
+
+// manifestDigest identifies the root document and every document it read
+// (FR-13b). For a single-file specification it still differs from the root
+// digest, and that is deliberate: the two answer different questions, and one
+// value that sometimes means "the root" and sometimes "everything" would be
+// worse than two that always mean what they say.
+func (d *specDoc) manifestDigest() string {
+	return domain.ManifestDigest(d.digest, d.References)
 }
 
 // parseSpec runs pipeline stages 0-1 (specsource, openapi): shared by
@@ -648,7 +701,7 @@ func parseSpec(ctx context.Context, spec, root string, logger *slog.Logger) (*sp
 			slog.String("pointer", d.Pointer),
 			slog.String("message", d.Message))
 	}
-	return &specDoc{Document: doc, digest: src.Digest}, nil
+	return &specDoc{Document: doc, digest: src.Digest, rootPath: rootPath}, nil
 }
 
 // diagnosticLevel maps a domain.Diagnostic's severity to the matching slog

@@ -124,7 +124,7 @@ func TestTheWatcherWaitsForTheFileToSettle(t *testing.T) {
 	if err := os.WriteFile(path, []byte("first"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	w := newWatcher(path, 10*time.Millisecond)
+	w := newWatcher(func() []string { return []string{path} }, 10*time.Millisecond)
 	defer w.stop()
 
 	// Nothing has changed, so nothing fires.
@@ -161,5 +161,78 @@ func TestStartWithoutTriggersDoesNothing(t *testing.T) {
 	case <-reloaded:
 		t.Fatal("a reload happened with no trigger configured")
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// An exploded specification is an index over hundreds of documents, and every
+// edit an operator makes is to one of those documents rather than to the index.
+// Watching the root alone was a feature that appeared to work: the reload itself
+// re-reads the whole closure correctly, so the only thing missing was ever
+// noticing.
+func TestTheWatcherSeesAReferencedDocumentChange(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "openapi.yaml")
+	referenced := filepath.Join(dir, "pet.yaml")
+	for path, body := range map[string]string{root: "root", referenced: "first"} {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	w := newWatcher(func() []string { return []string{root, referenced} }, 10*time.Millisecond)
+	defer w.stop()
+
+	select {
+	case <-w.changed:
+		t.Fatal("the watcher fired on documents nobody touched")
+	case <-time.After(60 * time.Millisecond):
+	}
+
+	// The index is untouched; only the document it points at moves.
+	if err := os.WriteFile(referenced, []byte("second edition"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-w.changed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a change to a referenced document was never noticed")
+	}
+}
+
+// The set is re-asked each interval, because a reload can change it: a `$ref`
+// added to the index brings a document that has to be watched from then on.
+func TestTheWatchedSetFollowsTheClosure(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "openapi.yaml")
+	added := filepath.Join(dir, "added.yaml")
+	if err := os.WriteFile(root, []byte("root"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var extra atomic.Pointer[[]string]
+	empty := []string{}
+	extra.Store(&empty)
+	w := newWatcher(func() []string {
+		return append([]string{root}, *extra.Load()...)
+	}, 10*time.Millisecond)
+	defer w.stop()
+
+	if err := os.WriteFile(added, []byte("new document"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Writing it changed nothing, because nothing was watching it yet.
+	select {
+	case <-w.changed:
+		t.Fatal("the watcher fired on a document outside the set")
+	case <-time.After(60 * time.Millisecond):
+	}
+
+	// Now it is part of the closure, which is itself the change.
+	set := []string{added}
+	extra.Store(&set)
+	select {
+	case <-w.changed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a document entering the closure was never noticed")
 	}
 }

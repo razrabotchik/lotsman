@@ -1,6 +1,8 @@
 package openapi
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,6 +18,12 @@ import (
 // closure is the set of documents a spec pulls in through file references,
 // after every one of them has been confined to the root directory.
 type closure struct {
+	// documents are the confined documents with the digest of the bytes that
+	// were read, in path order (FR-13b). They are recorded here because this is
+	// the only place the bytes pass through: digesting them later would mean
+	// reading 14 MB twice, and digesting them elsewhere would mean digesting
+	// something other than what was parsed.
+	documents []domain.RefDocument
 	// files are the confined documents, relative to the root, in a
 	// deterministic order. They become the parser's allowlist: the rolodex is
 	// told exactly which files it may read, instead of being pointed at a
@@ -127,7 +135,13 @@ func resolveClosure(rootBytes []byte, rootPath string, refs []refSite, limits Li
 					confinementText(domain.ReasonRefOutsideRoot, rootPath, target))
 				continue
 			}
-			result.files = append(result.files, filepath.ToSlash(relative))
+			slashed := filepath.ToSlash(relative)
+			result.files = append(result.files, slashed)
+			sum := sha256.Sum256(data)
+			result.documents = append(result.documents, domain.RefDocument{
+				Path:   slashed,
+				Digest: "sha256:" + hex.EncodeToString(sum[:]),
+			})
 
 			if len(result.files)+1 > limits.maxRefDocuments() {
 				return nil, errs.Errorf(errs.ClassUnsupported,
@@ -149,6 +163,9 @@ func resolveClosure(rootBytes []byte, rootPath string, refs []refSite, limits Li
 	}
 
 	sort.Strings(result.files)
+	sort.Slice(result.documents, func(i, j int) bool {
+		return result.documents[i].Path < result.documents[j].Path
+	})
 	return result, nil
 }
 
