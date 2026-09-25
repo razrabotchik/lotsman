@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -234,5 +236,68 @@ func TestTheWatchedSetFollowsTheClosure(t *testing.T) {
 	case <-w.changed:
 	case <-time.After(2 * time.Second):
 		t.Fatal("a document entering the closure was never noticed")
+	}
+}
+
+// NFR-8 asks for the race detector over catalog reload and concurrent calls.
+// The test above is sequential -- its "in-flight call" is a value, not a call --
+// so under `-race` there was nothing to detect: readers and the writer never
+// overlapped in time.
+//
+// This one overlaps them. Readers take the published snapshot the way a request
+// does, in a loop, while reloads replace it underneath them. Two properties:
+// no reader ever observes a server that was not built from a published catalog,
+// and no reader ever gets nothing. A torn publication would break the first; a
+// pointer swapped before the server existed would break the second.
+func TestConcurrentReadersNeverObserveAHalfPublishedCatalog(t *testing.T) {
+	var generation atomic.Int64
+	// Each catalog carries its own digest, and the server built from it is
+	// recorded against that digest, so a reader can check the pair it was given.
+	built := &sync.Map{} // *mcp.Server -> string
+	source := func(context.Context) (*catalog.Catalog, error) {
+		return &catalog.Catalog{Digest: "sha256:" + strconv.FormatInt(generation.Add(1), 10)}, nil
+	}
+	buildRecording := func(cat *catalog.Catalog) *mcp.Server {
+		server := mcp.NewServer(&mcp.Implementation{Name: "lotsman-test", Version: "v0"}, nil)
+		built.Store(server, cat.Digest)
+		return server
+	}
+
+	holder := New(&catalog.Catalog{Digest: "sha256:0"}, source, buildRecording, nil)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	var readers sync.WaitGroup
+	for range 8 {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for ctx.Err() == nil {
+				// One load, the way a request does it (§7.6 step 7).
+				server := holder.Server()
+				if server == nil {
+					t.Error("a reader was handed no server")
+					return
+				}
+				if _, known := built.Load(server); !known {
+					t.Error("a reader was handed a server nobody built")
+					return
+				}
+			}
+		}()
+	}
+
+	for range 50 {
+		if _, err := holder.Reload(ctx); err != nil {
+			t.Errorf("Reload: %v", err)
+			break
+		}
+	}
+	cancel()
+	readers.Wait()
+
+	// And the digest ends where the last reload left it, rather than at
+	// whatever a racing reader happened to store.
+	if want := "sha256:" + strconv.FormatInt(generation.Load(), 10); holder.Digest() != want {
+		t.Errorf("digest = %q, want %q", holder.Digest(), want)
 	}
 }

@@ -1,10 +1,17 @@
 package main_test
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -265,4 +272,122 @@ properties:
 	}
 	t.Fatalf("a change to a referenced document never republished the catalog\nstderr:\n%s",
 		stderr.String())
+}
+
+// The other half of NFR-8: calls in flight while the catalog is replaced. The
+// unit test in internal/reload is where the race detector applies -- this
+// subprocess is a separate, uninstrumented build -- so what this checks is the
+// behaviour an operator sees: reloading under load drops nothing.
+//
+// A dropped call here would not be a hypothetical. The stateless profile's whole
+// claim is that requests are independent of each other and of the server's
+// bookkeeping, and a reload is the one moment when that bookkeeping changes.
+func TestReloadingUnderConcurrentCallsDropsNothing(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SIGHUP is not delivered on Windows")
+	}
+	dir := t.TempDir()
+	specPath := filepath.Join(dir, "openapi.yaml")
+	replaceSpec(t, specPath, specWith("before"))
+
+	endpoint, stderr, process := serveHTTPProcess(t, nil, "--listen", "127.0.0.1:0", specPath,
+		"--log-level", "debug")
+	if got := toolNames(t, endpoint); len(got) == 0 {
+		t.Fatalf("nothing was published at startup\nstderr:\n%s", stderr.String())
+	}
+
+	// Callers keep listing tools while the document is replaced and reloaded
+	// under them. `tools/list` is the request a reload actually changes the
+	// answer to, which makes it the one worth hammering.
+	ctx, cancel := context.WithCancel(t.Context())
+	var callers sync.WaitGroup
+	var calls, failures atomic.Int64
+	for range 6 {
+		callers.Add(1)
+		go func() {
+			defer callers.Done()
+			for ctx.Err() == nil {
+				frame := sessionlessOrNil(t, endpoint)
+				calls.Add(1)
+				result, ok := frame["result"].(map[string]any)
+				if !ok {
+					failures.Add(1)
+					continue
+				}
+				if tools, _ := result["tools"].([]any); len(tools) == 0 {
+					failures.Add(1)
+				}
+			}
+		}()
+	}
+
+	for generation := range 5 {
+		replaceSpec(t, specPath, specWith("before", fmt.Sprintf("after%d", generation)))
+		if err := process.Signal(syscall.SIGHUP); err != nil {
+			t.Fatalf("signal: %v", err)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	cancel()
+	callers.Wait()
+
+	if calls.Load() < 10 {
+		t.Fatalf("only %d calls were made, so this test proves little", calls.Load())
+	}
+	if failures.Load() != 0 {
+		t.Errorf("%d of %d calls failed while the catalog was being replaced\nstderr:\n%s",
+			failures.Load(), calls.Load(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "catalog reloaded") {
+		t.Errorf("nothing was actually reloaded, so the concurrency was against a still server:\n%s",
+			stderr.String())
+	}
+}
+
+// sessionlessOrNil is a tools/list request that reports failure by returning a
+// frame without a result, rather than by failing the test from a goroutine.
+//
+// The response may arrive as an event stream, which is the shape the Streamable
+// HTTP profile is allowed to answer in; a decoder that only understood plain
+// JSON would report every call as a failure, which is exactly what the first
+// version of this did.
+func sessionlessOrNil(t *testing.T, endpoint string) map[string]any {
+	t.Helper()
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":` + sessionlessMeta + `}}`
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, endpoint,
+		strings.NewReader(body))
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Mcp-Protocol-Version", protocolVersion)
+	req.Header.Set("Mcp-Method", "tools/list")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusOK {
+		return nil
+	}
+	raw, err := io.ReadAll(res.Body)
+	if err != nil {
+		return nil
+	}
+	payload := string(raw)
+	if strings.HasPrefix(res.Header.Get("Content-Type"), "text/event-stream") {
+		payload = ""
+		for _, line := range strings.Split(string(raw), "\n") {
+			if after, ok := strings.CutPrefix(line, "data:"); ok {
+				payload = strings.TrimSpace(after)
+				break
+			}
+		}
+	}
+	var frame map[string]any
+	if err := json.Unmarshal([]byte(payload), &frame); err != nil {
+		return nil
+	}
+	return frame
 }
