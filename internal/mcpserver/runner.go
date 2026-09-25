@@ -302,6 +302,11 @@ func newRunners(tools []catalog.Tool, client *http.Client, baseURL string, outbo
 			if len(tool.ExecutionBlockers) > 0 {
 				prepared.refusal += ": " + reasonCodes(tool.ExecutionBlockers)
 			}
+			if tool.AuthMessage != "" {
+				// A credential problem is the one blocker an operator can fix
+				// today, so it is the one worth spelling out rather than coding.
+				prepared.refusal += " (" + tool.AuthMessage + ")"
+			}
 
 		default:
 			// A schema that will not compile cannot be validated against, and
