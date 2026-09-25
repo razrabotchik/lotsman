@@ -331,7 +331,7 @@
       "policyMessage": "effect could not be determined; enable execution.allowMutations or classify the operation explicitly before calling it"
     }
   ],
-  "digest": "sha256:b03b43cbc3cbd81650a82fd56f6bc5dbf1dfc007256f1bd05ae00c036b737f2a",
+  "digest": "sha256:a69d7e4e5cb25ef13c59f008a909523e21d4197d679d7598706d3aa65640af8d",
   "mode": "tools",
   "report": {
     "schemaVersion": "1",
@@ -363,7 +363,8 @@
       "serializedBytesEstimate": 2292,
       "thresholdBytes": 120000,
       "overBudget": false,
-      "digest": "sha256:b03b43cbc3cbd81650a82fd56f6bc5dbf1dfc007256f1bd05ae00c036b737f2a"
+      "descriptionBytesPerTool": 1200,
+      "digest": "sha256:a69d7e4e5cb25ef13c59f008a909523e21d4197d679d7598706d3aa65640af8d"
     },
     "security": {
       "remoteRefs": false,

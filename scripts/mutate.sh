@@ -137,7 +137,7 @@ mutate "schema: publish examples verbatim" \
 
 mutate "schema: publish descriptions verbatim" \
 	internal/catalog/catalog.go \
-	"return budgetBytes(sanitizeText(text), descriptionByteBudget)" "return text" \
+	"return budgetBytes(sanitizeText(text), budget)" "return text" \
 	./internal/catalog/
 
 mutate "display: show the raw path template" \

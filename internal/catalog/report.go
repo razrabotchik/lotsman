@@ -73,9 +73,14 @@ type Estimate struct {
 	ToolCount       int  `json:"toolCount"`
 	SerializedBytes int  `json:"serializedBytesEstimate"`
 	// ThresholdBytes is the budget Recommended was decided against.
-	ThresholdBytes int    `json:"thresholdBytes"`
-	OverBudget     bool   `json:"overBudget"`
-	Digest         string `json:"digest"`
+	ThresholdBytes int  `json:"thresholdBytes"`
+	OverBudget     bool `json:"overBudget"`
+	// DescriptionBytesPerTool is the per-tool description ceiling in force
+	// (FR-19). It is in the report for the same reason the catalog budget is:
+	// a reader comparing two reports needs to know whether a difference in
+	// size came from the document or from a setting.
+	DescriptionBytesPerTool int    `json:"descriptionBytesPerTool"`
+	Digest                  string `json:"digest"`
 }
 
 // SecuritySummary states the posture a reader would otherwise have to infer
@@ -128,11 +133,11 @@ type Reason struct {
 // are the ones that did not make it.
 //
 //nolint:gocritic // hugeParam: Options is configuration read once per build; a pointer would let a callee change what the report describes.
-func buildReport(operations []domain.Operation, tools []Tool, excluded map[domain.OperationKey]domain.ReasonCode, digest string, opts Options) Report {
+func buildReport(operations []domain.Operation, tools []Tool, excluded map[domain.OperationKey]domain.ReasonCode, digest string, mode Mode, opts Options) Report {
 	report := Report{
 		SchemaVersion: ReportSchemaVersion,
 		ByReason:      map[domain.ReasonCode]int{},
-		Estimate:      estimate(tools, digest, opts),
+		Estimate:      estimate(tools, digest, mode, opts),
 		Security: SecuritySummary{
 			UnknownMutationsBlocked: !opts.Policy.AllowMutations,
 		},
@@ -238,17 +243,18 @@ func reasonsFor(op *domain.Operation) []Reason {
 // estimate measures the published catalog and states which mode it needs.
 //
 //nolint:gocritic // hugeParam: Options is configuration read once per build; a pointer would let a callee change what the report describes.
-func estimate(tools []Tool, digest string, opts Options) Estimate {
+func estimate(tools []Tool, digest string, mode Mode, opts Options) Estimate {
 	bytes := serializedBytes(tools)
 	threshold := opts.maxSerializedBytes()
 
 	out := Estimate{
-		Mode:            opts.mode(),
-		ToolCount:       len(tools),
-		SerializedBytes: bytes,
-		ThresholdBytes:  threshold,
-		OverBudget:      bytes > threshold,
-		Digest:          digest,
+		Mode:                    mode,
+		ToolCount:               len(tools),
+		SerializedBytes:         bytes,
+		ThresholdBytes:          threshold,
+		OverBudget:              bytes > threshold,
+		DescriptionBytesPerTool: opts.descriptionBytesPerTool(),
+		Digest:                  digest,
 	}
 	out.Recommended = ModeTools
 	if out.OverBudget {

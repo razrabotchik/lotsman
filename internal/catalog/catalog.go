@@ -24,6 +24,10 @@ const maxNameBytes = 64
 // example config in docs/spec.md (`descriptionBytesPerTool: 1200`).
 const descriptionByteBudget = 1200
 
+// DefaultDescriptionBytesPerTool is that ceiling under the name the example
+// configuration gives it (docs/spec.md §5.1).
+const DefaultDescriptionBytesPerTool = descriptionByteBudget
+
 // Tool is one MCP-facing entry derived from a supported domain.Operation.
 type Tool struct {
 	Name         string              `json:"name"`
@@ -105,6 +109,11 @@ type Options struct {
 	Mode Mode
 	// MaxSerializedBytes is the catalog budget auto mode decides against.
 	MaxSerializedBytes int
+	// DescriptionBytesPerTool is the per-tool description ceiling (FR-19).
+	// Zero means the documented default, in this one place, so that nothing
+	// downstream has to decide what an unset budget means -- which is how a
+	// budget turns into no budget.
+	DescriptionBytesPerTool int
 
 	Policy policy.Config
 	// Auth holds the configured credential profiles. Which operations can be
@@ -138,6 +147,14 @@ func (o Options) maxSerializedBytes() int {
 		return DefaultMaxSerializedBytes
 	}
 	return o.MaxSerializedBytes
+}
+
+//nolint:gocritic // hugeParam: Options is configuration read once per build; a pointer would let a callee change what the report describes.
+func (o Options) descriptionBytesPerTool() int {
+	if o.DescriptionBytesPerTool <= 0 {
+		return DefaultDescriptionBytesPerTool
+	}
+	return o.DescriptionBytesPerTool
 }
 
 // Build derives a deterministic tool catalog from parsed operations.
@@ -194,7 +211,7 @@ func Build(specDigest string, operations []domain.Operation, opts Options) Catal
 			OperationKey:      op.Key,
 			Method:            op.Method,
 			PathTemplate:      op.PathTemplate,
-			Description:       description(op),
+			Description:       description(op, opts.descriptionBytesPerTool()),
 			Tags:              sanitizeTags(op.Tags),
 			Servers:           op.Servers,
 			Input:             op.Input,
@@ -221,22 +238,35 @@ func Build(specDigest string, operations []domain.Operation, opts Options) Catal
 		tools = append(tools, tool)
 	}
 
-	catalogDigest := digest(tools)
+	// The mode is resolved before the digest, because it is part of what the
+	// digest identifies. `auto` follows the measurement; an explicit mode is
+	// obeyed even when the measurement disagrees, and the report says both so
+	// a pinned choice is visible rather than silent.
+	recommended := recommendedMode(tools, opts)
+	mode := recommended
+	if requested := opts.mode(); requested != ModeAuto {
+		mode = requested
+	}
+
+	catalogDigest := digest(mode, tools)
 	built := Catalog{
 		SpecDigest: specDigest,
 		Tools:      tools,
 		Digest:     catalogDigest,
-		Report:     buildReport(operations, tools, overlaid.Excluded, catalogDigest, opts),
+		Mode:       mode,
+		Report:     buildReport(operations, tools, overlaid.Excluded, catalogDigest, mode, opts),
 	}
-	// `auto` follows the measurement; an explicit mode is obeyed even when the
-	// measurement disagrees, and the report says both so a pinned choice is
-	// visible rather than silent.
-	built.Mode = built.Report.Estimate.Recommended
-	if requested := opts.mode(); requested != ModeAuto {
-		built.Mode = requested
-	}
-	built.Report.Estimate.Mode = built.Mode
 	return built
+}
+
+// recommendedMode is what the measurement says this catalog needs.
+//
+//nolint:gocritic // hugeParam: Options is configuration read once per build; a pointer would let a callee change what the report describes.
+func recommendedMode(tools []Tool, opts Options) Mode {
+	if serializedBytes(tools) > opts.maxSerializedBytes() {
+		return ModeSearch
+	}
+	return ModeTools
 }
 
 // nameCharset is the portable charset a real desktop client accepted
@@ -307,12 +337,12 @@ func withCollisionSuffix(base string, key domain.OperationKey) string {
 // characters are stripped, and the result is capped to the per-tool byte
 // budget. The source spec is untrusted text that reaches an LLM's context,
 // so this is a security control, not cosmetics.
-func description(op *domain.Operation) string {
+func description(op *domain.Operation, budget int) string {
 	text := op.Summary
 	if text == "" {
 		text = op.Description
 	}
-	return budgetBytes(sanitizeText(text), descriptionByteBudget)
+	return budgetBytes(sanitizeText(text), budget)
 }
 
 var controlChars = regexp.MustCompile(`[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]`)
@@ -351,10 +381,21 @@ func budgetBytes(s string, n int) string {
 // stage 4). Field order is fixed by the Tool struct, so json.Marshal is
 // stable across runs (Go's encoding/json is deterministic for struct
 // fields).
-func digest(tools []Tool) string {
+// digest identifies what a client will be shown, which is the tool set *and*
+// the mode it is shown in.
+//
+// The mode belongs in it because `tools/list` differs entirely between the
+// two -- one tool per operation, or five meta-tools over the same catalog. A
+// digest that ignored the mode would let FR-74's cache hint point a client at
+// a tool list that no longer exists, and would let a reload that changed only
+// the mode decide there was nothing to publish.
+func digest(mode Mode, tools []Tool) string {
 	// Marshal errors are impossible here: Tool has no channel/func/complex
 	// fields, so this is intentionally not error-checked.
-	b, _ := json.Marshal(tools)
+	b, _ := json.Marshal(struct {
+		Mode  Mode   `json:"mode"`
+		Tools []Tool `json:"tools"`
+	}{Mode: mode, Tools: tools})
 	sum := sha256.Sum256(b)
 	return "sha256:" + hex.EncodeToString(sum[:])
 }

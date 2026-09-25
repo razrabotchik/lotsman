@@ -340,6 +340,15 @@ type Server struct {
 // Catalog mirrors the catalog section: what gets published, before any
 // question of what may be called.
 type Catalog struct {
+	// Mode requests a publication mode: tools, search or auto. Empty means
+	// auto, which is what the documented example says.
+	Mode string `yaml:"mode,omitempty"`
+	// MaxSerializedBytes is the budget auto mode measures a catalog against.
+	// Zero means the documented default; a negative value is refused, because
+	// "no budget" is not a budget.
+	MaxSerializedBytes int `yaml:"maxSerializedBytes,omitempty"`
+	// DescriptionBytesPerTool is the per-tool description ceiling (FR-19).
+	DescriptionBytesPerTool int `yaml:"descriptionBytesPerTool,omitempty"`
 	// IncludeTags publishes only the operations carrying at least one of
 	// these tags (docs/spec.md 5.1). An empty list publishes everything.
 	IncludeTags []string `yaml:"includeTags,omitempty"`
@@ -436,6 +445,9 @@ func (f *File) validate() error {
 	if err := validateServer(&f.Server); err != nil {
 		return err
 	}
+	if err := validateCatalog(&f.Catalog); err != nil {
+		return err
+	}
 	for _, list := range []struct {
 		name  string
 		rules []Rule
@@ -449,6 +461,39 @@ func (f *File) validate() error {
 	for i := range f.OperationOverrides {
 		if err := f.validateOverride(i, &f.OperationOverrides[i]); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// knownModes are the publication modes docs/spec.md §5.1 names. The catalog
+// package owns the values; this is the spelling an operator writes.
+var knownModes = map[string]bool{"tools": true, "search": true, "auto": true}
+
+// validateCatalog refuses a catalog section that could only produce a surface
+// nobody asked for.
+//
+// A budget of zero means "the documented default" and is the shape of an
+// omitted field. A negative one is refused rather than read as "unlimited":
+// these numbers exist to bound what reaches a model's context, and an
+// operator writing -1 is not asking for that bound to disappear, they have
+// made a mistake.
+func validateCatalog(catalog *Catalog) error {
+	if catalog.Mode != "" && !knownModes[catalog.Mode] {
+		return errs.Errorf(errs.ClassUsage,
+			"config: catalog.mode %q is not tools, search or auto", catalog.Mode)
+	}
+	for _, budget := range []struct {
+		field string
+		value int
+	}{
+		{"maxSerializedBytes", catalog.MaxSerializedBytes},
+		{"descriptionBytesPerTool", catalog.DescriptionBytesPerTool},
+	} {
+		if budget.value < 0 {
+			return errs.Errorf(errs.ClassUsage,
+				"config: catalog.%s is %d; a budget may be omitted but not negative",
+				budget.field, budget.value)
 		}
 	}
 	return nil
