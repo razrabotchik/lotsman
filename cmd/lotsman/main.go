@@ -101,7 +101,7 @@ That is a read-only agent against one origin, with no credentials. The rest is o
 Large APIs: one tool per operation stops working above a catalog a model can hold (65 Kubernetes
 operations weigh 2.2 MB of tool definitions). --mode=auto, the default, switches to five
 meta-tools -- search, describe, then call -- when the measured catalog does not fit; the same
-5.5 KB whether the API has 65 operations or 631. Pin --mode=tools to get the full list anyway.
+5.3 KB whether the API has 65 operations or 631. Pin --mode=tools to get the full list anyway.
 
 Flags:
   --base-url URL           the origin you authorize; a URL from the document is not authorization
@@ -113,7 +113,8 @@ Flags:
   --transport stdio|http   serve: stdio (default) or the stateless Streamable HTTP profile
   --listen HOST:PORT       serve --transport=http: bind address (default 127.0.0.1:8080)
   --drain-timeout D        serve --transport=http: how long shutdown waits for calls in flight
-  --watch                  serve --transport=http: republish when the document changes (also SIGHUP)
+  --watch                  serve --transport=http: republish when the document or anything it
+                           references changes (also SIGHUP)
   --json                   inspect, version: machine-readable output
   --fail-on-rejected       inspect: exit 4 when any operation is rejected
   --supported|--rejected   operations: filter by translation support

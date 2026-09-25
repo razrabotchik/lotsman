@@ -35,7 +35,7 @@ cannot translate exactly. Measured against vendor specifications (docs/corpus.md
 in the support matrix rather than discovered at run time.
 
 Two publication modes. Tools mode gives one tool per operation. Search mode gives five meta-tools
-over a local lexical index for catalogs that do not fit a model's context — a constant 5.2 KB of
+over a local lexical index for catalogs that do not fit a model's context — a constant 5.3 KB of
 `tools/list` whether the API has 65 operations or 631 — with the effect gate re-applied on every
 call, so a search result is discovery and never permission.
 
@@ -106,7 +106,7 @@ resolve names itself, and the document still pointed at the old ones.
 ## Known limits worth stating before someone finds them
 
 - **A large catalog is large, and search mode moves the cost rather than removing it.** Kubernetes
-  `apps/v1` publishes 2.23 MB of tool definitions in tools mode and 5.2 KB in search mode, but the
+  `apps/v1` publishes 2.23 MB of tool definitions in tools mode and 5.3 KB in search mode, but the
   schema a model needs to create a Deployment is still 38 895 bytes *after* every description is
   dropped. `inspect` reports the measurement either way, so the trade is visible before it is felt.
 - **A path template containing `?` or `#` used to change the request silently.** Everything after
