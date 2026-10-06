@@ -134,8 +134,24 @@ mutate() {
 		return
 	fi
 
+	# Bounded in memory as well as in time, and for the same reason: some of
+	# these mutations remove the very bound that keeps a run finite. The
+	# redirect one removed a hop limit, and `http.Client` keeps every hop's
+	# request alive to hand to CheckRedirect -- so the package ate 91 GB on a
+	# developer's machine before any timeout could fire. A test that dies of
+	# an allocation failure is still a test that noticed; a machine that dies
+	# of one tells nobody anything.
+	#
+	# The limit is virtual address space, which is what the Go runtime asks the
+	# kernel for, and 8 GiB is far above what any package here needs (the
+	# largest measures 275 MB resident) and far below what an unbounded loop
+	# reaches in seconds. This script does not run the race detector, whose
+	# shadow memory would need a much higher ceiling.
 	local status=0
-	timeout --signal=TERM --kill-after=10 180 go test -count=1 -timeout 100s "$pkg" >/dev/null 2>&1 || status=$?
+	(
+		ulimit -v $((8 * 1024 * 1024)) 2>/dev/null || true
+		exec timeout --signal=TERM --kill-after=10 180 go test -count=1 -timeout 100s "$pkg"
+	) >/dev/null 2>&1 || status=$?
 	if [ "$status" -eq 0 ]; then
 		printf '%-48s NOT CAUGHT\n' "$name"
 		failures=$((failures + 1))
