@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -24,8 +25,12 @@ import (
 
 const (
 	defaultAddr = "127.0.0.1:18080"
-	apiKey      = "demo-secret"
-	bearerToken = "demo-token"
+	// defaultTLSAddr exists because lotsman refuses a plaintext token endpoint:
+	// `authProfiles[].tokenURL` must be https, loopback included. Without this
+	// listener the client-credentials path could not be tried by hand.
+	defaultTLSAddr = "127.0.0.1:18443"
+	apiKey         = "demo-secret"
+	bearerToken    = "demo-token"
 )
 
 //go:embed openapi.yaml
@@ -61,6 +66,9 @@ func main() {
 // shutdown) actually runs: os.Exit skips defers, so only main may call it.
 func run() int {
 	addr := flag.String("addr", defaultAddr, "listen address")
+	tlsAddr := flag.String("tls-addr", defaultTLSAddr,
+		"TLS listen address; empty disables it (a token endpoint has to be https)")
+	certDir := flag.String("cert-dir", os.TempDir(), "where to write the generated certificate")
 	flag.Parse()
 	if flag.NArg() != 0 {
 		fmt.Fprintf(os.Stderr, "api-gateway: unexpected argument %q\n", flag.Arg(0))
@@ -68,11 +76,40 @@ func run() int {
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	server := &http.Server{
+	// One handler, two listeners: the same API over plain HTTP and over TLS, so
+	// a document can name either and nothing differs but the scheme.
+	handler := newHandler(logger)
+	plain := &http.Server{
 		Addr:              *addr,
-		Handler:           newHandler(logger),
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       30 * time.Second,
+	}
+	servers := []*http.Server{plain}
+
+	var secure *http.Server
+	if *tlsAddr != "" {
+		cert, err := newCertificate(*certDir)
+		if err != nil {
+			logger.Error("cannot serve TLS", "error", err)
+			return 1
+		}
+		secure = &http.Server{
+			Addr:              *tlsAddr,
+			Handler:           handler,
+			ReadHeaderTimeout: 5 * time.Second,
+			IdleTimeout:       30 * time.Second,
+			TLSConfig: &tls.Config{
+				Certificates: []tls.Certificate{cert.tls},
+				MinVersion:   tls.VersionTLS12,
+			},
+		}
+		servers = append(servers, secure)
+		logger.Info("TLS listener ready",
+			"address", "https://"+*tlsAddr,
+			"token_endpoint", "https://"+*tlsAddr+"/oauth/token",
+			"certificate", cert.path,
+			"hint", "point SSL_CERT_FILE at the certificate so a client trusts it")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -81,15 +118,25 @@ func run() int {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			logger.Error("shutdown failed", "error", err)
+		for _, server := range servers {
+			if err := server.Shutdown(shutdownCtx); err != nil {
+				logger.Error("shutdown failed", "address", server.Addr, "error", err)
+			}
 		}
 	}()
 
+	failed := make(chan error, len(servers))
+	if secure != nil {
+		go func() { failed <- secure.ListenAndServeTLS("", "") }()
+	}
 	logger.Info("development API listening",
 		"address", "http://"+*addr,
 		"openapi", "http://"+*addr+"/openapi.yaml")
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	go func() { failed <- plain.ListenAndServe() }()
+
+	// Either listener failing ends the process: a fixture serving half of what
+	// it advertises is worse than one that stops and says so.
+	if err := <-failed; err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("server failed", "error", err)
 		return 1
 	}
@@ -111,6 +158,15 @@ func newHandler(logger *slog.Logger) http.Handler {
 	mux.HandleFunc("GET /v1/redirect", redirect)
 	mux.HandleFunc("GET /v1/large", large)
 	mux.HandleFunc("GET /v1/slow", slow)
+
+	// The rest lives in its own files, each registering what it implements, so
+	// adding a surface to exercise does not mean editing this list by hand.
+	s.registerWrites(mux)
+	registerMirror(mux)
+	registerShapes(mux)
+	registerRefused(mux)
+	newTokens().register(mux)
+
 	return requestLogger(logger, mux)
 }
 

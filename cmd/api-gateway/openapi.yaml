@@ -91,7 +91,36 @@ paths:
         "204": {description: Pet deleted}
         "401": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
-
+    put:
+      operationId: replacePet
+      summary: Replace a pet (a write; blocked unless mutations are allowed)
+      security: [{apiKey: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/NewPet"}
+      responses:
+        "200": {description: Replaced}
+        "201": {description: Created}
+        "401": {$ref: "#/components/responses/Error"}
+    patch:
+      operationId: patchPet
+      summary: Merge-patch a pet (one media type, and not application/json)
+      security: [{apiKey: []}]
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                name: {type: string, minLength: 1}
+                tags: {type: array, items: {type: string}}
+      responses:
+        "200": {description: Patched}
+        "404": {$ref: "#/components/responses/Error"}
   /v1/secure/profile:
     get:
       operationId: getSecureProfile
@@ -168,6 +197,379 @@ paths:
       responses:
         "200": {description: Delay completed}
 
+  # --- a POST whose effect its method cannot reveal -------------------------
+
+  /v1/pets/{petId}/actions/rename:
+    post:
+      operationId: renamePet
+      summary: Rename a pet; a POST whose effect the method cannot reveal
+      description: >-
+        lotsman classifies this as unknown and refuses it by default. Declare
+        it in the configuration (operationOverrides[].effect) to see the other
+        half of the gate.
+      security: [{apiKey: []}]
+      parameters:
+        - {name: petId, in: path, required: true, schema: {type: integer, minimum: 1}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name: {type: string, minLength: 1}
+      responses:
+        "200": {description: Renamed}
+
+  # --- the mirror: what did lotsman actually put on the wire? ---------------
+
+  /v1/mirror/{segment}:
+    get:
+      operationId: mirrorRequest
+      summary: Reflect the request back - path encoding, query, headers, body
+      description: >-
+        The endpoint for checking serialization rather than inferring it. Put a
+        reserved character in the path slot and read `segments`: a value that
+        stayed one segment was encoded, a value that became two was not.
+      parameters:
+        - name: segment
+          in: path
+          required: true
+          description: Anything; it is reflected, not interpreted
+          schema: {type: string}
+        - name: tag
+          in: query
+          description: Repeatable - an exploded array arrives as repeated keys
+          schema: {type: array, items: {type: string}}
+          style: form
+          explode: true
+        - name: csv
+          in: query
+          description: The same array unexploded - one key, comma-separated
+          schema: {type: array, items: {type: string}}
+          style: form
+          explode: false
+        - name: reserved
+          in: query
+          description: Reserved characters are percent-encoded unless told otherwise
+          schema: {type: string}
+        - name: X-Trace
+          in: header
+          description: A header a document may set
+          schema: {type: string}
+      responses:
+        "200": {description: The request, reflected}
+    post:
+      operationId: mirrorBody
+      summary: Reflect a JSON body back exactly as it arrived
+      parameters:
+        - {name: segment, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Any object; it is reflected as `bodyJSON`
+              additionalProperties: true
+      responses:
+        "200": {description: The request, reflected}
+
+  # --- response shapes: what does a model end up seeing? --------------------
+
+  /v1/shapes/no-content:
+    get:
+      operationId: getNoContent
+      summary: 204 with no body - "no content" must not read as "no answer"
+      responses:
+        "204": {description: No content}
+
+  /v1/shapes/text:
+    get:
+      operationId: getPlainText
+      summary: A body that is not JSON and does not claim to be
+      responses:
+        "200":
+          description: Plain text
+          content:
+            text/plain:
+              schema: {type: string}
+
+  /v1/shapes/binary:
+    get:
+      operationId: getBinary
+      summary: Bytes that are not text, including a NUL and invalid UTF-8
+      responses:
+        "200":
+          description: Binary
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+
+  /v1/shapes/cookie:
+    get:
+      operationId: getCookieAndCredentialHeaders
+      summary: Answers with Set-Cookie and Authorization - neither may reach a model
+      responses:
+        "200": {description: Headers a runtime must not forward}
+
+  /v1/shapes/rate-limited:
+    get:
+      operationId: getRateLimited
+      summary: 429 with RateLimit headers, which are on the allowlist on purpose
+      responses:
+        "429": {$ref: "#/components/responses/Error"}
+
+  /v1/shapes/problem:
+    get:
+      operationId: getProblemDocument
+      summary: application/problem+json, an error body worth showing verbatim
+      responses:
+        "422":
+          description: A problem document
+          content:
+            application/problem+json:
+              schema: {type: object}
+
+  /v1/shapes/gzip:
+    get:
+      operationId: getGzipped
+      summary: A compressed body, so the byte cap measures the body and not the wire
+      parameters:
+        - {name: bytes, in: query, schema: {type: integer, minimum: 1, maximum: 4194304, default: 65536}}
+      responses:
+        "200":
+          description: Gzipped JSON
+          content:
+            application/json:
+              schema: {type: object}
+
+  /v1/shapes/drip:
+    get:
+      operationId: getDrippingBody
+      summary: A body sent chunk by chunk - the idle phase of a time budget
+      parameters:
+        - {name: chunks, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 5}}
+        - {name: ms, in: query, schema: {type: integer, minimum: 0, maximum: 10000, default: 200}}
+      responses:
+        "200":
+          description: Chunks
+          content:
+            text/plain:
+              schema: {type: string}
+
+  /v1/shapes/headers:
+    get:
+      operationId: getManyHeaders
+      summary: Many response headers, and one long one
+      parameters:
+        - {name: count, in: query, schema: {type: integer, minimum: 1, maximum: 500, default: 50}}
+        - {name: length, in: query, schema: {type: integer, minimum: 1, maximum: 8192, default: 64}}
+      responses:
+        "200": {description: A header map worth bounding}
+
+  /v1/redirect/loop:
+    get:
+      operationId: getRedirectLoop
+      summary: A redirect to itself - never followed, so never a loop
+      responses:
+        "302": {description: Found}
+
+  /v1/redirect/chain:
+    get:
+      operationId: getRedirectChain
+      summary: A counted redirect chain
+      parameters:
+        - {name: hops, in: query, schema: {type: integer, minimum: 0, maximum: 50, default: 3}}
+      responses:
+        "302": {description: Found}
+        "200": {description: Arrived}
+
+  /v1/redirect/external:
+    get:
+      operationId: getRedirectExternal
+      summary: A redirect to another origin - the reason the guard exists
+      responses:
+        "302": {description: Found}
+
+  # --- a credential lotsman obtains rather than reads -----------------------
+
+  /v1/minted/profile:
+    get:
+      operationId: getMintedProfile
+      summary: Requires a token lotsman minted from a client id and secret
+      security: [{serviceAuth: []}]
+      responses:
+        "200": {description: The profile, and a fingerprint of the token presented}
+        "401": {description: No usable token}
+
+  /v1/minted/stale-once:
+    get:
+      operationId: getStaleOnce
+      summary: Refuses the first call ever - the retry after a re-mint succeeds
+      description: >-
+        The ordinary shape of an expired token. Call it once and read
+        /oauth/stats: two mints and a 200 means lotsman re-minted and retried.
+      security: [{serviceAuth: []}]
+      responses:
+        "200": {description: Accepted after the retry}
+        "401": {description: The first call, always}
+
+  /v1/minted/always-stale:
+    get:
+      operationId: getAlwaysStale
+      summary: Refuses every new token once - so the retry happens exactly once
+      description: >-
+        No re-mint can satisfy this endpoint, which is how the bound is visible:
+        the second 401 is the API's answer and reaches the caller. One extra
+        mint per call, never a loop.
+      security: [{serviceAuth: []}]
+      responses:
+        "200": {description: Never, in practice}
+        "401": {description: Both the call and its retry}
+
+  /oauth/stats:
+    get:
+      operationId: getTokenStats
+      summary: How many tokens were minted, and what the last mint asked for
+      responses:
+        "200": {description: Counters a reader can assert on}
+
+  # --- declared on purpose, refused on purpose ------------------------------
+
+  /v1/forms/urlencoded:
+    post:
+      operationId: postUrlencodedForm
+      summary: A form body (refused - unsupported_media_type)
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                name: {type: string}
+                tags: {type: string}
+      responses:
+        "200": {description: Fields}
+
+  /v1/forms/multipart:
+    post:
+      operationId: postMultipartForm
+      summary: A multipart body (refused - unsupported_media_type)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                name: {type: string}
+                attachment: {type: string, format: binary}
+      responses:
+        "200": {description: Field and file}
+
+  /v1/filters:
+    get:
+      operationId: getFiltered
+      summary: deepObject and delimited arrays (refused - unsupported_parameter_style)
+      parameters:
+        - name: filter
+          in: query
+          style: deepObject
+          explode: true
+          schema:
+            type: object
+            properties:
+              name: {type: string}
+              tag: {type: string}
+        - name: tags
+          in: query
+          style: spaceDelimited
+          explode: false
+          schema: {type: array, items: {type: string}}
+        - name: ids
+          in: query
+          style: pipeDelimited
+          explode: false
+          schema: {type: array, items: {type: integer}}
+      responses:
+        "200": {description: What arrived}
+
+  /v1/session:
+    get:
+      operationId: getSession
+      summary: A cookie parameter - published, never executable (parameters_not_implemented)
+      parameters:
+        - {name: session, in: cookie, required: true, schema: {type: string}}
+      responses:
+        "200": {description: A fingerprint of the cookie}
+
+  /v1/pets/{petId}/competing:
+    patch:
+      operationId: patchPetCompeting
+      summary: Four patch media types at once (refused - the Kubernetes shape)
+      security: [{apiKey: []}]
+      parameters:
+        - {name: petId, in: path, required: true, schema: {type: integer, minimum: 1}}
+      requestBody:
+        required: true
+        content:
+          application/json-patch+json: {schema: {type: array, items: {type: object}}}
+          application/merge-patch+json: {schema: {type: object}}
+          application/strategic-merge-patch+json: {schema: {type: object}}
+          application/apply-patch+yaml: {schema: {type: object}}
+      responses:
+        "200": {description: Which media type was used}
+
+  /v1/conditional:
+    post:
+      operationId: postConditional
+      summary: A body whose shape depends on its contents (refused - unsupported_body_schema)
+      description: >-
+        if/then/else in a request schema. Twenty-one DigitalOcean operations are
+        refused for exactly this, and the refusal is the point: a validator that
+        guessed which branch applied would accept arguments the API rejects.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                kind: {type: string, enum: [product, person]}
+                sku: {type: string}
+                email: {type: string}
+              if: {properties: {kind: {const: product}}}
+              then: {required: [sku]}
+              else: {required: [email]}
+      responses:
+        "200": {description: Which shape was recognised}
+
+  /v1/variants:
+    post:
+      operationId: postVariant
+      summary: A body that is one of two shapes - oneOf, which is supported
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  required: [sku]
+                  properties:
+                    sku: {type: string}
+                    price: {type: number}
+                - type: object
+                  required: [email]
+                  properties:
+                    email: {type: string, format: email}
+      responses:
+        "200": {description: Which shape was recognised}
+
 components:
   securitySchemes:
     apiKey:
@@ -177,6 +579,18 @@ components:
     bearer:
       type: http
       scheme: bearer
+    serviceAuth:
+      type: oauth2
+      description: >-
+        The token endpoint is https because lotsman refuses a plaintext one,
+        loopback included. The fixture generates a certificate at startup and
+        prints where it wrote it; point SSL_CERT_FILE at that file.
+      flows:
+        clientCredentials:
+          tokenUrl: https://127.0.0.1:18443/oauth/token
+          scopes:
+            pets:read: Read pets
+            pets:write: Change pets
   schemas:
     Pet:
       type: object
