@@ -178,9 +178,7 @@ func New(opts *Options) *mcp.Server {
 	addCacheHints(srv, opts.catalogDigest())
 
 	outbound := opts.egressPolicy()
-	runners := newRunners(catalogTools(opts.Catalog), opts.httpClient(), opts.BaseURL, &outbound,
-		opts.logger(), approver{mode: opts.approval(), log: opts.logger()}, opts.auditSink(),
-		opts.MaxResponseBytes)
+	runners := newRunners(opts, &outbound)
 
 	// Two front doors, one call path. In search mode the catalog is too large
 	// to publish as tools, so five meta-tools stand in front of the same

@@ -159,10 +159,13 @@ func Parse(ctx context.Context, specBytes []byte, opts Options) (*Document, erro
 			"openapi: document declares %d operations, limit is %d", count, limits.maxOperations())
 	}
 
-	rootServers := model.Model.Servers
-	var schemes *orderedmap.Map[string, *v3.SecurityScheme]
+	scope := documentScope{
+		namespace:    opts.Namespace,
+		rootServers:  model.Model.Servers,
+		rootSecurity: model.Model.Security,
+	}
 	if model.Model.Components != nil {
-		schemes = model.Model.Components.SecuritySchemes
+		scope.schemes = model.Model.Components.SecuritySchemes
 	}
 	for _, path := range paths {
 		item, _ := model.Model.Paths.PathItems.Get(path)
@@ -171,8 +174,8 @@ func Parse(ctx context.Context, specBytes []byte, opts Options) (*Document, erro
 			if op == nil {
 				continue
 			}
-			out.Operations = append(out.Operations,
-				buildOperation(opts.Namespace, m.name, path, op, item.Parameters, item.Servers, rootServers, model.Model.Security, schemes))
+			out.Operations = append(out.Operations, buildOperation(m.name, op,
+				pathScope{template: path, params: item.Parameters, servers: item.Servers}, scope))
 		}
 	}
 	attachRefDiagnostics(out.Operations, scan.diagnostics)
@@ -324,20 +327,53 @@ func countOperations(model *libopenapi.DocumentModel[v3.Document], paths []strin
 	return count
 }
 
-func buildOperation(namespace, method, path string, op *v3.Operation, pathParams []*v3.Parameter, pathServers, rootServers []*v3.Server, rootSecurity []*base.SecurityRequirement, schemes *orderedmap.Map[string, *v3.SecurityScheme]) domain.Operation {
+// documentScope is what every operation in one document shares: the namespace
+// it is keyed under, and the fallbacks the document itself declares.
+//
+// It exists because the alternative was ten positional parameters, two of them
+// adjacent `[]*v3.Server` -- servers from the path item and servers from the
+// document root. Swapping those two compiles, passes every type check, and
+// silently inverts the precedence OpenAPI defines for them. A field name is
+// the cheapest thing that cannot be swapped by accident.
+type documentScope struct {
+	namespace string
+	// rootServers are the document's own servers: the last fallback when
+	// neither the operation nor the path item names one.
+	rootServers []*v3.Server
+	// rootSecurity is the document-level requirement an operation inherits
+	// when it declares none.
+	rootSecurity []*base.SecurityRequirement
+	// schemes are the security scheme definitions a requirement refers to by
+	// name.
+	schemes *orderedmap.Map[string, *v3.SecurityScheme]
+}
+
+// pathScope is what the operations under one path template share.
+type pathScope struct {
+	template string
+	// params are the path item's parameters, which merge with the
+	// operation's own.
+	params []*v3.Parameter
+	// servers are the path item's servers: the fallback before the
+	// document's.
+	servers []*v3.Server
+}
+
+func buildOperation(method string, op *v3.Operation, in pathScope, scope documentScope) domain.Operation {
+	path := in.template
 	result := domain.Operation{
-		Key:               domain.NewOperationKey(namespace, method, path),
+		Key:               domain.NewOperationKey(scope.namespace, method, path),
 		SourceOperationID: op.OperationId,
 		Method:            method,
 		PathTemplate:      path,
 		Summary:           op.Summary,
 		Description:       op.Description,
 		Tags:              append([]string(nil), op.Tags...),
-		Servers:           effectiveServers(op.Servers, pathServers, rootServers),
+		Servers:           effectiveServers(op.Servers, in.servers, scope.rootServers),
 	}
 
 	pointer := operationPointer(method, path)
-	merged := mergeParameters(pathParams, op.Parameters)
+	merged := mergeParameters(in.params, op.Parameters)
 
 	result.Effect = policy.Decide(policy.Candidate{
 		Method:       method,
@@ -366,7 +402,7 @@ func buildOperation(namespace, method, path string, op *v3.Operation, pathParams
 	// configuration, not on the document, so that verdict belongs downstream
 	// (catalog, which knows the configured profiles). The IR states only what
 	// the document asks for.
-	result.Security = buildSecurity(op.Security, rootSecurity, schemes)
+	result.Security = buildSecurity(op.Security, scope.rootSecurity, scope.schemes)
 	security := evaluateSecurity(result.Security)
 
 	rejections := input.rejections

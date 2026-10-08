@@ -267,7 +267,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 		Audit: audit.Log(logger),
 	}
 	if spec != "" {
-		cat, err := loadCatalog(ctx, spec, logger, runtime.Lax, runtime, catalogMode, watched)
+		cat, err := loadCatalog(ctx, spec, logger, runtime, catalogMode, watched)
 		if err != nil {
 			logger.Error("load spec failed", "class", string(errs.ClassOf(err)), "error", err)
 			return exitCode(err)
@@ -277,7 +277,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 	}
 
 	source := func(ctx context.Context) (*catalog.Catalog, error) {
-		return loadCatalog(ctx, spec, logger, runtime.Lax, runtime, catalogMode, watched)
+		return loadCatalog(ctx, spec, logger, runtime, catalogMode, watched)
 	}
 	if err := runTransport(ctx, runtime, &opts, source, reloadTriggers(spec, *watch, watched)); err != nil {
 		logger.Error("serve failed", "class", string(errs.ClassOf(err)), "error", err)
@@ -394,7 +394,7 @@ func (w *watchSet) documents() []string {
 // `serve SPEC`.
 //
 //nolint:gocritic // hugeParam: Runtime is resolved configuration, copied per call so no callee holds a pointer to the decision its caller already made.
-func loadCatalog(ctx context.Context, spec string, logger *slog.Logger, lax bool, runtime config.Runtime, mode catalog.Mode, watched *watchSet) (*catalog.Catalog, error) {
+func loadCatalog(ctx context.Context, spec string, logger *slog.Logger, runtime config.Runtime, mode catalog.Mode, watched *watchSet) (*catalog.Catalog, error) {
 	doc, err := parseSpec(ctx, spec, runtime.Root, logger)
 	if err != nil {
 		return nil, err
@@ -412,7 +412,7 @@ func loadCatalog(ctx context.Context, spec string, logger *slog.Logger, lax bool
 	if doc.HasErrors() {
 		return nil, errs.Errorf(errs.ClassSpecInvalid, "invalid spec: document contains error diagnostics")
 	}
-	if !lax {
+	if !runtime.Lax {
 		for i := range doc.Operations {
 			if op := &doc.Operations[i]; op.Support.Level != domain.SupportSupported {
 				return nil, errs.Errorf(errs.ClassUnsupported, "unsupported operation %s: %s (use --lax to serve the supported subset)", op.Key, joinReasons(op.Support.Reasons))

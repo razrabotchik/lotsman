@@ -170,29 +170,30 @@ paths:
 	}
 }
 
-// specIdentityOf runs `inspect --json` and returns the spec identity.
-func specIdentityOf(t *testing.T, specPath string) struct {
+// reportedSpec is the identity half of an `inspect` report: the root document's
+// digest, the manifest of everything it read, and the documents themselves.
+//
+// A named type rather than the anonymous struct this used to return: a seven
+// line type in a signature is one nobody can read at the call site, and it
+// cannot be reused by the next test that needs the same thing.
+type reportedSpec struct {
 	Digest         string `json:"digest"`
 	ManifestDigest string `json:"manifestDigest"`
 	References     []struct {
 		Path   string `json:"path"`
 		Digest string `json:"digest"`
 	} `json:"references"`
-} {
+}
+
+// specIdentityOf runs `inspect --json` and returns the spec identity.
+func specIdentityOf(t *testing.T, specPath string) reportedSpec {
 	t.Helper()
 	stdout, stderr, code := runCLI(t, "inspect", specPath, "--json")
 	if code != 0 {
 		t.Fatalf("inspect failed (%d): %s", code, stderr)
 	}
 	var report struct {
-		Spec struct {
-			Digest         string `json:"digest"`
-			ManifestDigest string `json:"manifestDigest"`
-			References     []struct {
-				Path   string `json:"path"`
-				Digest string `json:"digest"`
-			} `json:"references"`
-		} `json:"spec"`
+		Spec reportedSpec `json:"spec"`
 	}
 	if err := json.Unmarshal([]byte(stdout), &report); err != nil {
 		t.Fatalf("decode report: %v", err)

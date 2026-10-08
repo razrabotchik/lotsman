@@ -275,18 +275,28 @@ func subjectOf(ctx context.Context) string {
 }
 
 // newRunners prepares one runner per published tool, in catalog order.
-func newRunners(tools []catalog.Tool, client *http.Client, baseURL string, outbound *egress.Policy,
-	log logger, approval approver, sink audit.Sink, maxResponseBytes int) []runner {
+//
+// Everything it needs comes from the resolved options, so the options are what
+// it takes. The earlier form passed eight values the caller derived from them
+// one by one -- `opts.logger()` here, an approver built from `opts.approval()`
+// there -- and nothing made those derivations agree: a caller could hand the
+// runners one logger and the approval prompt another, and both would compile.
+func newRunners(opts *Options, outbound *egress.Policy) []runner {
+	tools := catalogTools(opts.Catalog)
+	log := opts.logger()
 	// One minter for the whole catalog: a token belongs to the credential,
 	// not to the operation, so two hundred tools bound to one profile hold
 	// one token between them.
+	client := opts.httpClient()
 	minter := auth.NewMinter(client)
 	runners := make([]runner, 0, len(tools))
 	for i := range tools {
 		tool := &tools[i]
 		prepared := runner{
-			tool: tool, baseURL: baseURL, egress: outbound, approval: approval,
-			audit: sink, maxResponseBytes: maxResponseBytes,
+			tool: tool, baseURL: opts.BaseURL, egress: outbound,
+			approval:         approver{mode: opts.approval(), log: log},
+			audit:            opts.auditSink(),
+			maxResponseBytes: opts.MaxResponseBytes,
 		}
 
 		switch {
