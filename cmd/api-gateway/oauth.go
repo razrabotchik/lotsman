@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -102,7 +103,14 @@ func (t *tokens) mint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token := randomToken()
+	token, err := randomToken()
+	if err != nil {
+		// A handler must not take the process down. The guide's rule is that a
+		// panic may not escape a package boundary; for a server the useful form
+		// of that is not escaping the request either.
+		writeOAuthError(w, http.StatusInternalServerError, "server_error", err.Error())
+		return
+	}
 	t.mu.Lock()
 	t.issued[token] = time.Now().Add(tokenLifetime)
 	t.mints++
@@ -224,14 +232,18 @@ func (t *tokens) accept(w http.ResponseWriter, r *http.Request) (string, bool) {
 	return token, true
 }
 
-func randomToken() string {
+// randomToken reads a token's worth of randomness.
+//
+// crypto/rand does not fail in practice, and the alternatives if it did are to
+// panic, to take the process down, or to issue a predictable token. The last is
+// the only unacceptable one, so this reports the failure and lets the handler
+// answer with it.
+func randomToken() (string, error) {
 	raw := make([]byte, 24)
 	if _, err := rand.Read(raw); err != nil {
-		// crypto/rand does not fail in practice, and a fixture that silently
-		// issued a predictable token would be worse than one that stops.
-		panic("api-gateway: cannot read random bytes: " + err.Error())
+		return "", fmt.Errorf("cannot read random bytes: %w", err)
 	}
-	return base64.RawURLEncoding.EncodeToString(raw)
+	return base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
 // fingerprint is enough of a token to tell two apart and not enough to use.
