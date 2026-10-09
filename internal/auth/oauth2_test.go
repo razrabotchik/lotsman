@@ -375,3 +375,44 @@ func TestAnUnusableClientSecretRefusesBeforeTheNetwork(t *testing.T) {
 		})
 	}
 }
+
+// A credential too short to redact is refused before the network, naming its
+// reference. A short username is not: it identifies, it does not
+// authenticate, and redacting "admin" would mangle every line that says it.
+func TestACredentialTooShortToRedactIsRefused(t *testing.T) {
+	var calls atomic.Int64
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer api.Close()
+	t.Setenv("LOTSMAN_TEST_SHORT", "12345")
+	t.Setenv("LOTSMAN_TEST_USER", "admin")
+	t.Setenv("LOTSMAN_TEST_PASSWORD", "CANARY-password-77")
+
+	refused := []config.Profile{
+		{Scheme: config.SchemeBearer, TokenRef: "env:LOTSMAN_TEST_SHORT"},
+		{Scheme: config.SchemeBasic, UsernameRef: "env:LOTSMAN_TEST_USER", PasswordRef: "env:LOTSMAN_TEST_SHORT"},
+	}
+	for _, profile := range refused {
+		client := Client(api.Client(), Binding{Credentials: []Credential{{Name: "api", Profile: profile}}}, nil)
+		_, err := client.Get(api.URL)
+		if err == nil {
+			t.Fatalf("%s: a five-character credential was sent", profile.Scheme)
+		}
+		if !errors.Is(err, redact.ErrTooShort) || !strings.Contains(err.Error(), "env:LOTSMAN_TEST_SHORT") {
+			t.Errorf("%s: %v, want a refusal naming the reference", profile.Scheme, err)
+		}
+	}
+	if calls.Load() != 0 {
+		t.Errorf("the API was called %d times", calls.Load())
+	}
+
+	accepted := config.Profile{Scheme: config.SchemeBasic, UsernameRef: "env:LOTSMAN_TEST_USER", PasswordRef: "env:LOTSMAN_TEST_PASSWORD"}
+	client := Client(api.Client(), Binding{Credentials: []Credential{{Name: "api", Profile: accepted}}}, nil)
+	res, err := client.Get(api.URL)
+	if err != nil {
+		t.Fatalf("a short username with a long password was refused: %v", err)
+	}
+	_ = res.Body.Close()
+}

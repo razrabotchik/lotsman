@@ -67,7 +67,9 @@ func New(inbound *config.InboundAuth, log *slog.Logger, client *http.Client) (Gu
 		// It is a credential like any other, even though it points the other
 		// way: whatever any package logs, the bytes leaving the process pass
 		// through this registry (FR-61).
-		redact.Add(token)
+		if err := redact.Register(token); err != nil {
+			return Guard{}, errs.Errorf(errs.ClassAuth, "inbound: %s is %w", inbound.TokenRef, err)
+		}
 		verify := auth.RequireBearerToken(staticBearer(token), bearerOptions())
 		return Guard{
 			Required: true,

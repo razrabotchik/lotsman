@@ -96,7 +96,11 @@ func (m *Minter) token(ctx context.Context, credential *Credential) (string, err
 			credential.Name, credential.Profile.TokenURL)
 	}
 	// A minted token is a secret the moment it exists.
-	redact.Add(token.AccessToken)
+	if err := redact.Register(token.AccessToken); err != nil {
+		return "", errs.Errorf(errs.ClassAuth,
+			"auth: profile %q received an access token from %s that is %w",
+			credential.Name, credential.Profile.TokenURL, err)
+	}
 	cached.token = token
 	return token.AccessToken, nil
 }

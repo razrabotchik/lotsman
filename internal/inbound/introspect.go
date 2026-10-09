@@ -164,7 +164,10 @@ func newIntrospection(oauth *config.InboundOAuth, log *slog.Logger, client *http
 		return nil, errs.Errorf(errs.ClassAuth,
 			"inbound: %s resolved to an empty introspection secret", oauth.Introspection.ClientSecretRef)
 	}
-	redact.Add(secret)
+	if err := redact.Register(secret); err != nil {
+		return nil, errs.Errorf(errs.ClassAuth,
+			"inbound: introspection secret %s is %w", oauth.Introspection.ClientSecretRef, err)
+	}
 
 	timeout := config.DefaultIntrospectionTimeout
 	if oauth.Introspection.Timeout != "" {

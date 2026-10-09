@@ -3,7 +3,9 @@ package redact
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -131,5 +133,64 @@ func TestHandlerKeepsRedactingUnderAGroup(t *testing.T) {
 	// structure a reader needs to know where a line came from.
 	if !strings.Contains(buf.String(), "upstream.authorization=") {
 		t.Errorf("the group was flattened or lost:\n%s", buf.String())
+	}
+}
+
+// One secret inside another: replacing the short one first leaves the rest of
+// the long one behind, and with map iteration that happened on some runs and
+// not others. The longest value wins, every time.
+func TestOverlappingSecretsAreRemovedWholeAndAlike(t *testing.T) {
+	short, long := "CANARY-abcdef", "CANARY-abcdef-and-then-some"
+	for range 50 {
+		r := newRegistry(short, long)
+		got := r.String("token=" + long + " other=" + short)
+		if got != "token="+Placeholder+" other="+Placeholder {
+			t.Fatalf("got %q", got)
+		}
+	}
+}
+
+// A secret added after the registry was used is redacted from then on.
+func TestASecretAddedLaterIsRedacted(t *testing.T) {
+	r := newRegistry(canary)
+	_ = r.String(canary)
+	r.Add("CANARY-rotated-0001")
+	if got := r.String("CANARY-rotated-0001"); got != Placeholder {
+		t.Errorf("got %q after a later Add", got)
+	}
+}
+
+// A credential too short to redact is refused, not accepted and then printed.
+func TestRegisterRefusesWhatItCannotRedact(t *testing.T) {
+	r := newRegistry()
+	if err := r.Register("12345"); !errors.Is(err, ErrTooShort) {
+		t.Errorf("Register(5 characters) = %v, want ErrTooShort", err)
+	}
+	if err := r.Register("123456"); err != nil {
+		t.Errorf("Register(6 characters) = %v", err)
+	}
+	if got := r.String("pin 123456"); got != "pin "+Placeholder {
+		t.Errorf("got %q", got)
+	}
+}
+
+// What a long-running process pays for rotation: every minted token stays
+// registered, because a response still in flight may quote the one before.
+// The cost is per byte of text redacted, not per secret held.
+func BenchmarkRedactWithManyRegisteredSecrets(b *testing.B) {
+	line := strings.Repeat("an ordinary log line with nothing secret in it; ", 20)
+	for _, held := range []int{10, 1_000, 10_000} {
+		b.Run(strconv.Itoa(held), func(b *testing.B) {
+			r := newRegistry()
+			for i := range held {
+				r.Add(fmt.Sprintf("minted-token-%08d-%s", i, strings.Repeat("x", 32)))
+			}
+			_ = r.String(line)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				_ = r.String(line)
+			}
+		})
 	}
 }

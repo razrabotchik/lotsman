@@ -354,6 +354,11 @@ mutate "redaction: pass every string through unchanged" \
 	"func (r *Registry) String(s string) string { return s" \
 	./internal/redact/
 
+mutate "redaction: accept a credential too short to redact" \
+	internal/redact/redact.go \
+	"		return ErrTooShort" "		return nil" \
+	./internal/auth/
+
 mutate "arguments: validate nothing" \
 	internal/argvalidate/argvalidate.go \
 	"func (v *Validator) Validate(args map[string]any) error {" \

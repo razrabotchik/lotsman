@@ -81,7 +81,7 @@ func apply(req *http.Request, credential *Credential, minter *Minter) error {
 		return nil
 
 	case config.SchemeBasic:
-		username, err := resolve(credential.Profile.UsernameRef)
+		username, err := resolveName(credential.Profile.UsernameRef)
 		if err != nil {
 			return err
 		}
@@ -144,8 +144,24 @@ func location(credential *Credential) config.Location {
 }
 
 // resolve reads a secret and registers it for redaction, so that a value this
-// process has handled can never be printed by it.
+// process has handled can never be printed by it. A secret too short to
+// redact is refused rather than used and printed.
 func resolve(ref config.SecretRef) (string, error) {
+	value, err := ref.Resolve()
+	if err != nil {
+		return "", err
+	}
+	if err := redact.Register(value); err != nil {
+		return "", errs.Errorf(errs.ClassAuth, "auth: secret %s is %w", ref, err)
+	}
+	return value, nil
+}
+
+// resolveName reads a value that identifies rather than authenticates -- a
+// username. It is registered when it is long enough to hide, and used either
+// way: refusing "admin" would protect nothing, and redacting it would mangle
+// every line that mentions the word.
+func resolveName(ref config.SecretRef) (string, error) {
 	value, err := ref.Resolve()
 	if err != nil {
 		return "", err
