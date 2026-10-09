@@ -102,6 +102,12 @@ type Policy struct {
 	}
 }
 
+// CallBudget is the time one logical call may take end to end: a token mint,
+// the request, and the one retry FR-35 allows, together. Each request is
+// also held to the per-phase budget on its own; this is what stops a slow
+// mint and a slow retry from each spending a full budget of their own.
+func (p *Policy) CallBudget() time.Duration { return p.Budget.orDefaults().Total }
+
 // CheckTarget authorizes a target URL against the policy, before any
 // connection is attempted. A refusal is ErrDenied and classifies as policy:
 // the operation is translatable, and the operator's allowlist said no.

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/razrabotchik/lotsman/internal/argvalidate"
 	"github.com/razrabotchik/lotsman/internal/audit"
@@ -230,5 +231,36 @@ func TestNoRetryForACredentialThatCannotBeReminted(t *testing.T) {
 	}
 	if len(events.events) != 1 || events.events[0].Refreshed {
 		t.Error("the record claims a refresh for a credential that cannot be refreshed")
+	}
+}
+
+// A mint and the request it serves share one budget. Each takes less than
+// the timeout and together they take more; the call ends at the timeout
+// instead of spending one budget on each.
+func TestAMintAndItsRequestShareOneBudget(t *testing.T) {
+	const step = 300 * time.Millisecond
+	tokens := newMintingEndpoint(t)
+	slowTokens := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(step)
+		tokens.server.Config.Handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(slowTokens.Close)
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(step)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(api.Close)
+
+	profile := mintingProfile(t, tokens)
+	profile.TokenURL = slowTokens.URL
+	r := newRunner(t, api, profile, &sink{})
+	r.egress.Budget = egress.BudgetFor(step + step/2)
+
+	started := time.Now()
+	if _, err := r.call(t.Context(), nil, map[string]any{}); err == nil {
+		t.Fatal("a mint and a request took two steps and fit a budget of one and a half")
+	}
+	if took := time.Since(started); took > 2*step {
+		t.Errorf("the call took %v; the budget was %v", took, step+step/2)
 	}
 }

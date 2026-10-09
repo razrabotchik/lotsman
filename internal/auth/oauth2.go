@@ -44,11 +44,31 @@ type Minter struct {
 // source is one profile's cached token. Its lock serialises the callers that
 // find no valid token behind a single mint, so a hundred calls arriving at
 // once cost one fetch rather than a hundred.
+//
+// The lock is a channel rather than a mutex so that waiting for it can be
+// abandoned: a caller whose call has been cancelled stops waiting on someone
+// else's mint instead of holding its goroutine until that mint ends.
 type source struct {
-	mu       sync.Mutex
-	token    *oauth2.Token
-	settings *clientcredentials.Config
+	lock  chan struct{}
+	token *oauth2.Token
+	// generation numbers the tokens this source has minted, from 1. A
+	// request records the generation it carried (Presented), which is how a
+	// 401 names the token it refused.
+	generation uint64
+	settings   *clientcredentials.Config
 }
+
+// acquire takes the source's lock, or gives up when ctx does.
+func (s *source) acquire(ctx context.Context) error {
+	select {
+	case s.lock <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *source) release() { <-s.lock }
 
 // NewMinter returns a minter over the given outbound client and the policy
 // its token endpoints must satisfy. A nil policy allows no token endpoint.
@@ -72,14 +92,25 @@ func Mints(profile *config.Profile) bool {
 //
 // ctx is the call's: a caller that gives up stops waiting for a mint it
 // started. The client's own budget bounds the mint either way (FR-32).
-func (m *Minter) token(ctx context.Context, credential *Credential) (string, error) {
+func (m *Minter) token(ctx context.Context, credential *Credential) (token string, generation uint64, err error) {
 	cached := m.sourceFor(credential)
-	cached.mu.Lock()
-	defer cached.mu.Unlock()
-	if cached.token.Valid() {
-		return cached.token.AccessToken, nil
+	if waitErr := cached.acquire(ctx); waitErr != nil {
+		return "", 0, errs.Errorf(errs.ClassAuth,
+			"auth: profile %q: the call ended while waiting for a token: %w", credential.Name, waitErr)
 	}
+	defer cached.release()
+	if cached.token.Valid() {
+		return cached.token.AccessToken, cached.generation, nil
+	}
+	minted, err := m.mintFor(ctx, cached, credential)
+	if err != nil {
+		return "", 0, err
+	}
+	return minted, cached.generation, nil
+}
 
+// mintFor mints a token into cached, whose lock the caller holds.
+func (m *Minter) mintFor(ctx context.Context, cached *source, credential *Credential) (string, error) {
 	token, err := m.mint(ctx, cached.settings, &credential.Profile)
 	if err != nil {
 		// Not ClassUpstream: the API did not fail, and an operator reading
@@ -102,6 +133,7 @@ func (m *Minter) token(ctx context.Context, credential *Credential) (string, err
 			credential.Name, credential.Profile.TokenURL, err)
 	}
 	cached.token = token
+	cached.generation++
 	return token.AccessToken, nil
 }
 
@@ -149,17 +181,66 @@ func (m *Minter) sourceFor(credential *Credential) *source {
 	if cached, ok := m.sources[credential.Name]; ok {
 		return cached
 	}
-	cached := &source{settings: settingsFor(&credential.Profile)}
+	cached := &source{lock: make(chan struct{}, 1), settings: settingsFor(&credential.Profile)}
 	m.sources[credential.Name] = cached
 	return cached
 }
 
 // Invalidate drops the cached token for a profile, so the next call mints a
-// new one (FR-35).
-func (m *Minter) Invalidate(name string) {
+// new one (FR-35) -- provided it is still the token that was refused.
+//
+// generation is the one the refused request carried (Presented). A 401 is
+// about that token, and by the time it arrives another call may already have
+// replaced it; dropping the replacement would cost a mint for nothing, and
+// twenty calls refused together would cost twenty. Zero means the request's
+// generation is unknown, and the token is dropped regardless.
+func (m *Minter) Invalidate(name string, generation uint64) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.sources, name)
+	cached, ok := m.sources[name]
+	m.mu.Unlock()
+	if !ok {
+		return
+	}
+	// Uncancellable on purpose: the wait is for a mint already under way,
+	// which is bounded by the client's budget, and the caller is about to
+	// wait for the token anyway.
+	_ = cached.acquire(context.Background())
+	defer cached.release()
+	if generation == 0 || cached.generation == generation {
+		cached.token = nil
+	}
+}
+
+// Presented records which minted token each credential on a request carried.
+// The runner puts one in the context it builds requests with; the transport,
+// which is the only layer that sees the token, fills it in.
+type Presented struct {
+	mu          sync.Mutex
+	generations map[string]uint64
+}
+
+type presentedKey struct{}
+
+// TrackPresented returns a context whose requests record what they carried.
+func TrackPresented(ctx context.Context) (context.Context, *Presented) {
+	presented := &Presented{generations: map[string]uint64{}}
+	return context.WithValue(ctx, presentedKey{}, presented), presented
+}
+
+// Generation is the generation of the named credential's token on the last
+// request built with this context, or zero when it carried none.
+func (p *Presented) Generation(name string) uint64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.generations[name]
+}
+
+func recordPresented(ctx context.Context, name string, generation uint64) {
+	if presented, ok := ctx.Value(presentedKey{}).(*Presented); ok {
+		presented.mu.Lock()
+		presented.generations[name] = generation
+		presented.mu.Unlock()
+	}
 }
 
 // settingsFor is everything about a mint except the secret, which is read

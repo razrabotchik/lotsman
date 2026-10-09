@@ -343,6 +343,16 @@ mutate "auth: refresh the credential on any status" \
 	'if r.refreshable() != "" {' \
 	./internal/mcpserver/
 
+mutate "auth: a late 401 drops whatever token is cached" \
+	internal/auth/oauth2.go \
+	"if generation == 0 || cached.generation == generation {" "if true {" \
+	./internal/auth/
+
+mutate "runtime: a mint and a retry each get a budget of their own" \
+	internal/mcpserver/runner.go \
+	"ctx, cancel := context.WithTimeout(ctx, r.egress.CallBudget())" "ctx, cancel := context.WithCancel(ctx)" \
+	./internal/mcpserver/
+
 mutate "reload: publish a candidate without comparing it" \
 	internal/reload/reload.go \
 	"if candidate.Digest == before.catalog.Digest {" "if false {" \

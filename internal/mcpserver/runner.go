@@ -173,6 +173,13 @@ func (r *runner) execute(ctx context.Context, invocation *mcp.CallToolRequest, a
 		return response.Result{}, how, redact.Error(err)
 	}
 
+	// One budget for the whole call. The requests below are built on this
+	// context, and a mint runs on the request's, so a mint, a 401 and a retry
+	// share one execution.timeout instead of spending one each.
+	ctx, cancel := context.WithTimeout(ctx, r.egress.CallBudget())
+	defer cancel()
+	ctx, presented := auth.TrackPresented(ctx)
+
 	op := requestbuild.Operation{
 		Method:       r.tool.Method,
 		PathTemplate: r.tool.PathTemplate,
@@ -231,7 +238,8 @@ func (r *runner) execute(ctx context.Context, invocation *mcp.CallToolRequest, a
 	// mutation is defensible at all (§7.5).
 	if resp.StatusCode == http.StatusUnauthorized && r.refreshable() != "" {
 		drain(resp)
-		r.minter.Invalidate(r.refreshable())
+		name := r.refreshable()
+		r.minter.Invalidate(name, presented.Generation(name))
 		how.refreshed = true
 
 		retried, buildErr := build()

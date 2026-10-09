@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/razrabotchik/lotsman/internal/config"
 	"github.com/razrabotchik/lotsman/internal/domain"
@@ -167,7 +169,7 @@ func TestTheMintAsksForWhatWasConfigured(t *testing.T) {
 
 	minter := NewMinter(endpoint.server.Client(), allowing(endpoint))
 	credential := binding("api", profile).Credentials[0]
-	if _, err := minter.token(t.Context(), &credential); err != nil {
+	if _, _, err := minter.token(t.Context(), &credential); err != nil {
 		t.Fatalf("token: %v", err)
 	}
 
@@ -191,7 +193,7 @@ func TestInvalidateForcesAFreshMint(t *testing.T) {
 	credential := binding("api", endpoint.profile(t)).Credentials[0]
 
 	for range 3 {
-		if _, err := minter.token(t.Context(), &credential); err != nil {
+		if _, _, err := minter.token(t.Context(), &credential); err != nil {
 			t.Fatalf("token: %v", err)
 		}
 	}
@@ -199,8 +201,8 @@ func TestInvalidateForcesAFreshMint(t *testing.T) {
 		t.Fatalf("minted %d times before invalidation, want 1", got)
 	}
 
-	minter.Invalidate("api")
-	if _, err := minter.token(t.Context(), &credential); err != nil {
+	minter.Invalidate("api", 0)
+	if _, _, err := minter.token(t.Context(), &credential); err != nil {
 		t.Fatalf("token after invalidation: %v", err)
 	}
 	if got := endpoint.mints.Load(); got != 2 {
@@ -267,7 +269,7 @@ func TestNeitherTheClientSecretNorTheMintedTokenIsLogged(t *testing.T) {
 
 	minter := NewMinter(endpoint.server.Client(), allowing(endpoint))
 	credential := binding("api", endpoint.profile(t)).Credentials[0]
-	if _, err := minter.token(t.Context(), &credential); err != nil {
+	if _, _, err := minter.token(t.Context(), &credential); err != nil {
 		t.Fatalf("token: %v", err)
 	}
 
@@ -291,7 +293,7 @@ func TestATokenEndpointOutsideTheAllowlistIsNeverCalled(t *testing.T) {
 	minter := NewMinter(endpoint.server.Client(), &egress.Policy{AllowedOrigins: []string{"https://api.example.com"}})
 	credential := binding("api", endpoint.profile(t)).Credentials[0]
 
-	_, err := minter.token(t.Context(), &credential)
+	_, _, err := minter.token(t.Context(), &credential)
 	if err == nil {
 		t.Fatal("a token endpoint outside the allowlist issued a token")
 	}
@@ -326,7 +328,7 @@ func TestARotatedClientSecretTakesEffectAtTheNextMint(t *testing.T) {
 		if err := os.WriteFile(path, []byte(secret), 0o600); err != nil {
 			t.Fatalf("write secret: %v", err)
 		}
-		if _, err := minter.token(t.Context(), &credential); err != nil {
+		if _, _, err := minter.token(t.Context(), &credential); err != nil {
 			t.Fatalf("token: %v", err)
 		}
 		endpoint.mu.Lock()
@@ -357,7 +359,7 @@ func TestAnUnusableClientSecretRefusesBeforeTheNetwork(t *testing.T) {
 			minter := NewMinter(endpoint.server.Client(), allowing(endpoint))
 			credential := binding("api", profile).Credentials[0]
 
-			_, err := minter.token(t.Context(), &credential)
+			_, _, err := minter.token(t.Context(), &credential)
 			if err == nil {
 				t.Fatal("a mint proceeded without a client secret")
 			}
@@ -415,4 +417,90 @@ func TestACredentialTooShortToRedactIsRefused(t *testing.T) {
 		t.Fatalf("a short username with a long password was refused: %v", err)
 	}
 	_ = res.Body.Close()
+}
+
+// A caller whose call ends stops waiting for a mint someone else started,
+// instead of holding its goroutine for as long as the token endpoint takes.
+func TestWaitingForAMintEndsWithTheCall(t *testing.T) {
+	endpoint := newTokenEndpoint(t)
+	release := make(chan struct{})
+	endpoint.answer = func(w http.ResponseWriter, _ *http.Request) {
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"` + mintedToken + `","token_type":"Bearer","expires_in":3600}`))
+	}
+	minter := NewMinter(endpoint.server.Client(), allowing(endpoint))
+	credential := binding("api", endpoint.profile(t)).Credentials[0]
+
+	first := make(chan error, 1)
+	go func() {
+		_, _, err := minter.token(t.Context(), &credential)
+		first <- err
+	}()
+	for endpoint.mints.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	if _, _, err := minter.token(ctx, &credential); err == nil {
+		t.Error("a cancelled caller got a token")
+	}
+	if waited := time.Since(started); waited > time.Second {
+		t.Errorf("a cancelled caller waited %v for someone else's mint", waited)
+	}
+	close(release)
+	if err := <-first; err != nil {
+		t.Fatalf("the mint itself: %v", err)
+	}
+}
+
+// A 401 names the token it refused. One that arrives after the token was
+// already replaced does not throw the replacement away.
+func TestALateRefusalDoesNotDropAFresherToken(t *testing.T) {
+	endpoint := newTokenEndpoint(t)
+	minter := NewMinter(endpoint.server.Client(), allowing(endpoint))
+	credential := binding("api", endpoint.profile(t)).Credentials[0]
+
+	_, stale, err := minter.token(t.Context(), &credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	minter.Invalidate("api", stale) // the first refusal: replace it
+	if _, fresh, err := minter.token(t.Context(), &credential); err != nil || fresh == stale {
+		t.Fatalf("generation %d after replacing %d (%v)", fresh, stale, err)
+	}
+	minter.Invalidate("api", stale) // a late refusal of the same old token
+	if _, _, err := minter.token(t.Context(), &credential); err != nil {
+		t.Fatal(err)
+	}
+	if got := endpoint.mints.Load(); got != 2 {
+		t.Errorf("minted %d tokens, want 2: the late refusal dropped the fresh one", got)
+	}
+}
+
+// Twenty calls refused together for one stale token cost one new token.
+func TestRefusalsTogetherCostOneMint(t *testing.T) {
+	endpoint := newTokenEndpoint(t)
+	minter := NewMinter(endpoint.server.Client(), allowing(endpoint))
+	credential := binding("api", endpoint.profile(t)).Credentials[0]
+	_, stale, err := minter.token(t.Context(), &credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var wait sync.WaitGroup
+	for range 20 {
+		wait.Go(func() {
+			minter.Invalidate("api", stale)
+			if _, _, err := minter.token(t.Context(), &credential); err != nil {
+				t.Errorf("token: %v", err)
+			}
+		})
+	}
+	wait.Wait()
+	if got := endpoint.mints.Load(); got != 2 {
+		t.Errorf("twenty refusals of one token minted %d in total, want 2", got)
+	}
 }

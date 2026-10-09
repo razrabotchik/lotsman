@@ -65,10 +65,11 @@ func apply(req *http.Request, credential *Credential, minter *Minter) error {
 			return errs.Errorf(errs.ClassInternal,
 				"auth: profile %q mints its token but no minter was wired", credential.Name)
 		}
-		token, err := minter.token(req.Context(), credential)
+		token, generation, err := minter.token(req.Context(), credential)
 		if err != nil {
 			return err
 		}
+		recordPresented(req.Context(), credential.Name, generation)
 		req.Header.Set("Authorization", "Bearer "+token)
 		return nil
 
