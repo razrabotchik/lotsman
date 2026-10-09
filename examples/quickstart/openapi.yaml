@@ -1,0 +1,54 @@
+# The first-run document: three reads from the local development API
+# (cmd/api-gateway, `make run-api-gateway`), every one of which lotsman
+# translates -- so `inspect` reports nothing rejected and `serve` needs no
+# --lax. The full fixture, with its deliberate refusals, is
+# cmd/api-gateway/openapi.yaml; a test keeps this one a faithful subset of it.
+openapi: 3.1.0
+info:
+  title: Lotsman quickstart
+  version: 1.0.0
+servers:
+  - url: http://127.0.0.1:18080
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Check that the development API is running
+      responses:
+        "200":
+          description: API is healthy
+  /v1/pets:
+    get:
+      operationId: listPets
+      summary: List pets with optional filtering
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: tag
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Pet list
+  /v1/pets/{petId}:
+    parameters:
+      - name: petId
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+    get:
+      operationId: getPet
+      summary: Get one pet
+      responses:
+        "200":
+          description: Pet
+        "404":
+          description: No such pet

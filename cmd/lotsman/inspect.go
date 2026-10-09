@@ -147,6 +147,9 @@ func inspect(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 	} else {
 		writeHumanReport(stdout, &report)
+		writeNextStep(stdout, &report, nextStep{
+			spec: spec, lax: runtime.Lax, baseURL: runtime.BaseURL, documentServer: firstServer(doc.Operations),
+		})
 	}
 
 	if *failOnRejected && report.Totals.Rejected > 0 {
@@ -154,6 +157,61 @@ func inspect(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return exitUnsupported
 	}
 	return exitOK
+}
+
+// nextStep is what the closing line of the human report needs to know.
+type nextStep struct {
+	spec, baseURL, documentServer string
+	lax                           bool
+}
+
+// writeNextStep ends the human report with the command to run next.
+//
+// The report explains every refusal and, until this, stopped there: strict
+// and lax were explained only when `serve` refused, which is one failed
+// command after the reader needed to know.
+func writeNextStep(w io.Writer, report *inspectDocument, next nextStep) {
+	for _, issue := range report.DocumentIssues {
+		if issue.Severity == string(domain.SeverityError) {
+			fmt.Fprintln(w, "\nnext: fix the document issues above; serve refuses a document that has any.")
+			return
+		}
+	}
+	origin := next.baseURL
+	if origin == "" {
+		origin = "ORIGIN"
+	}
+	command := "lotsman serve " + next.spec
+	strict := report.Totals.Rejected > 0 && !next.lax
+	if strict {
+		command += " --lax"
+	}
+	if next.baseURL == "" {
+		command += " --base-url " + origin
+	}
+	fmt.Fprintf(w, "\nnext: %s\n", command)
+	if strict {
+		fmt.Fprintf(w, "      --lax serves the %d supported operations; without it, serve refuses a document\n"+
+			"      with any rejected operation rather than serve part of it unannounced.\n", report.Totals.Supported)
+	}
+	if next.baseURL == "" {
+		fmt.Fprintln(w, "      ORIGIN is the API you authorize lotsman to call; the document's servers are not")
+		if next.documentServer != "" {
+			fmt.Fprintf(w, "      authorization by themselves (it names %s).\n", redact.String(next.documentServer))
+		} else {
+			fmt.Fprintln(w, "      authorization by themselves.")
+		}
+	}
+}
+
+// firstServer is the first server any operation names, for the hint above.
+func firstServer(operations []domain.Operation) string {
+	for i := range operations {
+		if len(operations[i].Servers) > 0 {
+			return operations[i].Servers[0]
+		}
+	}
+	return ""
 }
 
 func documentIssues(diagnostics []domain.Diagnostic) []documentIssue {

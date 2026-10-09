@@ -6,14 +6,39 @@ Point it at an OpenAPI document and an MCP client — Claude Desktop, Claude Cod
 the protocol — and your agent can call that API. What it cannot translate exactly, it refuses, by
 name, with a reason code you can act on.
 
-> Status: **v0.1.0-alpha**. The local stdio runtime is real and tested against vendor
-> specifications. HTTP transport, search mode and OAuth are not in this release — see
+> Status: **v0.1.0-alpha**, tested against vendor specifications. It serves over stdio and over
+> stateless HTTP, switches large APIs to search mode, and mints tokens with OAuth2 client
+> credentials. Delegated OAuth — the flows that need a person — is not here yet; see
 > [What is not here yet](#what-is-not-here-yet).
+
+## First run
+
+From a clone, with Go ≥ 1.25. No credentials and no third-party API: the repository carries a local
+development API and a document for it.
+
+```bash
+make build build-api-gateway             # bin/lotsman and bin/api-gateway
+bin/api-gateway --tls-addr '' &          # the API, on http://127.0.0.1:18080
+
+bin/lotsman inspect examples/quickstart/openapi.yaml
+# operations: 3 found, 3 supported, 0 partial, 0 rejected
+# ...
+# next: lotsman serve examples/quickstart/openapi.yaml --base-url ORIGIN
+
+claude mcp add quickstart -- "$PWD/bin/lotsman" serve "$PWD/examples/quickstart/openapi.yaml" \
+  --base-url http://127.0.0.1:18080
+```
+
+Ask the agent to list the pets. `go install ./cmd/lotsman` puts the binary on your `PATH` instead.
+A test runs this sequence against the real development API, so it stays true.
 
 ## Five minutes
 
+With your own document:
+
 ```bash
-# 1. Look before you serve. No network request is made.
+# 1. Look before you serve. No network request is made. The report ends with the command to run
+#    next -- with --lax if some operations cannot be translated, and why.
 lotsman inspect ./openapi.yaml
 
 # 2. Serve it. Read-only by default; --base-url is the origin you authorize.
