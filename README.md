@@ -92,6 +92,10 @@ refused by name rather than ignored: `redirects: follow` tells you redirects are
 why, instead of failing as an unknown field. And two spellings of one thing may not disagree —
 `defaultPolicy: read-only` with `allowMutations: true` is a refusal, not a precedence puzzle.
 
+One setting is lotsman's own rather than the specification's: `execution.maxConcurrentCalls`
+(default 64) bounds the tool calls in flight across the process. A call over it is refused at once,
+before the network, and says so; it is not queued.
+
 ### APIs that issue their own tokens
 
 An API whose `security` is an OAuth2 client-credentials flow needs a token minted rather than

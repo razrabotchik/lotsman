@@ -42,6 +42,7 @@ func (r Runtime) Export() File {
 			AllowRules:           append([]Rule(nil), r.AllowRules...),
 			DenyRules:            append([]Rule(nil), r.DenyRules...),
 			MaxResponseBytes:     r.MaxResponseBytes,
+			MaxConcurrentCalls:   r.MaxConcurrentCalls,
 		},
 		Server:             r.Server.export(),
 		OperationOverrides: append([]OperationOverride(nil), r.Overrides...),

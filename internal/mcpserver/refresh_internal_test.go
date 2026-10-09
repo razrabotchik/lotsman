@@ -110,6 +110,7 @@ func newRunner(t *testing.T, api *httptest.Server, profile *config.Profile, even
 	}
 	minter := auth.NewMinter(api.Client(), &policy)
 	return &runner{
+		calls:     NewCallLimit(0),
 		tool:      tool,
 		validator: validator,
 		client:    auth.Client(api.Client(), bound, minter),

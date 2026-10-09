@@ -71,6 +71,11 @@ type Options struct {
 	// Zero means the response package's documented default.
 	MaxResponseBytes int
 
+	// Calls bounds the tool calls in flight. It is shared by every server
+	// built from these options, which is what keeps a reload from resetting
+	// it; nil gives each server the default limit of its own.
+	Calls *CallLimit
+
 	// Audit receives one event per completed call (§7.5). Nil records
 	// nothing, which is what a one-off `explain-call` wants and what a
 	// deployed server must not be left with by accident -- so `serve` sets

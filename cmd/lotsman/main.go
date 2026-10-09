@@ -262,6 +262,8 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 		Logger: logger, BaseURL: runtime.BaseURL, Egress: egressPolicy,
 		Approval:         runtime.InteractiveApproval,
 		MaxResponseBytes: runtime.MaxResponseBytes,
+		// One limit for the process, shared by every server a reload builds.
+		Calls: mcpserver.NewCallLimit(runtime.MaxConcurrentCalls),
 		// Through the logger, so an event inherits redaction and the stdout
 		// ban instead of re-deriving both (FR-61, FR-68).
 		Audit: audit.Log(logger),

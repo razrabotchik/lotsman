@@ -21,6 +21,14 @@ import (
 // the cheapest denial of service there is.
 const readHeaderTimeout = 10 * time.Second
 
+// defaultReadTimeout bounds how long a request may take to arrive in full,
+// body included. readHeaderTimeout alone left the body open-ended: a client
+// that sends its headers promptly and then a byte a minute holds a connection
+// and a goroutine exactly as an idle one would. It bounds the read and
+// nothing after it -- a tool call that outlives it is not cut off, which a
+// test holds in place.
+const defaultReadTimeout = 30 * time.Second
+
 // Options configures the HTTP transport.
 type Options struct {
 	// Server resolves the server to answer a request with. It is a function
@@ -68,6 +76,10 @@ type Options struct {
 	// failure this whole package exists to avoid.
 	Metrics http.Handler
 
+	// ReadTimeout bounds the time from a request's start to the end of its
+	// body. Zero means the default.
+	ReadTimeout time.Duration
+
 	// AllowUnauthenticatedPublicBind is FR-70's explicitly dangerous opt-in.
 	AllowUnauthenticatedPublicBind bool
 }
@@ -77,6 +89,13 @@ func (o *Options) logger() *slog.Logger {
 		return o.Logger
 	}
 	return slog.New(slog.DiscardHandler)
+}
+
+func (o *Options) readTimeout() time.Duration {
+	if o.ReadTimeout > 0 {
+		return o.ReadTimeout
+	}
+	return defaultReadTimeout
 }
 
 func (o *Options) drainTimeout() time.Duration {
@@ -211,6 +230,7 @@ func serve(ctx context.Context, listener net.Listener, handler http.Handler, opt
 	srv := &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       opts.readTimeout(),
 		// The standard library's error log must not reach stdout either.
 		ErrorLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 	}

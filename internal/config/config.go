@@ -164,6 +164,10 @@ type Execution struct {
 	// the cap exists to bound memory, and an operator raising it is asking
 	// for a promise this runtime does not make.
 	MaxResponseBytes int `yaml:"maxResponseBytes,omitempty"`
+	// MaxConcurrentCalls bounds the tool calls in flight at once, across the
+	// whole process. A call over the limit is refused before the network
+	// rather than queued. Zero means the documented default.
+	MaxConcurrentCalls int `yaml:"maxConcurrentCalls,omitempty"`
 }
 
 // Transport is how a client reaches lotsman (docs/spec.md 5.1).
@@ -624,6 +628,11 @@ func validateExecution(execution *Execution) error {
 			"config: execution.maxResponseBytes %d is above the ceiling of %d; the cap bounds "+
 				"memory this process has to find, so it can be lowered and not raised",
 			execution.MaxResponseBytes, response.MaxBodyBytes)
+	}
+	if execution.MaxConcurrentCalls < 0 {
+		return errs.Errorf(errs.ClassUsage,
+			"config: execution.maxConcurrentCalls is %d; a limit may be omitted but not negative",
+			execution.MaxConcurrentCalls)
 	}
 	if execution.Timeout != "" {
 		timeout, err := time.ParseDuration(execution.Timeout)

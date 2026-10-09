@@ -37,6 +37,9 @@ type Runtime struct {
 	// MaxResponseBytes bounds one response (FR-36). Zero means the response
 	// package's documented default.
 	MaxResponseBytes int
+	// MaxConcurrentCalls bounds the tool calls in flight. Zero means the
+	// runtime's documented default.
+	MaxConcurrentCalls int
 	// Lax serves the supported subset instead of refusing a document that has
 	// any unsupported operation. It is `spec.strict: false` and `--lax`, which
 	// are the same request in two places.
@@ -142,6 +145,7 @@ func Resolve(file *File, env Environment, flags Overrides) Runtime {
 		runtime.AllowedOrigins = append([]string(nil), file.Execution.AllowedOrigins...)
 		runtime.AllowPrivateNetworks = file.Execution.AllowPrivateNetworks
 		runtime.MaxResponseBytes = file.Execution.MaxResponseBytes
+		runtime.MaxConcurrentCalls = file.Execution.MaxConcurrentCalls
 		if file.Spec.Strict != nil {
 			runtime.Lax = !*file.Spec.Strict
 		}

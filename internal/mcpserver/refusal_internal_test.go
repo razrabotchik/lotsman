@@ -26,6 +26,7 @@ func TestARefusalDoesNotCarryTheDocumentsStructure(t *testing.T) {
 		refusalClass: errs.ClassPolicy,
 		refusal:      "blocked by policy",
 		audit:        &sink{},
+		calls:        NewCallLimit(0),
 	}
 
 	_, _, err := prepared.execute(t.Context(), nil, map[string]any{})

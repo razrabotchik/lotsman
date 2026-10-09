@@ -283,6 +283,17 @@ mutate "transport: a public bind needs nothing" \
 	"if loopback || authenticated || optIn {" "if loopback || true || authenticated || optIn {" \
 	./internal/httpserver/
 
+mutate "transport: a body may take as long as it likes" \
+	internal/httpserver/server.go \
+	"		ReadTimeout:       opts.readTimeout()," "" \
+	./internal/httpserver/
+
+mutate "runtime: any number of calls in flight" \
+	internal/mcpserver/limit.go \
+	"func (l *CallLimit) acquire() (release func(), err error) {" \
+	"func (l *CallLimit) acquire() (release func(), err error) { return func() {}, nil" \
+	./internal/mcpserver/
+
 mutate "transport: any Host header is fine" \
 	internal/httpserver/server.go \
 	"if !permitted[strings.ToLower(r.Host)] {" "if false {" \

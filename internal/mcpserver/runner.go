@@ -53,6 +53,9 @@ type runner struct {
 	// Nil when nothing in this operation's binding can be re-minted.
 	minter *auth.Minter
 
+	// calls bounds the calls in flight across the process.
+	calls *CallLimit
+
 	// maxResponseBytes bounds what a response may spend of this process's
 	// memory (FR-36). Zero means the response package's documented default.
 	maxResponseBytes int
@@ -80,6 +83,12 @@ func (r *runner) call(ctx context.Context, invocation *mcp.CallToolRequest, args
 	// that there is no way out of a call that skips the record: every return
 	// below, including the ones added later, passes through here.
 	started := time.Now()
+	release, err := r.calls.acquire()
+	if err != nil {
+		r.record(ctx, started, response.Result{}, outcome{}, err)
+		return response.Result{}, err
+	}
+	defer release()
 	result, how, err := r.execute(ctx, invocation, args)
 	r.record(ctx, started, result, how, err)
 	return result, err
@@ -418,6 +427,10 @@ func newRunners(opts *Options, outbound *egress.Policy) []runner {
 	// one token between them.
 	client := opts.httpClient()
 	minter := auth.NewMinter(client, outbound)
+	calls := opts.Calls
+	if calls == nil {
+		calls = NewCallLimit(0)
+	}
 	runners := make([]runner, 0, len(tools))
 	for i := range tools {
 		tool := &tools[i]
@@ -426,6 +439,7 @@ func newRunners(opts *Options, outbound *egress.Policy) []runner {
 			approval:         approver{mode: opts.approval(), log: log},
 			audit:            opts.auditSink(),
 			maxResponseBytes: opts.MaxResponseBytes,
+			calls:            calls,
 		}
 
 		switch {
