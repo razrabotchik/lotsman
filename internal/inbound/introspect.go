@@ -175,10 +175,7 @@ func newIntrospection(oauth *config.InboundOAuth, log *slog.Logger, client *http
 		}
 		timeout = parsed
 	}
-	if client == nil {
-		client = &http.Client{}
-	}
-	bounded := *client
+	bounded := identityClient(client)
 	bounded.Timeout = timeout
 
 	audience := oauth.Audience
@@ -189,7 +186,7 @@ func newIntrospection(oauth *config.InboundOAuth, log *slog.Logger, client *http
 		endpoint: oauth.Introspection.URL,
 		clientID: oauth.Introspection.ClientID,
 		secret:   secret,
-		client:   &bounded,
+		client:   bounded,
 		log:      log,
 		issuer:   oauth.Issuer,
 		audience: audience,

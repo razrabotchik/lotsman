@@ -292,6 +292,11 @@ mutate "transport: no cross-origin protection" \
 	"allowHosts(handler, opts.AllowedHosts)" \
 	./internal/httpserver/
 
+mutate "inbound: follow the identity provider's redirects" \
+	internal/inbound/jwks.go \
+	"		return http.ErrUseLastResponse" "		return nil" \
+	./internal/inbound/
+
 mutate "inbound: require no scopes" \
 	internal/inbound/oauth.go \
 	"Scopes: oauth.RequiredScopes," "Scopes: nil," \

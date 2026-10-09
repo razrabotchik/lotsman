@@ -101,3 +101,14 @@ Everything below follows from that sentence.
   key set, a real token.
 - HTTP is refused for every OAuth URL, including loopback. A development shortcut in an
   authentication path is a production configuration eventually.
+
+## Since then (2026-10-09)
+
+The key set and the introspection endpoint were fetched with a default `net/http` client: redirects
+followed and a proxy taken from the environment. Neither URL comes from a document, so the egress
+allowlist was never the right control, but the rest of the outbound floor was — and the redirect
+mattered. On a 307 `net/http` re-sends the request body, and the introspection body is the
+caller's token; a key set fetched from wherever a redirect points is a key set nobody configured.
+Both now use one client that refuses redirects (a 3xx is a failed fetch, so a token is refused
+rather than admitted) and takes no proxy from the environment, for the reason ADR-0011 gives for
+egress.

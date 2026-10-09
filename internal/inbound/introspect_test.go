@@ -266,3 +266,46 @@ func TestTheIntrospectionSecretNeverReachesTheLog(t *testing.T) {
 		t.Errorf("the introspection credential reached the log:\n%s", logged.String())
 	}
 }
+
+// redirector answers every request with a 307 to target. A 307 tells the
+// client to send the same request, body and all, somewhere else.
+func redirector(t *testing.T, target string) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+// The introspection request carries the caller's token in its body. A
+// redirect is not followed, so that token goes to the endpoint the operator
+// configured and nowhere else -- and an introspection that did not happen
+// admits no one.
+func TestIntrospectionDoesNotFollowARedirect(t *testing.T) {
+	elsewhere := newAuthServer(t)
+	elsewhere.answer = elsewhere.active(nil)
+	t.Setenv("LOTSMAN_TEST_INTROSPECTION", introspectionSecret)
+	guard, err := New(&config.InboundAuth{
+		Mode: config.InboundModeOAuth,
+		OAuth: config.InboundOAuth{
+			Issuer:   testIssuer,
+			Resource: testResource,
+			Introspection: config.Introspection{
+				URL:             redirector(t, elsewhere.server.URL).URL,
+				ClientID:        "lotsman",
+				ClientSecretRef: config.SecretRef("env:LOTSMAN_TEST_INTROSPECTION"),
+			},
+		},
+	}, discardLogger(), nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	if status, reached := call(t, guard, "opaque-token-value"); status == http.StatusOK || reached {
+		t.Errorf("a redirected introspection admitted the caller (status %d)", status)
+	}
+	if elsewhere.sawToken != "" {
+		t.Errorf("the caller's token was sent to the redirect target")
+	}
+}

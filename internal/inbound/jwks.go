@@ -87,10 +87,39 @@ func newKeySet(uri string, ttl time.Duration, client *http.Client) *keySet {
 	if ttl <= 0 {
 		ttl = 15 * time.Minute
 	}
-	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
+	return &keySet{uri: uri, ttl: ttl, client: identityClient(client), now: time.Now}
+}
+
+// identityClient is the client lotsman calls the operator's identity
+// provider with: the key set, the introspection endpoint.
+//
+// Their URLs come from the operator, not from a document, so the egress
+// allowlist does not apply; the rest of the outbound floor does. A redirect is
+// not followed: on a 307 net/http re-sends the request body -- for
+// introspection, the caller's token -- to wherever the answer points, and a
+// key set fetched from a host nobody configured is a key set nobody chose. And
+// no proxy is taken from the environment, for the reason egress gives: a
+// variable nobody reviewed would see every request.
+//
+// A supplied client keeps its transport, as egress.Policy.Client does: a
+// caller that brings one has decided how connections are made.
+func identityClient(base *http.Client) *http.Client {
+	client := &http.Client{Timeout: 10 * time.Second}
+	if base != nil {
+		client = &http.Client{Transport: base.Transport, Timeout: base.Timeout}
 	}
-	return &keySet{uri: uri, ttl: ttl, client: client, now: time.Now}
+	if client.Transport == nil {
+		transport := &http.Transport{}
+		if def, ok := http.DefaultTransport.(*http.Transport); ok {
+			transport = def.Clone()
+		}
+		transport.Proxy = nil
+		client.Transport = transport
+	}
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return client
 }
 
 // key returns the public key the token names, fetching or refreshing as

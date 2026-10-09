@@ -238,3 +238,15 @@ func jwksWith(key map[string]string) []byte {
 	}
 	return document
 }
+
+// A key set fetched from a host nobody configured is a key set nobody chose.
+func TestAKeySetBehindARedirectIsNotFetched(t *testing.T) {
+	p := newProvider(t)
+	keys := newKeySet(redirector(t, p.server.URL).URL, time.Minute, nil)
+	if _, err := keys.key(t.Context(), p.kid); err == nil {
+		t.Error("a token was verified against keys from the redirect target")
+	}
+	if got := p.fetches.Load(); got != 0 {
+		t.Errorf("the redirect target was asked for keys %d times", got)
+	}
+}
