@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -22,10 +23,13 @@ const (
 	// candidates is enough to choose from and small enough to read.
 	defaultSearchLimit = 10
 	maxSearchLimit     = 50
-	// describeBudgetBytes bounds one describe_operation response. Search mode
-	// exists because schemas are large; handing back an unbounded one would
-	// reintroduce the problem through the other door.
-	describeBudgetBytes = 24_000
+	// describeBudgetBytes bounds one describe_operation result as it goes on
+	// the wire: the structured content and the text copy of it that clients
+	// without structured output read. Search mode exists because schemas are
+	// large; handing back an unbounded one would reintroduce the problem
+	// through the other door. The number is the old 24 000-byte bound on the
+	// schema alone, counted the way it is actually paid -- twice.
+	describeBudgetBytes = 48_000
 )
 
 // addSearchTools publishes the five meta-tools of FR-48 over the same runners
@@ -128,9 +132,10 @@ func addListTags(srv *mcp.Server, index *searchindex.Index) {
 	})
 }
 
-// DescribeInput names one operation.
+// DescribeInput names one operation, and optionally one page of its schema.
 type DescribeInput struct {
-	ID string `json:"id" jsonschema:"the operation key or tool name from search_operations"`
+	ID   string `json:"id" jsonschema:"the operation key or tool name from search_operations"`
+	Page int    `json:"page,omitempty" jsonschema:"for a schema described in pages, which page; the first when omitted"`
 }
 
 // DescribeOutput is everything needed to call one operation.
@@ -150,6 +155,22 @@ type DescribeOutput struct {
 	// budget. Validation is unaffected -- only prose was dropped -- but a model
 	// deserves to know it is reading an abridged contract.
 	DescriptionsOmitted bool `json:"descriptionsOmitted,omitempty"`
+	// Page and Pages are set when the schema is too large for one answer.
+	// InputSchema is then one page of it: the full schema is the union of
+	// the `properties` and `$defs` of every page.
+	Page  int    `json:"page,omitempty"`
+	Pages int    `json:"pages,omitempty"`
+	Note  string `json:"note,omitempty"`
+	// Undescribable names the parts too large for any page on their own,
+	// with their sizes. They are still validated on every call.
+	Undescribable []SchemaPart `json:"undescribable,omitempty"`
+}
+
+// SchemaPart is one piece of an input schema: an argument group, or one
+// shared definition the groups refer to.
+type SchemaPart struct {
+	Name  string `json:"name"`
+	Bytes int    `json:"bytes"`
 }
 
 func addDescribeOperation(srv *mcp.Server, runners []runner) {
@@ -158,44 +179,242 @@ func addDescribeOperation(srv *mcp.Server, runners []runner) {
 		Title: "Describe one operation",
 		Description: "The full argument schema and call metadata for one operation, by the id " +
 			"search_operations returned. This is where argument schemas live; search results do " +
-			"not carry them.",
+			"not carry them. A schema too large for one answer comes in pages; ask again with " +
+			"page set to each.",
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: ptr(false),
 		},
 	}
-	mcp.AddTool(srv, tool, func(_ context.Context, _ *mcp.CallToolRequest, in DescribeInput) (*mcp.CallToolResult, DescribeOutput, error) {
+	// The result is built here rather than returned as a typed output. The
+	// SDK checks a typed output against its schema by decoding it into
+	// float64s and encoding it again, which would publish a bound of
+	// 9223372036854775807 as 2^63 in the one place a model reads it; and it
+	// appends a text copy whose size the budget has to count.
+	mcp.AddTool(srv, tool, func(_ context.Context, _ *mcp.CallToolRequest, in DescribeInput) (*mcp.CallToolResult, any, error) {
 		prepared := find(runners, in.ID)
 		if prepared == nil {
-			return nil, DescribeOutput{}, unknownOperation(in.ID)
+			return nil, nil, unknownOperation(in.ID)
 		}
-		t := prepared.tool
-
-		schema := publishedSchema(t)
-		size := serializedSize(schema)
-		reduced := false
-		if size > describeBudgetBytes {
-			// Drop prose, keep every constraint: the result still validates
-			// identically, it just stops explaining itself.
-			schema = withoutProse(schema)
-			size = serializedSize(schema)
-			reduced = true
+		encoded, err := describe(prepared, in.Page)
+		if err != nil {
+			return nil, nil, err
 		}
-
-		return nil, DescribeOutput{
-			Key:                 t.OperationKey,
-			ToolName:            t.Name,
-			Method:              t.Method,
-			Path:                t.PathTemplate,
-			Summary:             t.Description,
-			Tags:                t.Tags,
-			Effect:              t.Effect,
-			Callable:            prepared.callable(),
-			Refusal:             prepared.refusal,
-			InputSchema:         schema,
-			SchemaBytes:         size,
-			DescriptionsOmitted: reduced,
-		}, nil
+		return &mcp.CallToolResult{
+			Content:           []mcp.Content{&mcp.TextContent{Text: string(encoded)}},
+			StructuredContent: json.RawMessage(encoded),
+		}, nil, nil
 	})
+}
+
+// describe renders one describe_operation answer that fits the budget, or
+// says why there is none.
+//
+// The order is: the schema as published; the schema without its prose, which
+// validates identically; and, when even that is too large, the schema without
+// prose in pages. No branch returns more than the budget.
+func describe(prepared *runner, page int) ([]byte, error) {
+	t := prepared.tool
+	full := publishedSchema(t)
+	out := DescribeOutput{
+		Key:      t.OperationKey,
+		ToolName: t.Name,
+		Method:   t.Method,
+		Path:     t.PathTemplate,
+		Summary:  t.Description,
+		Tags:     t.Tags,
+		Effect:   t.Effect,
+		Callable: prepared.callable(),
+		Refusal:  prepared.refusal,
+	}
+
+	if page <= 1 {
+		for _, reduced := range []bool{false, true} {
+			candidate := full
+			if reduced {
+				// Drop prose, keep every constraint: the result still
+				// validates identically, it just stops explaining itself.
+				candidate = withoutProse(full)
+			}
+			out.InputSchema = candidate
+			out.SchemaBytes = serializedSize(candidate)
+			out.DescriptionsOmitted = reduced
+			if encoded, fits := withinBudget(&out); fits {
+				return encoded, nil
+			}
+		}
+	}
+
+	bare := withoutProse(full)
+	out.SchemaBytes = serializedSize(bare)
+	out.DescriptionsOmitted = true
+	pages := paginate(&out, bare)
+	if len(pages) == 0 {
+		return nil, errs.Errorf(errs.ClassUnsupported,
+			"lotsman: %s has a %d-byte schema, and no part of it fits the %d-byte describe_operation "+
+				"budget; it cannot be described in search mode, though it can still be called",
+			t.OperationKey, out.SchemaBytes, describeBudgetBytes)
+	}
+	if page < 1 {
+		page = 1
+	}
+	if page > len(pages) {
+		return nil, errs.Errorf(errs.ClassUsage,
+			"lotsman: %s is described in %d pages; there is no page %d", t.OperationKey, len(pages), page)
+	}
+	return pages[page-1], nil
+}
+
+// paginate splits a schema that has lost its prose and is still too large
+// into pages that each fit the budget.
+//
+// A page is a fragment of the same document: the top-level shape (type,
+// required groups, additionalProperties) and a subset of its argument groups
+// and $defs. Parts are packed in a fixed order -- the argument groups as
+// arguments are grouped, then the definitions by name -- so the same schema
+// is always cut the same way, and page 2 of one call is page 2 of the next.
+func paginate(out *DescribeOutput, bare map[string]any) [][]byte {
+	type part struct {
+		container, name string
+		schema          any
+	}
+	var parts []part
+	properties, _ := bare["properties"].(map[string]any)
+	for _, group := range domain.GroupOrder {
+		if schema, ok := properties[group]; ok {
+			parts = append(parts, part{"properties", group, schema})
+		}
+	}
+	defs, _ := bare["$defs"].(map[string]any)
+	names := make([]string, 0, len(defs))
+	for name := range defs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		parts = append(parts, part{"$defs", name, defs[name]})
+	}
+
+	fragment := func(members []part) map[string]any {
+		shape := map[string]any{}
+		for key, value := range bare {
+			if key != "properties" && key != "$defs" {
+				shape[key] = value
+			}
+		}
+		groups, shared := map[string]any{}, map[string]any{}
+		for _, member := range members {
+			if member.container == "properties" {
+				groups[member.name] = member.schema
+			} else {
+				shared[member.name] = member.schema
+			}
+		}
+		shape["properties"] = groups
+		if len(shared) > 0 {
+			shape["$defs"] = shared
+		}
+		return shape
+	}
+
+	// Each part's cost on the wire is measured once: its member entry, and
+	// that entry again as escaped text. A page costs the result around it
+	// plus its parts. The page count, the note and the list of what did not
+	// fit are added afterwards; they cost a few hundred bytes, and the
+	// reserve keeps a cut made without them honest. Every rendered page is
+	// measured again below, so an estimate can refuse but never overspend.
+	const reserve = 2048
+	empty := *out
+	empty.InputSchema = fragment(nil)
+	encodedEmpty, err := json.Marshal(&empty)
+	if err != nil {
+		return nil
+	}
+	available := describeBudgetBytes - wireSize(encodedEmpty) - reserve
+	cost := func(p part) int {
+		entry, err := json.Marshal(map[string]any{p.name: p.schema})
+		if err != nil {
+			return describeBudgetBytes
+		}
+		return wireSize(entry) - resultEnvelopeBytes
+	}
+
+	var cuts [][]part
+	var current []part
+	var undescribable []SchemaPart
+	used := 0
+	for _, p := range parts {
+		price := cost(p)
+		switch {
+		case price > available:
+			undescribable = append(undescribable, SchemaPart{
+				Name: describedName(p.container, p.name), Bytes: jsonSize(p.schema),
+			})
+			continue
+		case used+price > available:
+			cuts = append(cuts, current)
+			current, used = nil, 0
+		}
+		current = append(current, p)
+		used += price
+	}
+	if len(current) > 0 {
+		cuts = append(cuts, current)
+	}
+
+	pages := make([][]byte, 0, len(cuts))
+	for i, members := range cuts {
+		rendered := *out
+		rendered.InputSchema = fragment(members)
+		rendered.Page = i + 1
+		rendered.Pages = len(cuts)
+		rendered.Undescribable = undescribable
+		rendered.Note = fmt.Sprintf("Page %d of %d. The schema is too large to describe at once; "+
+			"the full schema is the union of the properties and $defs of every page, so ask "+
+			"describe_operation again with page set to each.", i+1, len(cuts))
+		if len(undescribable) > 0 {
+			rendered.Note += " The parts listed in undescribable are too large for any page; they " +
+				"are still validated when the operation is called."
+		}
+		encoded, err := json.Marshal(&rendered)
+		if err != nil || wireSize(encoded) > describeBudgetBytes {
+			// The reserve was not enough. Failing here is better than
+			// handing back more than the budget promised.
+			return nil
+		}
+		pages = append(pages, encoded)
+	}
+	return pages
+}
+
+func describedName(container, name string) string {
+	if container == "$defs" {
+		return "$defs/" + name
+	}
+	return name
+}
+
+// withinBudget encodes a result and reports whether it fits, counted as it is
+// sent (wireSize).
+func withinBudget(out *DescribeOutput) ([]byte, bool) {
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		return nil, false
+	}
+	return encoded, wireSize(encoded) <= describeBudgetBytes
+}
+
+// resultEnvelopeBytes covers what the result carries besides the payload --
+// the content wrapper, the server identity in _meta -- measured at under 200
+// bytes and reserved generously.
+const resultEnvelopeBytes = 512
+
+// wireSize is what an encoded payload costs in a tools/call result: once as
+// structured content, and once more as its text copy -- which is a JSON
+// string, so every quote in the payload is escaped and the copy is the larger
+// of the two. Counting it as "twice the payload" let a page out at 48 484
+// bytes against a 48 000-byte budget.
+func wireSize(encoded []byte) int {
+	return len(encoded) + jsonSize(string(encoded)) + resultEnvelopeBytes
 }
 
 // CallInput names an operation and carries its grouped arguments.
@@ -299,8 +518,10 @@ func unknownOperation(id string) error {
 
 // serializedSize measures what a schema costs on the wire, which is the number
 // the budget is about.
-func serializedSize(schema map[string]any) int {
-	encoded, err := json.Marshal(schema)
+func serializedSize(schema map[string]any) int { return jsonSize(schema) }
+
+func jsonSize(value any) int {
+	encoded, err := json.Marshal(value)
 	if err != nil {
 		return 0
 	}

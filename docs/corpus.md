@@ -9,8 +9,8 @@ refuses, is the reason a design flaw or a feature that has not been written yet?
 
 | Document | Operations | Supported | Executable (default policy) | Catalog (tools) | Catalog (search) | Verdict |
 |---|---|---|---|---|---|---|
-| Kubernetes `apps/v1` (v1.31.0) | 77 | 65 | 38 | 2.23 MB | **5.3 KB** | translated |
-| DigitalOcean, exploded (pinned commit) | 659 | 631 | 0 (all need auth) | 737 KB | **5.3 KB** | translated |
+| Kubernetes `apps/v1` (v1.31.0) | 77 | 65 | 38 | 2.23 MB | **4.7 KB** | translated |
+| DigitalOcean, exploded (pinned commit) | 659 | 631 | 0 (all need auth) | 737 KB | **4.7 KB** | translated |
 | Stripe (v1301) | 559 | 0 | 0 | — | — | refused per matrix |
 | DigitalOcean, root only | 0 | 0 | 0 | — | — | 661 references refused by name |
 | GitLab (v17.5.0-ee) | — | — | — | — | — | refused before parsing |
@@ -105,13 +105,13 @@ and says it is not part of this release.
 ## Search mode, measured
 
 Search mode publishes the meta-tools regardless of catalog size, so `tools/list` is a constant
-**5 297 bytes** — **6 285** when the mutating call tool is published too — for both Kubernetes (65
+**4 656 bytes** — **5 644** when the mutating call tool is published too — for both Kubernetes (65
 operations) and DigitalOcean (631). Measured on the wire, from a sessionless `2026-07-28` POST,
 because that is what a client receives and a live session is the only place the published list
 exists: `inspect` reports the tools-mode size in either mode, that being the measurement the mode
 decision is made against, and its wording says which of the two it prints.
 
-Against tools mode that is 422× smaller for Kubernetes and 139× for DigitalOcean — and for a catalog
+Against tools mode that is about 480× smaller for Kubernetes and 160× for DigitalOcean — and for a catalog
 that did not fit at all, the comparison is not a ratio but a yes.
 
 **Found while pinning this number to a test:** the earlier figure, 5 183 bytes, was measured through
@@ -131,17 +131,29 @@ What a model then pays per step:
 
 | Step | Kubernetes | DigitalOcean |
 |---|---|---|
-| `tools/list` | 5 297 B | 5 297 B |
+| `tools/list` | 4 656 B | 4 656 B |
 | `search_operations` (5 hits) | 3 266 B | 2 944 B |
-| `describe_operation` (create a Deployment) | 84.6 KB on the wire, `schemaBytes` 38 895 | — |
+| `describe_operation` (create a Deployment) | 2 pages: 45.7 KB + 41.5 KB on the wire, `schemaBytes` 38 895 | — |
 
 **Found by this measurement:** an MCP result is carried twice — once as `structuredContent` and
-once as the text fallback the SDK generates for clients that predate it — so the wire cost of a
-response is roughly double its payload. The 24 KB describe budget therefore buys about 50 KB on the
-wire, and the Kubernetes Deployment schema exceeds it even after every description is dropped
-(38 895 bytes of pure constraints). That is the honest cost of knowing how to create a Deployment; the
-alternative is a schema a model cannot rely on, and `schemaBytes` is reported so that asking again
-is an informed decision rather than a surprise.
+once as the text fallback for clients that predate it — and the copy is a JSON string, so every
+quote in it is escaped and it is the larger of the two. The describe budget was 24 KB on the schema
+alone, which bought about 50 KB on the wire, and a schema still over it once every description was
+dropped was returned anyway: the Kubernetes Deployment came back as 84.6 KB in one answer.
+
+The budget is now **48 000 bytes for the whole result** as it is sent, the text copy included, and
+nothing exceeds it. A schema that does not fit without its prose is described in pages: the argument
+groups and the `$defs` are packed, in a fixed order, into pages that each fit, and the whole schema
+is the union of their `properties` and `$defs`. The Deployment is two pages, 87.2 KB in two calls —
+about what one unbounded answer cost, now in pieces a client can hold. A single part too large for any
+page is listed by name and size as `undescribable` rather than sent over budget; the operation is
+still validated in full when it is called.
+
+**Also found:** the SDK checks a typed tool output by decoding it into `float64`s and encoding it
+again, so the one schema a search-mode model reads published `maximum: 9223372036854775807` as
+2^63. `describe_operation` now builds its result itself, which is also what lets it measure the
+text copy — and costs it the inferred `outputSchema`, which is why `tools/list` shrank by 640
+bytes.
 
 Ranking quality is measured separately and committed as a regression test
 (`internal/searchindex/recall_test.go`): **Kubernetes Recall@5 1.00 / MRR 0.53**, **DigitalOcean

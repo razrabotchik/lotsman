@@ -23,3 +23,6 @@ func SDKLoggerForTest(base *slog.Logger) *slog.Logger { return sdkLogger(base) }
 func CleanDisconnectErrForTest() error {
 	return fmt.Errorf("%w: %w", &jsonrpc.Error{Code: codeServerClosing, Message: "server is closing"}, io.EOF)
 }
+
+// DescribeBudgetBytesForTest is the describe_operation budget.
+const DescribeBudgetBytesForTest = describeBudgetBytes

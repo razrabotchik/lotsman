@@ -101,7 +101,7 @@ That is a read-only agent against one origin, with no credentials. The rest is o
 Large APIs: one tool per operation stops working above a catalog a model can hold (65 Kubernetes
 operations weigh 2.2 MB of tool definitions). --mode=auto, the default, switches to five
 meta-tools -- search, describe, then call -- when the measured catalog does not fit; the same
-5.3 KB whether the API has 65 operations or 631. Pin --mode=tools to get the full list anyway.
+4.7 KB whether the API has 65 operations or 631. Pin --mode=tools to get the full list anyway.
 
 Flags:
   --base-url URL           the origin you authorize; a URL from the document is not authorization

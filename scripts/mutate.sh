@@ -387,6 +387,11 @@ mutate "search: a read tool may call a mutation" \
 	"		case kind == readOnlyCall && !isRead:" "		case false:" \
 	./internal/mcpserver/
 
+mutate "search: a describe answer of any size fits" \
+	internal/mcpserver/search.go \
+	"return encoded, wireSize(encoded) <= describeBudgetBytes" "return encoded, true" \
+	./internal/mcpserver/
+
 mutate "approval: proceed when the client cannot be asked" \
 	internal/mcpserver/approval.go \
 	"	if !clientCanBeAsked(req.Session) {" "	if false {" \
