@@ -431,3 +431,53 @@ func TestBodyRefusals(t *testing.T) {
 		}
 	})
 }
+
+// An absent body and a null one are different requests. Absent is no body;
+// null is the JSON value null, sent as one -- the schema, checked before the
+// build, has already said whether null is allowed.
+func TestAbsentAndNullBodiesAreDifferentRequests(t *testing.T) {
+	nullable := domain.Schema{"type": []any{"object", "null"}}
+	cases := []struct {
+		name     string
+		required bool
+		args     Arguments
+		wantBody string // "" means no body at all
+		wantErr  bool
+	}{
+		{name: "required, absent", required: true, args: Arguments{}, wantErr: true},
+		{name: "required, null", required: true, args: Arguments{"body": nil}, wantBody: "null"},
+		{name: "required, object", required: true, args: Arguments{"body": map[string]any{"a": 1}}, wantBody: `{"a":1}`},
+		{name: "required, scalar", required: true, args: Arguments{"body": "x"}, wantBody: `"x"`},
+		{name: "optional, absent", args: Arguments{}, wantBody: ""},
+		{name: "optional, null", args: Arguments{"body": nil}, wantBody: "null"},
+		{name: "optional, object", args: Arguments{"body": map[string]any{"a": 1}}, wantBody: `{"a":1}`},
+		{name: "optional, scalar", args: Arguments{"body": "x"}, wantBody: `"x"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			op := &Operation{Method: "POST", PathTemplate: "/widgets", Servers: []string{testBase},
+				Body: &domain.BodySpec{MediaType: "application/json", Required: tc.required, Schema: nullable}}
+			req, err := Build(t.Context(), op, tc.args, Options{})
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("Build sent a request without the required body")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			body, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(body) != tc.wantBody {
+				t.Errorf("body = %q, want %q", body, tc.wantBody)
+			}
+			hasType := req.Header.Get("Content-Type") != ""
+			if hasType != (tc.wantBody != "") {
+				t.Errorf("Content-Type = %q for body %q", req.Header.Get("Content-Type"), body)
+			}
+		})
+	}
+}

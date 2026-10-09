@@ -107,12 +107,18 @@ func encodeBody(spec *domain.BodySpec, args Arguments) (io.Reader, string, error
 		}
 		return http.NoBody, "", nil
 	}
-	if !present || value == nil {
+	if !present {
 		if spec.Required {
 			return nil, "", errs.Errorf(errs.ClassUsage, "requestbuild: a request body is required")
 		}
 		return http.NoBody, "", nil
 	}
+	// An explicit null is a body, and it is sent as one. Whether null is
+	// allowed is the schema's question, answered before this runs: a body
+	// schema that permits it was published that way, and treating the value
+	// as absent would either refuse a required body the caller supplied or
+	// silently send nothing for an optional one -- neither of which is the
+	// request the caller described.
 
 	encoded, err := json.Marshal(value)
 	if err != nil {
