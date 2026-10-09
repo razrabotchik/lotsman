@@ -315,3 +315,51 @@ func TestBodyIsPublishedAsItsOwnGroup(t *testing.T) {
 		t.Errorf("required = %v, want the body group listed", required)
 	}
 }
+
+// Every operation reaches the SDK under a name of its own. The SDK keeps one
+// tool per name, so a duplicate is not an error anywhere -- it is a tool that
+// is silently gone.
+func TestEveryToolNameIsUnique(t *testing.T) {
+	long := strings.Repeat("very_long_operation_name_", 4)
+	// The name the second "dup" would be given; a third operation claims it
+	// first, which before the fix produced two tools called the same.
+	claimed := withCollisionSuffix("dup", "ns:POST:/a", 0)
+	ops := []domain.Operation{
+		supportedOp("ns:GET:/a", "GET", "/a", "dup"),
+		supportedOp("ns:POST:/a", "POST", "/a", "dup"),
+		supportedOp("ns:DELETE:/b", "DELETE", "/b", claimed),
+		supportedOp("ns:GET:/ping", "GET", "/ping", "ping"),
+		supportedOp("ns:GET:/search", "GET", "/search", "search_operations"),
+		supportedOp("ns:GET:/long1", "GET", "/long1", long+"one"),
+		supportedOp("ns:GET:/long2", "GET", "/long2", long+"two"),
+	}
+	cat := Build("d", ops, Options{})
+	if len(cat.Tools) != len(ops) {
+		t.Fatalf("len(Tools) = %d, want %d", len(cat.Tools), len(ops))
+	}
+	names := map[string]domain.OperationKey{}
+	for _, tool := range cat.Tools {
+		if other, dup := names[tool.Name]; dup {
+			t.Errorf("%s and %s are both called %q", other, tool.OperationKey, tool.Name)
+		}
+		names[tool.Name] = tool.OperationKey
+		if IsReservedToolName(tool.Name) {
+			t.Errorf("%s was given the built-in name %q", tool.OperationKey, tool.Name)
+		}
+		if len(tool.Name) > maxNameBytes {
+			t.Errorf("%q is longer than %d bytes", tool.Name, maxNameBytes)
+		}
+	}
+
+	// The same document in another order names every operation the same.
+	reversed := make([]domain.Operation, len(ops))
+	for i := range ops {
+		reversed[len(ops)-1-i] = ops[i]
+	}
+	again := Build("d", reversed, Options{})
+	for i := range cat.Tools {
+		if cat.Tools[i].Name != again.Tools[i].Name {
+			t.Errorf("%s: %q, then %q in another input order", cat.Tools[i].OperationKey, cat.Tools[i].Name, again.Tools[i].Name)
+		}
+	}
+}

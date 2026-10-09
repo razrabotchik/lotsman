@@ -188,7 +188,7 @@ func New(opts *Options) *mcp.Server {
 		addSearchTools(srv, opts.Catalog, runners, opts.mutationsAllowed())
 		return srv
 	}
-	addCatalogTools(srv, runners)
+	addCatalogTools(srv, runners, opts.logger())
 	return srv
 }
 
@@ -292,10 +292,23 @@ func catalogTools(cat *catalog.Catalog) []catalog.Tool {
 //
 // tools is owned by the caller and never mutated afterwards, so the handlers
 // below may hold a pointer into it (a Catalog is immutable once built).
-func addCatalogTools(srv *mcp.Server, runners []runner) {
+//
+// A name is registered once. The SDK keeps one tool per name and replaces
+// rather than refuses, so a second tool under a taken name -- the built-in
+// ping, or another operation -- would make the first one vanish without a
+// word. catalog.Build never assigns one; a catalog assembled any other way is
+// checked here, and the duplicate is refused loudly instead.
+func addCatalogTools(srv *mcp.Server, runners []runner, log logger) {
+	registered := map[string]bool{}
 	for i := range runners {
 		prepared := &runners[i]
 		t := prepared.tool
+		if registered[t.Name] || catalog.IsReservedToolName(t.Name) {
+			log.Error("tool name already registered; not publishing this operation under it",
+				"tool", t.Name, "operation", string(t.OperationKey))
+			continue
+		}
+		registered[t.Name] = true
 		// Annotations are derived conservatively from the effect and are hints
 		// for the client's UX only: the gate does not read them, and nothing a
 		// client does with them can relax it (FR-42, FR-43).

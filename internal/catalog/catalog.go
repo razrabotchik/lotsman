@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -280,18 +281,44 @@ func recommendedMode(tools []Tool, opts Options) Mode {
 // (ADR-0004, FR-15): anything else is replaced with "_".
 var nameCharset = regexp.MustCompile(`[^A-Za-z0-9_.-]`)
 
+// reservedToolNames are the tools lotsman registers itself, in either mode.
+// An operation is never given one: the SDK keeps one tool per name, so an
+// operationId of `ping` would silently replace the built-in, or be replaced by
+// it, depending on registration order.
+var reservedToolNames = map[string]bool{
+	"ping":                    true,
+	"search_operations":       true,
+	"list_tags":               true,
+	"describe_operation":      true,
+	"call_read_operation":     true,
+	"call_mutating_operation": true,
+}
+
+// IsReservedToolName reports whether name belongs to a built-in tool.
+func IsReservedToolName(name string) bool { return reservedToolNames[name] }
+
 // toolName implements FR-14–17: operationId (or method+path as fallback),
 // sanitized to the portable charset and length, with collisions resolved by
 // a stable short hash of OperationKey rather than processing order.
+//
+// Every candidate is checked, the suffixed ones included. A suffixed name is
+// an ordinary string another operation's operationId may already be, and
+// before this loop the first suffix was taken on trust: two tools reached the
+// SDK under one name, and one of them was gone.
 func toolName(op *domain.Operation, seen map[string]domain.OperationKey) string {
 	base := op.SourceOperationID
 	if base == "" {
 		base = fallbackName(op.Method, op.PathTemplate)
 	}
-	name := sanitizeName(base)
+	sanitized := sanitizeName(base)
+	taken := func(name string) bool {
+		existing, used := seen[name]
+		return reservedToolNames[name] || (used && existing != op.Key)
+	}
 
-	if existing, collides := seen[name]; collides && existing != op.Key {
-		name = withCollisionSuffix(name, op.Key)
+	name := sanitized
+	for attempt := 0; taken(name); attempt++ {
+		name = withCollisionSuffix(sanitized, op.Key, attempt)
 	}
 	seen[name] = op.Key
 	return name
@@ -329,9 +356,15 @@ func fallbackName(method, pathTemplate string) string {
 }
 
 // withCollisionSuffix appends a short stable hash of key, truncating base so
-// the result still fits maxNameBytes (FR-15/FR-16).
-func withCollisionSuffix(base string, key domain.OperationKey) string {
-	sum := sha256.Sum256([]byte(key))
+// the result still fits maxNameBytes (FR-15/FR-16). attempt picks a different
+// hash when the first is taken too; attempt 0 hashes the key alone, so every
+// name an earlier catalog assigned stays what it was.
+func withCollisionSuffix(base string, key domain.OperationKey, attempt int) string {
+	input := string(key)
+	if attempt > 0 {
+		input += "\x00" + strconv.Itoa(attempt)
+	}
+	sum := sha256.Sum256([]byte(input))
 	suffix := "_" + hex.EncodeToString(sum[:])[:8]
 	if len(base)+len(suffix) > maxNameBytes {
 		base = base[:maxNameBytes-len(suffix)]

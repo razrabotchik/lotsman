@@ -206,6 +206,14 @@ mutate "schema: publish descriptions verbatim" \
 	"return budgetBytes(sanitizeText(text), budget)" "return text" \
 	./internal/catalog/
 
+mutate "names: trust a collision suffix to be free" \
+	internal/catalog/catalog.go \
+	"for attempt := 0; taken(name); attempt++ {
+		name = withCollisionSuffix(sanitized, op.Key, attempt)" \
+	"if taken(name) {
+		name = withCollisionSuffix(sanitized, op.Key, 0)" \
+	./internal/catalog/
+
 mutate "display: show the raw path template" \
 	internal/catalog/catalog.go \
 	"return budgetBytes(sanitizeText(t.PathTemplate), maxPathDisplayBytes)" \
