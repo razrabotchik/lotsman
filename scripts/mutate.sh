@@ -352,6 +352,11 @@ mutate "arguments: round every number to a float64" \
 	"	decoder.UseNumber()" "	_ = decoder" \
 	./internal/argvalidate/
 
+mutate "schema: publish a bound as its float64 neighbour" \
+	internal/openapi/schema.go \
+	"	return jsonnum.Exact(node.Value, decoded)" "	return decoded" \
+	./internal/openapi/
+
 mutate "serialization: stop percent-encoding path values" \
 	internal/requestbuild/serialize.go \
 	"func percentEncode(s string, allowReserved bool) string {" \

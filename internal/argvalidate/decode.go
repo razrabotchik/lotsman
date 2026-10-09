@@ -5,20 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"strconv"
-	"strings"
 
 	"github.com/razrabotchik/lotsman/internal/errs"
-)
-
-// Bounds on a number lotsman will carry as the literal it arrived as. Far
-// beyond any API's integers (int64 is nineteen digits, a SQL decimal
-// thirty-eight) and beyond float64's range, and small enough that the exact
-// arithmetic the validator does on a literal costs nothing: "1e-100000000" is
-// a short string and a forty-megabyte power of ten.
-const (
-	maxNumberLength   = 100
-	maxNumberExponent = 400
+	"github.com/razrabotchik/lotsman/internal/jsonnum"
 )
 
 // Decode reads tool arguments from the JSON the client sent, keeping every
@@ -57,7 +46,7 @@ func Decode(raw []byte) (map[string]any, error) {
 }
 
 // checkNumbers refuses a number whose exact value would be expensive to
-// compute, before anything computes it.
+// compute, before the validator computes it.
 func checkNumbers(value any) error {
 	switch v := value.(type) {
 	case map[string]any:
@@ -73,26 +62,11 @@ func checkNumbers(value any) error {
 			}
 		}
 	case json.Number:
-		if !Carried(v) {
+		if !jsonnum.Carried(v) {
 			return errs.Errorf(errs.ClassUsage,
 				"argvalidate: a number argument is longer than %d characters or has an exponent beyond ±%d",
-				maxNumberLength, maxNumberExponent)
+				jsonnum.MaxLength, jsonnum.MaxExponent)
 		}
 	}
 	return nil
-}
-
-// Carried reports whether a number literal is within the bounds lotsman
-// carries exactly.
-func Carried(n json.Number) bool {
-	literal := string(n)
-	if len(literal) > maxNumberLength {
-		return false
-	}
-	i := strings.IndexAny(literal, "eE")
-	if i < 0 {
-		return true
-	}
-	exponent, err := strconv.Atoi(literal[i+1:])
-	return err == nil && exponent >= -maxNumberExponent && exponent <= maxNumberExponent
 }

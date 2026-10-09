@@ -39,7 +39,11 @@ func accountOperation(server string) domain.Operation {
 		Input: domain.InputModel{
 			Parameters: []domain.Parameter{
 				{Name: "id", In: domain.LocationPath, Required: true, Style: domain.StyleSimple, Schema: integer},
-				{Name: "limit", In: domain.LocationQuery, Style: domain.StyleForm, Explode: true, Schema: integer},
+				// The bound the openapi adapter publishes for int64's limit: a
+				// literal, which the SDK's own schema handling has to accept.
+				{Name: "limit", In: domain.LocationQuery, Style: domain.StyleForm, Explode: true, Schema: domain.Schema{
+					"type": "integer", "maximum": json.Number(maxInt64),
+				}},
 			},
 			Body: &domain.BodySpec{MediaType: "application/json", Required: true, Schema: domain.Schema{
 				"type":                 "object",

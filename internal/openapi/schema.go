@@ -11,6 +11,7 @@ import (
 	yaml "go.yaml.in/yaml/v4"
 
 	"github.com/razrabotchik/lotsman/internal/domain"
+	"github.com/razrabotchik/lotsman/internal/jsonnum"
 )
 
 // maxSchemaDepth bounds how deep a single inline schema may nest. References
@@ -409,12 +410,12 @@ func copyAnnotations(schema *base.Schema, out domain.Schema) {
 	if len(schema.Enum) > 0 {
 		values := make([]any, 0, len(schema.Enum))
 		for _, node := range schema.Enum {
-			values = append(values, decodeNode(node))
+			values = append(values, decodeExact(node))
 		}
 		out["enum"] = values
 	}
 	if schema.Const != nil {
-		out["const"] = decodeNode(schema.Const)
+		out["const"] = decodeExact(schema.Const)
 	}
 	if schema.Default != nil {
 		// Published for the model to see; never applied silently (FR-24), and
@@ -464,24 +465,69 @@ func copyStringConstraints(schema *base.Schema, out domain.Schema) {
 // copyNumericConstraints translates both spellings of exclusive bounds: OAS
 // 3.0's boolean modifier on minimum/maximum, and 2020-12's standalone numeric
 // keyword (pitfall #6).
+//
+// Each bound is published as the number the document wrote. libopenapi hands
+// them over as float64, which turns `maximum: 9223372036854775807` -- int64's
+// own limit, and a common one -- into 2^63, a bound one past it; the literal
+// is read back from the YAML node wherever the float64 lost it
+// (jsonnum.Exact).
 func copyNumericConstraints(schema *base.Schema, out domain.Schema) {
+	nodes := numericNodesOf(schema)
 	if schema.MultipleOf != nil {
-		out["multipleOf"] = *schema.MultipleOf
+		out["multipleOf"] = exactNumber(*schema.MultipleOf, nodes.multipleOf)
 	}
 	exclusiveMin, minIsExclusive := exclusiveBound(schema.ExclusiveMinimum, schema.Minimum)
 	if exclusiveMin != nil {
-		out["exclusiveMinimum"] = *exclusiveMin
+		node := nodes.exclusiveMinimum
+		if minIsExclusive {
+			node = nodes.minimum
+		}
+		out["exclusiveMinimum"] = exactNumber(*exclusiveMin, node)
 	}
 	if schema.Minimum != nil && !minIsExclusive {
-		out["minimum"] = *schema.Minimum
+		out["minimum"] = exactNumber(*schema.Minimum, nodes.minimum)
 	}
 	exclusiveMax, maxIsExclusive := exclusiveBound(schema.ExclusiveMaximum, schema.Maximum)
 	if exclusiveMax != nil {
-		out["exclusiveMaximum"] = *exclusiveMax
+		node := nodes.exclusiveMaximum
+		if maxIsExclusive {
+			node = nodes.maximum
+		}
+		out["exclusiveMaximum"] = exactNumber(*exclusiveMax, node)
 	}
 	if schema.Maximum != nil && !maxIsExclusive {
-		out["maximum"] = *schema.Maximum
+		out["maximum"] = exactNumber(*schema.Maximum, nodes.maximum)
 	}
+}
+
+// numericNodes are the YAML nodes the numeric keywords were written in.
+type numericNodes struct {
+	multipleOf, minimum, maximum, exclusiveMinimum, exclusiveMaximum *yaml.Node
+}
+
+func numericNodesOf(schema *base.Schema) numericNodes {
+	low := schema.GoLow()
+	if low == nil {
+		// A schema built in memory has no document behind it, and its
+		// float64s are all there is.
+		return numericNodes{}
+	}
+	return numericNodes{
+		multipleOf:       low.MultipleOf.ValueNode,
+		minimum:          low.Minimum.ValueNode,
+		maximum:          low.Maximum.ValueNode,
+		exclusiveMinimum: low.ExclusiveMinimum.ValueNode,
+		exclusiveMaximum: low.ExclusiveMaximum.ValueNode,
+	}
+}
+
+// exactNumber is the number a scalar node wrote, where decoded is what a
+// float64 made of it.
+func exactNumber(decoded float64, node *yaml.Node) any {
+	if node == nil || node.Kind != yaml.ScalarNode {
+		return decoded
+	}
+	return jsonnum.Exact(node.Value, decoded)
 }
 
 // exclusiveBound returns the numeric exclusive bound and whether it consumed
@@ -515,6 +561,17 @@ func copyArrayConstraints(schema *base.Schema, out domain.Schema) {
 
 // decodeNode turns a YAML scalar node into the Go value it represents, so the
 // published schema carries JSON values rather than YAML syntax.
+// decodeExact is decodeNode for a value a constraint compares against: a
+// number the float64 decoding would round keeps its literal, because an enum
+// member one off from the document's is a different enum.
+func decodeExact(node *yaml.Node) any {
+	value := decodeNode(node)
+	if decoded, ok := value.(float64); ok && node.Kind == yaml.ScalarNode {
+		return jsonnum.Exact(node.Value, decoded)
+	}
+	return value
+}
+
 func decodeNode(node *yaml.Node) any {
 	if node == nil {
 		return nil
