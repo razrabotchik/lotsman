@@ -103,8 +103,13 @@ type Policy struct {
 }
 
 // CheckTarget authorizes a target URL against the policy, before any
-// connection is attempted.
+// connection is attempted. A refusal is ErrDenied and classifies as policy:
+// the operation is translatable, and the operator's allowlist said no.
 func (p *Policy) CheckTarget(target *url.URL) error {
+	return errs.Wrap(errs.ClassPolicy, p.checkTarget(target))
+}
+
+func (p *Policy) checkTarget(target *url.URL) error {
 	if err := validateHTTPURL(target, true); err != nil {
 		return fmt.Errorf("%w: target: %w", ErrDenied, err)
 	}

@@ -2,10 +2,13 @@ package auth
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -13,6 +16,7 @@ import (
 
 	"github.com/razrabotchik/lotsman/internal/config"
 	"github.com/razrabotchik/lotsman/internal/domain"
+	"github.com/razrabotchik/lotsman/internal/egress"
 	"github.com/razrabotchik/lotsman/internal/errs"
 	"github.com/razrabotchik/lotsman/internal/redact"
 )
@@ -31,6 +35,7 @@ type tokenEndpoint struct {
 	// can tell `client_secret_basic` from `client_secret_post`.
 	mu        sync.Mutex
 	basicAuth bool
+	secret    string
 	form      url.Values
 	// answer overrides the default response.
 	answer func(w http.ResponseWriter, r *http.Request)
@@ -43,8 +48,13 @@ func newTokenEndpoint(t *testing.T) *tokenEndpoint {
 		e.mints.Add(1)
 		_ = r.ParseForm()
 		e.mu.Lock()
-		_, _, e.basicAuth = r.BasicAuth()
+		var password string
+		_, password, e.basicAuth = r.BasicAuth()
 		e.form = r.Form
+		e.secret = password
+		if !e.basicAuth {
+			e.secret = r.Form.Get("client_secret")
+		}
 		answer := e.answer
 		e.mu.Unlock()
 
@@ -76,6 +86,12 @@ func (e *tokenEndpoint) profile(t *testing.T, scopes ...string) *config.Profile 
 	}
 }
 
+// allowing is the egress policy an operator writes for this endpoint: its
+// origin, named explicitly (ADR-0017).
+func allowing(e *tokenEndpoint) *egress.Policy {
+	return &egress.Policy{AllowedOrigins: []string{e.server.URL}}
+}
+
 // binding wraps a profile the way the catalog would.
 func binding(name string, profile *config.Profile) Binding {
 	return Binding{Credentials: []Credential{{
@@ -96,7 +112,7 @@ func TestAMintedTokenIsPresentedToTheAPI(t *testing.T) {
 	}))
 	defer api.Close()
 
-	client := Client(api.Client(), binding("api", endpoint.profile(t)), NewMinter(api.Client()))
+	client := Client(api.Client(), binding("api", endpoint.profile(t)), NewMinter(api.Client(), allowing(endpoint)))
 	res, err := client.Get(api.URL)
 	if err != nil {
 		t.Fatalf("get: %v", err)
@@ -120,7 +136,7 @@ func TestOneMintPerExpiryEvenUnderConcurrency(t *testing.T) {
 	}))
 	defer api.Close()
 
-	client := Client(api.Client(), binding("api", endpoint.profile(t)), NewMinter(api.Client()))
+	client := Client(api.Client(), binding("api", endpoint.profile(t)), NewMinter(api.Client(), allowing(endpoint)))
 
 	var wait sync.WaitGroup
 	for range 20 {
@@ -149,9 +165,9 @@ func TestTheMintAsksForWhatWasConfigured(t *testing.T) {
 	profile := endpoint.profile(t, "read", "write")
 	profile.Audience = "https://api.example.com/"
 
-	minter := NewMinter(endpoint.server.Client())
+	minter := NewMinter(endpoint.server.Client(), allowing(endpoint))
 	credential := binding("api", profile).Credentials[0]
-	if _, err := minter.token(&credential); err != nil {
+	if _, err := minter.token(t.Context(), &credential); err != nil {
 		t.Fatalf("token: %v", err)
 	}
 
@@ -171,11 +187,11 @@ func TestTheMintAsksForWhatWasConfigured(t *testing.T) {
 // FR-35's other half: dropping the cached token makes the next call mint.
 func TestInvalidateForcesAFreshMint(t *testing.T) {
 	endpoint := newTokenEndpoint(t)
-	minter := NewMinter(endpoint.server.Client())
+	minter := NewMinter(endpoint.server.Client(), allowing(endpoint))
 	credential := binding("api", endpoint.profile(t)).Credentials[0]
 
 	for range 3 {
-		if _, err := minter.token(&credential); err != nil {
+		if _, err := minter.token(t.Context(), &credential); err != nil {
 			t.Fatalf("token: %v", err)
 		}
 	}
@@ -184,7 +200,7 @@ func TestInvalidateForcesAFreshMint(t *testing.T) {
 	}
 
 	minter.Invalidate("api")
-	if _, err := minter.token(&credential); err != nil {
+	if _, err := minter.token(t.Context(), &credential); err != nil {
 		t.Fatalf("token after invalidation: %v", err)
 	}
 	if got := endpoint.mints.Load(); got != 2 {
@@ -223,7 +239,7 @@ func TestATokenEndpointFailureIsACredentialFailure(t *testing.T) {
 			}))
 			defer api.Close()
 
-			client := Client(api.Client(), binding("api", endpoint.profile(t)), NewMinter(api.Client()))
+			client := Client(api.Client(), binding("api", endpoint.profile(t)), NewMinter(api.Client(), allowing(endpoint)))
 			if _, err := client.Get(api.URL); err == nil {
 				t.Fatal("a call proceeded without a token")
 			} else if class := errs.ClassOf(err); class != errs.ClassAuth {
@@ -249,9 +265,9 @@ func TestNeitherTheClientSecretNorTheMintedTokenIsLogged(t *testing.T) {
 		_, _ = w.Write([]byte(`{"access_token":"` + mintedToken + `","token_type":"Bearer","expires_in":3600}`))
 	}
 
-	minter := NewMinter(endpoint.server.Client())
+	minter := NewMinter(endpoint.server.Client(), allowing(endpoint))
 	credential := binding("api", endpoint.profile(t)).Credentials[0]
-	if _, err := minter.token(&credential); err != nil {
+	if _, err := minter.token(t.Context(), &credential); err != nil {
 		t.Fatalf("token: %v", err)
 	}
 
@@ -264,5 +280,98 @@ func TestNeitherTheClientSecretNorTheMintedTokenIsLogged(t *testing.T) {
 	}
 	if strings.Contains(logged.String(), mintedToken) {
 		t.Errorf("the minted token reached the log:\n%s", logged.String())
+	}
+}
+
+// ADR-0017: the token endpoint is egress. An origin the operator did not
+// allowlist is refused before a connection is made, and the refusal is the
+// policy's, so the operator is sent to the allowlist rather than the secret.
+func TestATokenEndpointOutsideTheAllowlistIsNeverCalled(t *testing.T) {
+	endpoint := newTokenEndpoint(t)
+	minter := NewMinter(endpoint.server.Client(), &egress.Policy{AllowedOrigins: []string{"https://api.example.com"}})
+	credential := binding("api", endpoint.profile(t)).Credentials[0]
+
+	_, err := minter.token(t.Context(), &credential)
+	if err == nil {
+		t.Fatal("a token endpoint outside the allowlist issued a token")
+	}
+	if !errors.Is(err, egress.ErrDenied) {
+		t.Errorf("not an egress denial: %v", err)
+	}
+	if class := errs.ClassOf(err); class != errs.ClassPolicy {
+		t.Errorf("class = %s, want policy", class)
+	}
+	if got := endpoint.mints.Load(); got != 0 {
+		t.Errorf("the token endpoint was called %d times", got)
+	}
+}
+
+// A rotated client secret is the one the next mint presents: the secret is
+// read when a token is needed, not when the profile was first used.
+func TestARotatedClientSecretTakesEffectAtTheNextMint(t *testing.T) {
+	endpoint := newTokenEndpoint(t)
+	endpoint.answer = func(w http.ResponseWriter, _ *http.Request) {
+		// Expired on arrival, so every call mints.
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"` + mintedToken + `","token_type":"Bearer","expires_in":1}`))
+	}
+	path := filepath.Join(t.TempDir(), "client-secret")
+	profile := endpoint.profile(t)
+	profile.ClientSecretRef = config.SecretRef("file:" + path)
+	profile.AuthStyle = config.AuthStyleBody
+	minter := NewMinter(endpoint.server.Client(), allowing(endpoint))
+	credential := binding("api", profile).Credentials[0]
+
+	for _, secret := range []string{"CANARY-first-secret-11aa", "CANARY-second-secret-22bb"} {
+		if err := os.WriteFile(path, []byte(secret), 0o600); err != nil {
+			t.Fatalf("write secret: %v", err)
+		}
+		if _, err := minter.token(t.Context(), &credential); err != nil {
+			t.Fatalf("token: %v", err)
+		}
+		endpoint.mu.Lock()
+		presented := endpoint.secret
+		endpoint.mu.Unlock()
+		if presented != secret {
+			t.Errorf("the mint presented %q, want the secret on disk %q", presented, secret)
+		}
+	}
+}
+
+// A client secret that cannot be read, or reads empty, is a local failure
+// naming the profile and the reference. The authorization server never sees
+// a request with an empty secret in it.
+func TestAnUnusableClientSecretRefusesBeforeTheNetwork(t *testing.T) {
+	cases := map[string]string{
+		"unset": "",
+		"empty": "set-but-empty",
+	}
+	for name, mode := range cases {
+		t.Run(name, func(t *testing.T) {
+			endpoint := newTokenEndpoint(t)
+			profile := endpoint.profile(t)
+			profile.ClientSecretRef = config.SecretRef("env:LOTSMAN_TEST_MISSING_SECRET")
+			if mode != "" {
+				t.Setenv("LOTSMAN_TEST_MISSING_SECRET", "")
+			}
+			minter := NewMinter(endpoint.server.Client(), allowing(endpoint))
+			credential := binding("api", profile).Credentials[0]
+
+			_, err := minter.token(t.Context(), &credential)
+			if err == nil {
+				t.Fatal("a mint proceeded without a client secret")
+			}
+			if class := errs.ClassOf(err); class != errs.ClassAuth {
+				t.Errorf("class = %s, want auth", class)
+			}
+			for _, want := range []string{`"api"`, "env:LOTSMAN_TEST_MISSING_SECRET"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the failure does not name %s: %v", want, err)
+				}
+			}
+			if got := endpoint.mints.Load(); got != 0 {
+				t.Errorf("the token endpoint was called %d times", got)
+			}
+		})
 	}
 }

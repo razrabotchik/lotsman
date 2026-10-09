@@ -8,6 +8,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/razrabotchik/lotsman/internal/argvalidate"
 	"github.com/razrabotchik/lotsman/internal/catalog"
 	"github.com/razrabotchik/lotsman/internal/domain"
 	"github.com/razrabotchik/lotsman/internal/errs"
@@ -257,7 +258,13 @@ func addCallOperation(srv *mcp.Server, runners []runner, kind callKind) {
 				"lotsman: %s is a read; use call_read_operation", prepared.tool.OperationKey)
 		}
 
-		result, err := prepared.call(ctx, req, in.Arguments)
+		// in.Arguments went through the SDK's decoding, which rounds every
+		// number to a float64; the call is made from what the client sent.
+		args, err := callArguments(req.Params.Arguments)
+		if err != nil {
+			return nil, response.Result{}, err
+		}
+		result, err := prepared.call(ctx, req, args)
 		if err != nil {
 			var ask *pending
 			if errors.As(err, &ask) {
@@ -271,6 +278,18 @@ func addCallOperation(srv *mcp.Server, runners []runner, kind callKind) {
 		}
 		return res, result, nil
 	})
+}
+
+// callArguments reads the grouped arguments out of a call tool's raw input,
+// numbers intact (argvalidate.Decode).
+func callArguments(raw json.RawMessage) (map[string]any, error) {
+	var envelope struct {
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil, errs.Errorf(errs.ClassUsage, "lotsman: the call's input is not a JSON object: %w", err)
+	}
+	return argvalidate.Decode(envelope.Arguments)
 }
 
 func unknownOperation(id string) error {

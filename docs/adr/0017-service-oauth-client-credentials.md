@@ -86,3 +86,22 @@ FR-58 named the deadline and the shape; FR-63 calls this `service` mode. FR-35 h
   missing: the report carried it and `inspect` built its own document from selected fields, so the
   section existed and never reached an operator.
 - `go.mod` gained one direct require and `go.sum` gained nothing, for the second feature running.
+
+## Since then (2026-10-09)
+
+Two points above were stated and not delivered, and both are now enforced by a test.
+
+Point 3 said the token endpoint is egress. The mint ran on the egress client, which guards
+addresses and redirects, but the *origin* check lives in `CheckTarget`, and only the API call path
+called it: a token endpoint outside `allowedOrigins` was minted from anyway. The minter now holds
+the policy and checks the token URL before every mint; a refusal classifies as `policy`, so the
+operator is sent to the allowlist rather than the secret.
+
+The source comment promised that a rotated client secret takes effect on the next mint. It was read
+once, when the profile's token source was built, and the source was cached for the life of the
+process. The minter now keeps its own per-profile cache — the same one-mint-per-expiry under a
+lock that oauth2's reusing source gave (point 4) — and reads the secret at every mint. A secret
+that cannot be read stops the mint before the network, naming the profile and the reference;
+previously it became an empty `client_secret` and an authorization server's refusal in place of
+the real reason. The mint also runs under the call's context, so a caller that gives up stops
+waiting.

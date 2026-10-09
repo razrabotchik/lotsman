@@ -37,7 +37,7 @@ func TestLogSinkWritesTheEvent(t *testing.T) {
 	line := out.String()
 	for _, want := range []string{
 		"msg=audit",
-		"schemaVersion=1",
+		"schemaVersion=2",
 		`operation=default:GET:/pets/{petId}`,
 		"tool=get_pet",
 		"effect=read",

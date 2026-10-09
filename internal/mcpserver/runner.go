@@ -3,9 +3,13 @@ package mcpserver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
+	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
@@ -105,7 +109,7 @@ func (r *runner) record(ctx context.Context, started time.Time, result response.
 		Effect:        string(r.tool.Effect.Effect),
 		Subject:       subjectOf(ctx),
 		Decision:      audit.DecisionExecuted,
-		Origin:        origin(r.tool),
+		Origin:        originOf(r.base()),
 		Method:        r.tool.Method,
 		Path:          r.tool.SafePath(),
 		Status:        result.Status,
@@ -115,12 +119,30 @@ func (r *runner) record(ctx context.Context, started time.Time, result response.
 		Refreshed:     how.refreshed,
 	}
 	var ask *pending
+	var lost *sendFailure
+	var unread *unreadBody
 	switch {
+	case err == nil:
 	case errors.As(err, &ask):
 		// Waiting for a human is not a refusal and not an execution: nothing
 		// reached the network, and nothing was denied either (FR-44).
 		event.Decision = audit.DecisionInputRequired
-	case err != nil:
+	case errors.As(err, &unread):
+		// The API answered; only its body was lost. The call happened, and
+		// the status says how it went.
+		event.Status = unread.status
+		event.Reason = string(errs.ClassOf(err))
+	case errors.As(err, &lost):
+		// Sent, or tried to be, and no answer: not a refusal, because no
+		// control stopped it -- and recording one would promise the API did
+		// nothing, which is exactly what is not known (ADR-0019).
+		event.Decision = audit.DecisionFailed
+		if lost.written {
+			event.Decision = audit.DecisionOutcomeUnknown
+		}
+		event.Reason = string(errs.ClassOf(err))
+		event.Status = 0
+	default:
 		event.Decision = audit.DecisionRefused
 		event.Reason = string(errs.ClassOf(err))
 		event.Status = 0
@@ -178,7 +200,7 @@ func (r *runner) execute(ctx context.Context, invocation *mcp.CallToolRequest, a
 	// Last: everything that could refuse this call without troubling a human
 	// already has, so a prompt is only ever shown for a call that would
 	// otherwise happen -- and the only thing a yes does is send it.
-	ask, err := r.approval.check(invocation, r.tool, args)
+	ask, err := r.approval.check(invocation, r.tool, r.base(), args)
 	if err != nil {
 		return response.Result{}, how, err
 	}
@@ -214,24 +236,131 @@ func (r *runner) execute(ctx context.Context, invocation *mcp.CallToolRequest, a
 		}
 	}
 
+	status := resp.StatusCode
 	result, err := response.FromHTTP(resp, r.maxResponseBytes)
 	if err != nil {
-		return response.Result{}, how, redact.Error(err)
+		return response.Result{}, how, &unreadBody{status: status, err: redact.Error(errs.Errorf(errs.ClassUpstream,
+			"lotsman: %s %s: the API answered %d and its body could not be read: %w",
+			r.tool.Method, r.tool.SafePath(), status, err))}
 	}
 	return result, how, nil
 }
 
+// base is where this call goes: the base URL the request builder resolves,
+// with the operator's --base-url taking precedence over the document's
+// servers. It is asked of the same function Build asks, so the approval
+// prompt and the audit record cannot name a different place from the one the
+// request is sent to -- which is what they did when they read the document's
+// servers directly and --base-url pointed somewhere else. Empty when nothing
+// resolves; the call itself is refused for that reason.
+func (r *runner) base() string {
+	base, err := requestbuild.BaseURL(r.tool.Servers, requestbuild.Options{BaseURL: r.baseURL})
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSuffix(base, "/")
+}
+
+// originOf reduces a base URL to the scheme, host and port the audit record
+// promises: a base path is the document's detail, not where the call went.
+func originOf(base string) string {
+	parsed, err := url.Parse(base)
+	if base == "" || err != nil {
+		return ""
+	}
+	return redact.String(parsed.Scheme + "://" + parsed.Host)
+}
+
 // send performs one request. Every caller hands the response to
 // response.FromHTTP or to drain, and both of those close it.
+//
+// A failure says how far the request got, because that decides what the
+// caller may do next. A control that stopped it -- the dial guard, a
+// credential that could not be applied -- is a refusal and keeps its own
+// class. Anything else is a *sendFailure, which records whether the request
+// was written: a mutation that was written and never answered may have
+// happened, and a caller told otherwise will repeat it.
 func (r *runner) send(req *http.Request) (*http.Response, error) {
-	resp, err := r.client.Do(req)
-	if err != nil {
+	var progress sendProgress
+	resp, err := r.client.Do(req.WithContext(httptrace.WithClientTrace(req.Context(), progress.trace())))
+	if err == nil {
+		return resp, nil
+	}
+	switch {
+	case errors.Is(err, egress.ErrDenied):
+		// The dial guard refused every address: nothing was sent.
+		return nil, redact.Error(errs.Wrap(errs.ClassPolicy,
+			fmt.Errorf("lotsman: %s %s: %w", r.tool.Method, r.tool.SafePath(), err)))
+	case errs.ClassOf(err) == errs.ClassAuth:
+		// The credential could not be applied, which happens before the
+		// request reaches the transport. Reporting it as upstream would send
+		// an operator to the API when the fix is the secret.
+		return nil, redact.Error(err)
+	}
+
+	failure := &sendFailure{written: !progress.provablyUnsent()}
+	if failure.written {
 		// A transport error can carry the request URL, and an API key may live
 		// in a query parameter.
-		return nil, redact.Error(
-			errs.Errorf(errs.ClassUpstream, "lotsman: %s %s: %w", r.tool.Method, r.tool.SafePath(), err))
+		failure.err = errs.Errorf(errs.ClassUpstream, "lotsman: %s %s: the request was sent and no response came back: %w",
+			r.tool.Method, r.tool.SafePath(), err)
+		if !r.tool.Effect.IsRead() {
+			failure.err = errs.Errorf(errs.ClassUpstream, "%w; the API may have acted on it -- "+
+				"check its state before calling %s again", failure.err, r.tool.Name)
+		}
+	} else {
+		failure.err = errs.Errorf(errs.ClassUpstream, "lotsman: %s %s: the request could not be sent, "+
+			"and nothing reached the API: %w", r.tool.Method, r.tool.SafePath(), err)
 	}
-	return resp, nil
+	failure.err = redact.Error(failure.err)
+	return nil, failure
+}
+
+// sendFailure is a request that went to the transport and came back without
+// a response.
+type sendFailure struct {
+	err error
+	// written is false only when the request provably never left: the
+	// transport took a connection and failed before writing to it, or never
+	// got one. Everything else -- including a transport that cannot say --
+	// counts as written, because the safe mistake is to doubt a call that
+	// did not happen, never to deny one that did.
+	written bool
+}
+
+func (f *sendFailure) Error() string { return f.err.Error() }
+func (f *sendFailure) Unwrap() error { return f.err }
+
+// unreadBody is an answer whose status arrived and whose body did not.
+type unreadBody struct {
+	status int
+	err    error
+}
+
+func (u *unreadBody) Error() string { return u.err.Error() }
+func (u *unreadBody) Unwrap() error { return u.err }
+
+// sendProgress follows one request through net/http's transport.
+type sendProgress struct {
+	// asked is set when the transport went looking for a connection, which
+	// is how a net/http transport announces itself. A transport that never
+	// says so is one whose progress cannot be read.
+	asked atomic.Bool
+	// wrote is set when the request headers were written to a connection.
+	wrote atomic.Bool
+}
+
+func (p *sendProgress) trace() *httptrace.ClientTrace {
+	return &httptrace.ClientTrace{
+		GetConn:      func(string) { p.asked.Store(true) },
+		WroteHeaders: func() { p.wrote.Store(true) },
+	}
+}
+
+// provablyUnsent reports that nothing of the request reached a connection: a
+// request whose headers were never written cannot have been acted on.
+func (p *sendProgress) provablyUnsent() bool {
+	return p.asked.Load() && !p.wrote.Load()
 }
 
 // drain discards a response whose body nobody will read, so the connection
@@ -288,7 +417,7 @@ func newRunners(opts *Options, outbound *egress.Policy) []runner {
 	// not to the operation, so two hundred tools bound to one profile hold
 	// one token between them.
 	client := opts.httpClient()
-	minter := auth.NewMinter(client)
+	minter := auth.NewMinter(client, outbound)
 	runners := make([]runner, 0, len(tools))
 	for i := range tools {
 		tool := &tools[i]

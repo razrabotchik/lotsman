@@ -228,6 +228,23 @@ mutate "runtime: skip the egress destination check" \
 	"if denied := error(nil); denied != nil {" \
 	./internal/mcpserver/
 
+mutate "auth: mint from a token endpoint the allowlist never named" \
+	internal/auth/oauth2.go \
+	"if denied := m.egress.CheckTarget(target); denied != nil {" \
+	"if denied := m.egress.CheckTarget(target); false && denied != nil {" \
+	./internal/auth/
+
+mutate "runtime: name the document's server in the prompt and the record" \
+	internal/mcpserver/runner.go \
+	"requestbuild.BaseURL(r.tool.Servers, requestbuild.Options{BaseURL: r.baseURL})" \
+	"requestbuild.BaseURL(r.tool.Servers, requestbuild.Options{})" \
+	./internal/mcpserver/
+
+mutate "audit: a request that was written provably never left" \
+	internal/mcpserver/runner.go \
+	"return p.asked.Load() && !p.wrote.Load()" "return true" \
+	./internal/mcpserver/
+
 mutate "runtime: never ask for approval" \
 	internal/mcpserver/approval.go \
 	"return a.mode != config.ApprovalNever && !tool.Effect.IsRead()" "return false" \
@@ -328,6 +345,11 @@ mutate "arguments: validate nothing" \
 	internal/argvalidate/argvalidate.go \
 	"func (v *Validator) Validate(args map[string]any) error {" \
 	"func (v *Validator) Validate(args map[string]any) error { return nil" \
+	./internal/argvalidate/
+
+mutate "arguments: round every number to a float64" \
+	internal/argvalidate/decode.go \
+	"	decoder.UseNumber()" "	_ = decoder" \
 	./internal/argvalidate/
 
 mutate "serialization: stop percent-encoding path values" \

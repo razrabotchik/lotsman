@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/razrabotchik/lotsman/internal/argvalidate"
 	"github.com/razrabotchik/lotsman/internal/domain"
 	"github.com/razrabotchik/lotsman/internal/errs"
 )
@@ -177,7 +178,7 @@ func scalarString(name string, value any) (string, error) {
 	case int64:
 		return strconv.FormatInt(v, 10), nil
 	case json.Number:
-		return v.String(), nil
+		return plainDecimal(name, v)
 	case nil:
 		// A URL has no representation for null. Sending an empty value
 		// instead would be a guess about what the API means by it.
@@ -187,6 +188,62 @@ func scalarString(name string, value any) (string, error) {
 		return "", errs.Errorf(errs.ClassUsage,
 			"requestbuild: parameter %q has value type %T, which is not a scalar", name, value)
 	}
+}
+
+// plainDecimal writes a number literal as the exact decimal it denotes.
+//
+// The literal is the value: it arrived that way so that nothing rounded it
+// (argvalidate.Decode). It is not sent verbatim, though, because JSON spells
+// one number many ways and a URL parameter is read by a parser that knows
+// one: "1e3", "1000.0" and "1000" are the same integer to a schema, and only
+// the last is an integer to an API reading a query string. So the decimal
+// point is moved by the exponent as text, and the zeros that carry no value
+// are dropped -- no arithmetic, nothing to round.
+func plainDecimal(name string, n json.Number) (string, error) {
+	literal := string(n)
+	if !argvalidate.Carried(n) {
+		return "", errs.Errorf(errs.ClassUsage,
+			"requestbuild: parameter %q is a number lotsman will not expand into a URL", name)
+	}
+	sign := ""
+	if strings.HasPrefix(literal, "-") {
+		sign, literal = "-", literal[1:]
+	}
+	mantissa, exponent := literal, 0
+	if i := strings.IndexAny(literal, "eE"); i >= 0 {
+		parsed, err := strconv.Atoi(literal[i+1:])
+		if err != nil {
+			return "", errs.Errorf(errs.ClassUsage, "requestbuild: parameter %q is not a JSON number", name)
+		}
+		mantissa, exponent = literal[:i], parsed
+	}
+	whole, fraction, _ := strings.Cut(mantissa, ".")
+	if whole == "" || strings.Trim(whole+fraction, "0123456789") != "" {
+		return "", errs.Errorf(errs.ClassUsage, "requestbuild: parameter %q is not a JSON number", name)
+	}
+
+	digits := whole + fraction
+	point := len(whole) + exponent
+	if point < 0 {
+		digits = strings.Repeat("0", -point) + digits
+		point = 0
+	}
+	if point > len(digits) {
+		digits += strings.Repeat("0", point-len(digits))
+	}
+	whole = strings.TrimLeft(digits[:point], "0")
+	fraction = strings.TrimRight(digits[point:], "0")
+	if whole == "" {
+		whole = "0"
+	}
+	if fraction != "" {
+		return sign + whole + "." + fraction, nil
+	}
+	if whole == "0" {
+		// Negative zero is zero to every reader of a URL.
+		return "0", nil
+	}
+	return sign + whole, nil
 }
 
 // percentEncode encodes s for use in a URL, keeping only unreserved

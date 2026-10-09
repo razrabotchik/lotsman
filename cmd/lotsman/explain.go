@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -11,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/razrabotchik/lotsman/internal/argvalidate"
 	"github.com/razrabotchik/lotsman/internal/auth"
 	"github.com/razrabotchik/lotsman/internal/catalog"
 	"github.com/razrabotchik/lotsman/internal/config"
@@ -111,11 +111,13 @@ func readArguments(path string) (requestbuild.Arguments, error) {
 	if err != nil {
 		return nil, errs.Errorf(errs.ClassUsage, "explain-call: cannot read %s", path)
 	}
-	var arguments requestbuild.Arguments
-	if err := json.Unmarshal(data, &arguments); err != nil {
+	// Decoded the way serve decodes a call, so the request line shows the
+	// number that would be sent rather than its float64 neighbour.
+	arguments, err := argvalidate.Decode(data)
+	if err != nil {
 		return nil, errs.Errorf(errs.ClassUsage, "explain-call: %s is not a JSON object of argument groups", path)
 	}
-	return arguments, nil
+	return requestbuild.Arguments(arguments), nil
 }
 
 // explain prints the decision trail. Every line is a fact lotsman would act

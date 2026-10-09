@@ -7,26 +7,40 @@ import "time"
 // It ships with the first event on the report's precedent: anything anyone
 // may parse is a promise, and a version is cheap before there are readers and
 // expensive afterwards.
-const SchemaVersion = 1
+//
+// Version 2 narrowed `refused` to what its name says and added `failed` and
+// `outcome_unknown` for the calls version 1 wrongly recorded as refused: a
+// request that left the process and never came back (ADR-0019).
+const SchemaVersion = 2
 
 // Decision is how a call ended.
 type Decision string
 
-// Decisions. These are the three outcomes a call can have, and they are
-// deliberately distinguishable: "refused" and "waiting to be approved" look
-// the same to a caller who only sees that nothing happened.
+// Decisions. They are deliberately distinguishable: "refused", "waiting to be
+// approved" and "sent, and nobody knows what happened" all look the same to a
+// caller who only sees that no answer came back -- and only the first two
+// promise that the API did nothing.
 const (
 	// DecisionExecuted means a request reached the upstream and an answer
 	// came back. It says nothing about whether the API liked it: a 4xx is an
-	// executed call with a status (FR-39).
+	// executed call with a status (FR-39). Reason is set when the answer
+	// arrived and its body could not be read.
 	DecisionExecuted Decision = "executed"
-	// DecisionRefused means lotsman stopped the call. Reason says which
-	// control did it.
+	// DecisionRefused means lotsman stopped the call, and nothing reached
+	// the upstream. Reason says which control did it.
 	DecisionRefused Decision = "refused"
 	// DecisionInputRequired means the call is waiting for a human to confirm
 	// it and the client will make it again (FR-44). Nothing reached the
 	// network, and nothing was denied either.
 	DecisionInputRequired Decision = "input_required"
+	// DecisionFailed means lotsman tried to send the request and could not:
+	// no connection, or one that broke before the request was written.
+	// Nothing reached the upstream, so nothing took effect.
+	DecisionFailed Decision = "failed"
+	// DecisionOutcomeUnknown means the request was written and no response
+	// came back. The upstream may have acted on it; for a mutation, that is
+	// the one fact that matters before trying again.
+	DecisionOutcomeUnknown Decision = "outcome_unknown"
 )
 
 // Event is one completed call.
@@ -50,7 +64,8 @@ type Event struct {
 	Subject string `json:"subject,omitempty"`
 
 	Decision Decision `json:"decision"`
-	// Reason is the machine-readable class of a refusal, empty otherwise.
+	// Reason is the machine-readable class of whatever stopped the call,
+	// empty when nothing did.
 	Reason string `json:"reason,omitempty"`
 
 	// Origin is the scheme, host and port that would have been called —

@@ -71,7 +71,10 @@ func (p *pending) Error() string { return "approval required" }
 // against the client's elicitation handler and re-invokes this tool, so the
 // whole call -- validation, request build, egress -- runs again from the top
 // with the answer in hand.
-func (a approver) check(req *mcp.CallToolRequest, tool *catalog.Tool, args map[string]any) (*mcp.CallToolResult, error) {
+//
+// target is the base URL the request was built against (runner.base), so the
+// prompt names the place a yes would send the call to.
+func (a approver) check(req *mcp.CallToolRequest, tool *catalog.Tool, target string, args map[string]any) (*mcp.CallToolResult, error) {
 	if !a.required(tool) {
 		return nil, nil
 	}
@@ -108,7 +111,7 @@ func (a approver) check(req *mcp.CallToolRequest, tool *catalog.Tool, args map[s
 	return &mcp.CallToolResult{
 		InputRequests: mcp.InputRequestMap{approvalRequestID: &mcp.ElicitParams{
 			Mode:    "form",
-			Message: approvalMessage(tool, args),
+			Message: approvalMessage(tool, target, args),
 			// The answer lotsman needs is the action itself -- accept,
 			// decline or cancel -- so the form asks for no fields. A prompt
 			// that also collected data would be a second way to influence a
@@ -154,7 +157,7 @@ func clientCanBeAsked(session *mcp.ServerSession) bool {
 // approvalMessage is the FR-46 payload: what the call is, what it does, where
 // it goes, and a redacted summary of its arguments. It is deliberately not
 // the request: a full URL and a full body are what a human stops reading.
-func approvalMessage(tool *catalog.Tool, args map[string]any) string {
+func approvalMessage(tool *catalog.Tool, target string, args map[string]any) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Allow %s?\n", tool.Name)
 	if tool.Description != "" {
@@ -162,23 +165,11 @@ func approvalMessage(tool *catalog.Tool, args map[string]any) string {
 	}
 	fmt.Fprintf(&b, "operation %s\n", tool.OperationKey)
 	fmt.Fprintf(&b, "effect    %s (%s, %s)\n", tool.Effect.Effect, tool.Effect.Source, tool.Effect.Confidence)
-	fmt.Fprintf(&b, "target    %s %s%s\n", tool.Method, origin(tool), tool.SafePath())
+	fmt.Fprintf(&b, "target    %s %s%s\n", tool.Method, redact.String(target), tool.SafePath())
 	if summary := argumentSummary(args); summary != "" {
 		fmt.Fprintf(&b, "arguments %s\n", summary)
 	}
 	return b.String()
-}
-
-// origin is the target origin, without the path. It comes from the tool's own
-// servers list, which is what the runner would use; the operator's --base-url
-// override is not shown because the runner may still refuse it at the egress
-// check, and a prompt naming an origin nothing was sent to would be worse
-// than none.
-func origin(tool *catalog.Tool) string {
-	if len(tool.Servers) == 0 {
-		return ""
-	}
-	return redact.String(strings.TrimSuffix(tool.Servers[0], "/"))
 }
 
 // argumentSummary lists what was passed, with values shown only where a human

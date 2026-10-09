@@ -2,13 +2,17 @@ package auth
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
 	"sync"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/clientcredentials"
 
 	"github.com/razrabotchik/lotsman/internal/config"
+	"github.com/razrabotchik/lotsman/internal/egress"
 	"github.com/razrabotchik/lotsman/internal/errs"
 	"github.com/razrabotchik/lotsman/internal/redact"
 )
@@ -24,22 +28,38 @@ import (
 // should still come up, still answer `inspect`, and refuse only the calls that
 // actually need a token.
 type Minter struct {
-	// base is the egress-governed client. The token endpoint is an origin
-	// lotsman calls, so the allowlist, the dial guard and the redirect
-	// refusal apply to it exactly as they apply to an API: a credential
-	// provider is not a hole in the egress floor.
+	// base is the egress-governed client: the dial guard and the redirect
+	// refusal apply to the token endpoint exactly as they apply to an API.
 	base *http.Client
+	// egress is the policy the token endpoint's origin is checked against
+	// before every mint. The client alone does not do this -- it guards
+	// addresses, not origins -- and a credential provider is not a hole in
+	// the floor (ADR-0017).
+	egress *egress.Policy
 
 	mu      sync.Mutex
-	sources map[string]oauth2.TokenSource
+	sources map[string]*source
 }
 
-// NewMinter returns a minter over the given outbound client.
-func NewMinter(base *http.Client) *Minter {
+// source is one profile's cached token. Its lock serialises the callers that
+// find no valid token behind a single mint, so a hundred calls arriving at
+// once cost one fetch rather than a hundred.
+type source struct {
+	mu       sync.Mutex
+	token    *oauth2.Token
+	settings *clientcredentials.Config
+}
+
+// NewMinter returns a minter over the given outbound client and the policy
+// its token endpoints must satisfy. A nil policy allows no token endpoint.
+func NewMinter(base *http.Client, outbound *egress.Policy) *Minter {
 	if base == nil {
 		base = http.DefaultClient
 	}
-	return &Minter{base: base, sources: map[string]oauth2.TokenSource{}}
+	if outbound == nil {
+		outbound = &egress.Policy{}
+	}
+	return &Minter{base: base, egress: outbound, sources: map[string]*source{}}
 }
 
 // Mints reports whether a profile obtains its own token.
@@ -49,17 +69,26 @@ func Mints(profile *config.Profile) bool {
 
 // token returns a valid access token for the credential, minting one if the
 // cached token has expired or there is none.
-func (m *Minter) token(credential *Credential) (string, error) {
-	source := m.sourceFor(credential)
-	token, err := source.Token()
+//
+// ctx is the call's: a caller that gives up stops waiting for a mint it
+// started. The client's own budget bounds the mint either way (FR-32).
+func (m *Minter) token(ctx context.Context, credential *Credential) (string, error) {
+	cached := m.sourceFor(credential)
+	cached.mu.Lock()
+	defer cached.mu.Unlock()
+	if cached.token.Valid() {
+		return cached.token.AccessToken, nil
+	}
+
+	token, err := m.mint(ctx, cached.settings, &credential.Profile)
 	if err != nil {
 		// Not ClassUpstream: the API did not fail, and an operator reading
 		// this should be sent to the right system. The profile and the origin
 		// are named because an egress denial on a token endpoint is otherwise
 		// something they have to work backwards from.
-		return "", redact.Error(errs.Errorf(errs.ClassAuth,
+		return "", redact.Error(errs.Wrap(classOfMint(err), fmt.Errorf(
 			"auth: profile %q could not obtain a token from %s: %w",
-			credential.Name, credential.Profile.TokenURL, err))
+			credential.Name, credential.Profile.TokenURL, err)))
 	}
 	if token.AccessToken == "" {
 		return "", errs.Errorf(errs.ClassAuth,
@@ -68,24 +97,57 @@ func (m *Minter) token(credential *Credential) (string, error) {
 	}
 	// A minted token is a secret the moment it exists.
 	redact.Add(token.AccessToken)
+	cached.token = token
 	return token.AccessToken, nil
 }
 
-// sourceFor returns the cached token source for a profile, building one on
-// first use.
-//
-// The source itself does the caching and the locking: oauth2's reusing source
-// serialises concurrent callers behind a single fetch, so a hundred calls
-// arriving with no valid token cost one mint rather than a hundred.
-func (m *Minter) sourceFor(credential *Credential) oauth2.TokenSource {
+// classOfMint keeps a policy refusal a policy refusal: an operator told
+// "auth" would go looking at the secret, when the fix is the allowlist.
+func classOfMint(err error) errs.Class {
+	if errors.Is(err, egress.ErrDenied) {
+		return errs.ClassPolicy
+	}
+	return errs.ClassAuth
+}
+
+// mint fetches one token. Everything that can refuse it locally does so
+// before the network is touched: the origin, then the secret.
+func (m *Minter) mint(ctx context.Context, settings *clientcredentials.Config, profile *config.Profile) (*oauth2.Token, error) {
+	target, err := url.Parse(profile.TokenURL)
+	if err != nil {
+		return nil, errors.New("the token URL is not a URL")
+	}
+	if denied := m.egress.CheckTarget(target); denied != nil {
+		return nil, denied
+	}
+
+	// The secret is read at every mint rather than held from the first one,
+	// on the same terms as every other credential: a rotated secret takes
+	// effect on the next mint. A secret that cannot be read, or reads empty,
+	// stops here -- sending an empty client_secret would cost a round trip
+	// and earn an authorization server's refusal in place of the real reason.
+	secret, err := resolve(profile.ClientSecretRef)
+	if err != nil {
+		return nil, fmt.Errorf("client secret %s: %w", profile.ClientSecretRef, err)
+	}
+	// The settings are the source's, not built per mint, so that auto-detected
+	// client authentication is probed once rather than at every expiry. They
+	// are only ever touched under the source's lock.
+	settings.ClientSecret = secret
+	return settings.Token(context.WithValue(ctx, oauth2.HTTPClient, m.base))
+}
+
+// sourceFor returns the cached source for a profile, creating one on first
+// use.
+func (m *Minter) sourceFor(credential *Credential) *source {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if source, ok := m.sources[credential.Name]; ok {
-		return source
+	if cached, ok := m.sources[credential.Name]; ok {
+		return cached
 	}
-	source := m.build(&credential.Profile)
-	m.sources[credential.Name] = source
-	return source
+	cached := &source{settings: settingsFor(&credential.Profile)}
+	m.sources[credential.Name] = cached
+	return cached
 }
 
 // Invalidate drops the cached token for a profile, so the next call mints a
@@ -96,49 +158,21 @@ func (m *Minter) Invalidate(name string) {
 	delete(m.sources, name)
 }
 
-// build constructs the token source for a profile.
-func (m *Minter) build(profile *config.Profile) oauth2.TokenSource {
+// settingsFor is everything about a mint except the secret, which is read
+// fresh each time.
+func settingsFor(profile *config.Profile) *clientcredentials.Config {
 	settings := &clientcredentials.Config{
 		ClientID:  profile.ClientID,
 		TokenURL:  profile.TokenURL,
 		Scopes:    append([]string(nil), profile.Scopes...),
 		AuthStyle: authStyle(profile.AuthStyle),
-		EndpointParams: func() map[string][]string {
-			if profile.Audience == "" {
-				return nil
-			}
-			// RFC 8707: the resource this token is for. Providers that key a
-			// token to an audience refuse to issue one without it.
-			return map[string][]string{"resource": {profile.Audience}}
-		}(),
 	}
-	// The secret is read here rather than held from startup, on the same
-	// terms as every other credential: a rotated secret takes effect on the
-	// next mint. A resolution failure surfaces as a token error, which is
-	// where the caller is already prepared to see one.
-	settings.ClientSecret = resolveQuietly(profile.ClientSecretRef)
-
-	// The token fetch runs on the egress-governed client. The context carries
-	// it rather than a deadline: an oauth2 token source takes no per-call
-	// context, so the bound on a mint is the client's own budget -- which is
-	// the same budget every other outbound request is held to (FR-32).
-	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, m.base)
-	return settings.TokenSource(ctx)
-}
-
-// resolveQuietly reads a secret reference, returning empty on failure.
-//
-// The error is deliberately dropped here and surfaced by the mint instead: a
-// client secret that cannot be resolved produces an authorization server
-// refusal naming the profile, which is the message an operator can act on.
-// Returning it from `build` would mean a token source that exists in a failed
-// state, which is a second way for the same thing to be wrong.
-func resolveQuietly(ref config.SecretRef) string {
-	value, err := resolve(ref)
-	if err != nil {
-		return ""
+	if profile.Audience != "" {
+		// RFC 8707: the resource this token is for. Providers that key a
+		// token to an audience refuse to issue one without it.
+		settings.EndpointParams = url.Values{"resource": {profile.Audience}}
 	}
-	return value
+	return settings
 }
 
 // authStyle maps the configured style onto oauth2's.

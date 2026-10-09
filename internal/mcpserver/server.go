@@ -12,6 +12,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/razrabotchik/lotsman/internal/argvalidate"
 	"github.com/razrabotchik/lotsman/internal/audit"
 	"github.com/razrabotchik/lotsman/internal/buildinfo"
 	"github.com/razrabotchik/lotsman/internal/catalog"
@@ -337,7 +338,14 @@ func publishedSchema(t *catalog.Tool) map[string]any {
 // reports isError=true with the upstream status and body, so the model sees
 // what the API actually said (FR-39) instead of a generic failure message.
 func executeHandler(prepared *runner) mcp.ToolHandlerFor[map[string]any, response.Result] {
-	return func(ctx context.Context, req *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, response.Result, error) {
+	return func(ctx context.Context, req *mcp.CallToolRequest, _ map[string]any) (*mcp.CallToolResult, response.Result, error) {
+		// The SDK's own decoding has already validated the arguments, and
+		// rounded every number to a float64 on the way. The call is made from
+		// what the client actually sent.
+		args, err := argvalidate.Decode(req.Params.Arguments)
+		if err != nil {
+			return nil, response.Result{}, err
+		}
 		result, err := prepared.call(ctx, req, args)
 		if err != nil {
 			// An approval request is not a failure: it is the first half of a

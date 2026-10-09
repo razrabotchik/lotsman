@@ -5,11 +5,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/razrabotchik/lotsman/internal/audit"
 	"github.com/razrabotchik/lotsman/internal/catalog"
 	"github.com/razrabotchik/lotsman/internal/config"
 	"github.com/razrabotchik/lotsman/internal/domain"
@@ -236,5 +238,73 @@ func TestApprovalFailsClosedInSearchMode(t *testing.T) {
 	}
 	if got := errorText(t, res, err); !strings.Contains(got, string(domain.ReasonApprovalUnavailable)) {
 		t.Errorf("refusal = %q, want %s", got, domain.ReasonApprovalUnavailable)
+	}
+}
+
+// recorder keeps every audit event a call writes.
+type recorder struct {
+	mu     sync.Mutex
+	events []audit.Event
+}
+
+//nolint:gocritic // hugeParam: the Sink interface passes an Event by value.
+func (r *recorder) Record(event audit.Event) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, event)
+}
+
+// The prompt and the record name the place the request goes. The document
+// says staging and the operator's --base-url says production: a prompt that
+// read the document would ask a human to approve a staging call and then
+// send it to production, and the record would say staging afterwards.
+func TestApprovalAndAuditNameTheOriginTheRequestGoesTo(t *testing.T) {
+	var calls atomic.Int64
+	production := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":1}`))
+	}))
+	defer production.Close()
+	const staging = "https://staging.example.com"
+
+	var prompts []string
+	events := &recorder{}
+	cat := mutationCatalog(t, staging+"/v2")
+	session := connectWith(t, &mcpserver.Options{
+		Catalog: &cat, BaseURL: production.URL, HTTPClient: production.Client(), Audit: events,
+	}, elicitingClient("accept", &prompts, nil))
+
+	res, err := session.CallTool(t.Context(), &mcp.CallToolParams{
+		Name:      cat.Tools[0].Name,
+		Arguments: map[string]any{"body": map[string]any{"name": "Murka"}},
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("an approved mutation failed: %v %q", err, errorText(t, res, err))
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("production was called %d times, want 1", calls.Load())
+	}
+
+	if len(prompts) != 1 {
+		t.Fatalf("prompts = %d, want exactly one", len(prompts))
+	}
+	if !strings.Contains(prompts[0], production.URL+"/pets") {
+		t.Errorf("the prompt does not name production:\n%s", prompts[0])
+	}
+	if strings.Contains(prompts[0], "staging") {
+		t.Errorf("the prompt names the document's server, which nothing was sent to:\n%s", prompts[0])
+	}
+
+	events.mu.Lock()
+	defer events.mu.Unlock()
+	if len(events.events) == 0 {
+		t.Fatal("no audit event was written")
+	}
+	for _, event := range events.events {
+		if event.Origin != production.URL {
+			t.Errorf("audit origin = %q (decision %s), want %q", event.Origin, event.Decision, production.URL)
+		}
 	}
 }

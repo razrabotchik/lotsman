@@ -103,7 +103,12 @@ func newRunner(t *testing.T, api *httptest.Server, profile *config.Profile, even
 		t.Fatalf("compile: %v", err)
 	}
 
-	minter := auth.NewMinter(api.Client())
+	if profile != nil && profile.TokenURL != "" {
+		// The token endpoint is egress like the API, and the operator
+		// allowlists it explicitly (ADR-0017).
+		policy.AllowedOrigins = append(policy.AllowedOrigins, profile.TokenURL)
+	}
+	minter := auth.NewMinter(api.Client(), &policy)
 	return &runner{
 		tool:      tool,
 		validator: validator,

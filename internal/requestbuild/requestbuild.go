@@ -53,7 +53,7 @@ func Build(ctx context.Context, op *Operation, args Arguments, opts Options) (*h
 		}
 	}
 
-	base, err := resolveBaseURL(op.Servers, opts)
+	base, err := BaseURL(op.Servers, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -135,12 +135,16 @@ func group(args Arguments, name string) map[string]any {
 	return map[string]any{}
 }
 
-// resolveBaseURL implements FR-30's v0 slice: an explicit --base-url always
+// BaseURL implements FR-30's v0 slice: an explicit --base-url always
 // wins; otherwise the first of the operation's effective servers (already
 // resolved operation->path->root by the openapi adapter) is used. Server
 // variables are not substituted yet, so a server URL containing "{...}" is
 // rejected rather than sent as a literal placeholder.
-func resolveBaseURL(servers []string, opts Options) (string, error) {
+//
+// It is exported so that anything naming where a call goes -- the approval
+// prompt, the audit record -- asks the function Build asks, rather than
+// re-deriving the answer and one day disagreeing with it.
+func BaseURL(servers []string, opts Options) (string, error) {
 	candidate := opts.BaseURL
 	if candidate == "" {
 		if len(servers) == 0 {
