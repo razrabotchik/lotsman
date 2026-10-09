@@ -329,7 +329,11 @@ func runTransport(ctx context.Context, runtime config.Runtime, opts *mcpserver.O
 
 	metrics := counters.Handler(func() audit.Snapshot {
 		current := holder.Catalog()
-		return audit.Snapshot{Tools: len(current.Tools), Digest: current.Digest}
+		snapshot := audit.Snapshot{Tools: len(current.Tools), Digest: current.Digest}
+		if opts.Calls != nil {
+			snapshot.CallsInFlight, snapshot.CallLimit = opts.Calls.InFlight(), opts.Calls.Max()
+		}
+		return snapshot
 	})
 
 	return httpserver.Serve(ctx, &httpserver.Options{

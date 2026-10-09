@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -467,14 +468,21 @@ func addCallOperation(srv *mcp.Server, runners []runner, kind callKind) {
 		// arguments, auth and policy are all checked again on the way in
 		// (FR-49, FR-50).
 		isRead := prepared.tool.Effect.IsRead()
+		var refused error
 		switch {
 		case kind == readOnlyCall && !isRead:
-			return nil, response.Result{}, errs.Errorf(errs.ClassPolicy,
+			refused = errs.Errorf(errs.ClassPolicy,
 				"lotsman: %s is %s, not a read; call_read_operation never calls another effect class",
 				prepared.tool.OperationKey, prepared.tool.Effect.Effect)
 		case kind == mutatingCall && isRead:
-			return nil, response.Result{}, errs.Errorf(errs.ClassUsage,
+			refused = errs.Errorf(errs.ClassUsage,
 				"lotsman: %s is a read; use call_read_operation", prepared.tool.OperationKey)
+		}
+		if refused != nil {
+			// Recorded here, with its own class, rather than left to the
+			// catch-all for calls that never reached a runner.
+			prepared.record(ctx, time.Now(), response.Result{}, outcome{}, refused)
+			return nil, response.Result{}, refused
 		}
 
 		// in.Arguments went through the SDK's decoding, which rounds every

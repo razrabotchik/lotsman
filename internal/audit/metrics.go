@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -30,7 +31,16 @@ type Counters struct {
 
 	durationSeconds float64
 	durationCount   uint64
+	// durationBuckets counts calls at or under each of durationBounds, not
+	// cumulatively; the exposition adds them up.
+	durationBuckets []uint64
 }
+
+// durationBounds are the histogram's upper bounds, in seconds: from a cached
+// read to a call that spent the whole default timeout and then some. A sum
+// and a count give an average, and an average hides exactly the slow calls an
+// operator is looking for.
+var durationBounds = []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60}
 
 // NewCounters returns an empty tally.
 func NewCounters() *Counters {
@@ -38,6 +48,8 @@ func NewCounters() *Counters {
 		decisions: map[Decision]uint64{},
 		refusals:  map[string]uint64{},
 		statuses:  map[string]uint64{},
+
+		durationBuckets: make([]uint64, len(durationBounds)),
 	}
 }
 
@@ -58,8 +70,15 @@ func (c *Counters) Record(event Event) {
 		// the question an operator asks is "are calls failing".
 		c.statuses[fmt.Sprintf("%dxx", event.Status/100)]++
 	}
-	c.durationSeconds += float64(event.DurationMs) / 1000
+	seconds := float64(event.DurationMs) / 1000
+	c.durationSeconds += seconds
 	c.durationCount++
+	for i, bound := range durationBounds {
+		if seconds <= bound {
+			c.durationBuckets[i]++
+			break
+		}
+	}
 }
 
 // Snapshot is what the runtime knows about itself at scrape time, beyond what
@@ -67,6 +86,10 @@ func (c *Counters) Record(event Event) {
 type Snapshot struct {
 	Tools  int
 	Digest string
+	// CallsInFlight and CallLimit are the concurrency limit's state. A zero
+	// limit means there is none to report.
+	CallsInFlight int
+	CallLimit     int
 }
 
 // Handler serves the Prometheus text exposition format.
@@ -94,6 +117,12 @@ func (c *Counters) write(out *strings.Builder, snapshot func() Snapshot) {
 		sample(out, "lotsman_catalog_tools", nil, float64(current.Tools))
 		metric(out, "lotsman_catalog_info", "gauge", "Identity of the published catalog.")
 		sample(out, "lotsman_catalog_info", map[string]string{"digest": current.Digest}, 1)
+		if current.CallLimit > 0 {
+			metric(out, "lotsman_calls_in_flight", "gauge", "Tool calls executing now.")
+			sample(out, "lotsman_calls_in_flight", nil, float64(current.CallsInFlight))
+			metric(out, "lotsman_calls_limit", "gauge", "Tool calls allowed in flight at once (execution.maxConcurrentCalls).")
+			sample(out, "lotsman_calls_limit", nil, float64(current.CallLimit))
+		}
 	}
 
 	c.mu.Lock()
@@ -115,7 +144,14 @@ func (c *Counters) write(out *strings.Builder, snapshot func() Snapshot) {
 		sample(out, "lotsman_upstream_responses_total", map[string]string{"class": class}, float64(c.statuses[class]))
 	}
 
-	metric(out, "lotsman_call_duration_seconds", "summary", "Time from tool call to outcome.")
+	metric(out, "lotsman_call_duration_seconds", "histogram", "Time from tool call to outcome.")
+	var cumulative uint64
+	for i, bound := range durationBounds {
+		cumulative += c.durationBuckets[i]
+		sample(out, "lotsman_call_duration_seconds_bucket",
+			map[string]string{"le": strconv.FormatFloat(bound, 'g', -1, 64)}, float64(cumulative))
+	}
+	sample(out, "lotsman_call_duration_seconds_bucket", map[string]string{"le": "+Inf"}, float64(c.durationCount))
 	sample(out, "lotsman_call_duration_seconds_sum", nil, c.durationSeconds)
 	sample(out, "lotsman_call_duration_seconds_count", nil, float64(c.durationCount))
 }

@@ -107,6 +107,7 @@ type outcome struct {
 // stops working because it cannot describe itself has its priorities
 // backwards.
 func (r *runner) record(ctx context.Context, started time.Time, result response.Result, how outcome, err error) {
+	markReached(ctx)
 	if r.audit == nil {
 		return
 	}

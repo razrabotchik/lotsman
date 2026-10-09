@@ -160,3 +160,34 @@ func TestLabelValuesAreEscaped(t *testing.T) {
 		}
 	}
 }
+
+// The duration is a histogram: a sum and a count give an average, and an
+// average hides exactly the slow calls an operator is looking for.
+func TestCallDurationsAreAHistogram(t *testing.T) {
+	counters := NewCounters()
+	for _, ms := range []int64{5, 40, 40, 900, 45_000} {
+		event := sampleEvent()
+		event.DurationMs = ms
+		counters.Record(event)
+	}
+	rec := httptest.NewRecorder()
+	counters.Handler(func() Snapshot { return Snapshot{CallsInFlight: 3, CallLimit: 64} }).
+		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", http.NoBody))
+	body := rec.Body.String()
+	for _, want := range []string{
+		"# TYPE lotsman_call_duration_seconds histogram",
+		`lotsman_call_duration_seconds_bucket{le="0.01"} 1`,
+		`lotsman_call_duration_seconds_bucket{le="0.05"} 3`,
+		`lotsman_call_duration_seconds_bucket{le="1"} 4`,
+		`lotsman_call_duration_seconds_bucket{le="30"} 4`,
+		`lotsman_call_duration_seconds_bucket{le="60"} 5`,
+		`lotsman_call_duration_seconds_bucket{le="+Inf"} 5`,
+		"lotsman_call_duration_seconds_count 5",
+		"lotsman_calls_in_flight 3",
+		"lotsman_calls_limit 64",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the scrape does not contain %q:\n%s", want, body)
+		}
+	}
+}

@@ -185,6 +185,7 @@ func New(opts *Options) *mcp.Server {
 
 	outbound := opts.egressPolicy()
 	runners := newRunners(opts, &outbound)
+	srv.AddReceivingMiddleware(auditUnreached(opts.auditSink(), runners))
 
 	// Two front doors, one call path. In search mode the catalog is too large
 	// to publish as tools, so five meta-tools stand in front of the same

@@ -41,3 +41,8 @@ func (l *CallLimit) acquire() (release func(), err error) {
 	}
 }
 
+// InFlight is how many calls hold a slot now.
+func (l *CallLimit) InFlight() int { return len(l.slots) }
+
+// Max is the limit.
+func (l *CallLimit) Max() int { return l.max }
