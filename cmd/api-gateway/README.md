@@ -50,12 +50,13 @@ Demo credentials are intentionally public and valid only for this fixture:
 
 - `X-API-Key: demo-secret`
 - `Authorization: Bearer demo-token`
-- client credentials `demo-client` / `demo-client-secret`
+- client credentials `demo-client` / `demo-client-secret`, and
+  `demo-client-secret-next` — the secret a rotation moves to; both are accepted
 
 ## What each endpoint is for
 
-The document declares 38 operations. Lotsman supports 33 of them, refuses 5,
-and blocks more by policy — so `lotsman inspect cmd/api-gateway/openapi.yaml`
+The document declares 43 operations. Lotsman supports 38 of them, refuses 5,
+and blocks more by policy (a test holds these numbers to what `inspect` reports) — so `lotsman inspect cmd/api-gateway/openapi.yaml`
 prints a support matrix against a real API rather than against prose.
 
 ### The basics
@@ -73,7 +74,8 @@ prints a support matrix against a real API rather than against prose.
 | `GET /v1/secure/profile` | Bearer authentication from an `env:` reference |
 | `GET /v1/echo` | Arrays, query and header serialization |
 | `GET /v1/status/{code}` | Caller-selected 4xx/5xx handling |
-| `GET /v1/slow` | Request timeout and cancellation |
+| `GET /v1/slow` | Request timeout and cancellation — and, with `execution.maxConcurrentCalls: 1`, a second call refused at once while the first waits |
+| `GET /v1/ping` | An operation named like lotsman's built-in `ping`: published as `ping_<hash>`, and the built-in still answers |
 | `GET /v1/large` | The response byte cap and its truncation metadata |
 
 ### The mirror — what was actually sent
@@ -90,6 +92,13 @@ lotsman explain-call mirror_request --spec cmd/api-gateway/openapi.yaml ...
 
 Credentials are reported as present and never as themselves: a fixture that
 printed one into a terminal would teach the wrong habit.
+
+Numbers come back as the literals that arrived — the mirror decodes with
+`UseNumber`, because a mirror that rounded 9007199254740993 itself would blame
+lotsman for it. `GET` takes `n`, an integer with int64's own bounds: send
+`9007199254740993` and read it in `rawQuery`; send `9223372036854775808` and
+see it refused before the network. `POST` accepts `null` as a body, which is a
+different request from no body: `body` reads `"null"`.
 
 ### Response shapes
 
@@ -109,6 +118,21 @@ printed one into a terminal would teach the wrong habit.
 | `GET /v1/redirect/chain` | A counted chain, so a hop limit is observable |
 | `GET /v1/redirect/external` | A redirect to another origin: the reason the guard exists |
 
+### What happened, when no answer came back?
+
+The record lotsman writes for a call that got no ordinary answer
+([ADR-0019](../../docs/adr/0019-call-outcomes.md)), checked against what the
+API actually did.
+
+| Endpoint | What it shows |
+| --- | --- |
+| `POST /v1/charges` | The charge is made, then the connection drops: `outcome_unknown`, and the caller is told the API may have acted. A POST, so declare its effect (`createCharge`, below) |
+| `GET /v1/charges` | The proof that it was made |
+| `GET /v1/shapes/truncated` | The status and half the body arrive: `executed` with the status, not a refusal |
+
+The fourth outcome, `failed`, needs no endpoint: stop the fixture and call
+anything. Nothing left, and the record says so.
+
 ### A credential Lotsman obtains rather than reads
 
 The client-credentials flow, end to end, which is otherwise the hardest part of
@@ -121,6 +145,10 @@ the runtime to try by hand.
 | `GET /v1/minted/profile` | A call that presents a minted token |
 | `GET /v1/minted/stale-once` | Refuses the first call ever: the re-mint and retry **succeed** |
 | `GET /v1/minted/always-stale` | Refuses every new token once: the retry happens **exactly once** and the second 401 belongs to the caller |
+| `POST /oauth/revoke` | Every token issued so far stops working at once. Not in the document: it is the operator's lever, not an agent's operation |
+
+`/oauth/stats` also names the secret the last mint presented — `current` or
+`next`, never the value — and counts revocations.
 
 The counters are what make it provable. With one profile and two calls:
 
@@ -129,6 +157,22 @@ minted 1, two 200s          -- the token was cached, not re-minted per call
 stale-once: minted 2, 200   -- one 401, one re-mint, one retry, and it worked
 always-stale: minted 3, 401 -- one extra mint per call. Never a loop.
 ```
+
+Two more, with `clientSecretRef: file:/tmp/stand-secret` in the profile:
+
+```text
+rotate: write demo-client-secret-next into the file, POST /oauth/revoke, call
+        once: minted +1, lastSecret "next" -- the rotation took effect at the
+        next mint, without a restart
+revoke: ten calls in parallel on one revoked token: minted +1, not +10 --
+        a 401 names the token it refused, and a token already replaced stays
+```
+
+A test runs both against this fixture through a real session.
+
+Search mode's pages — a `describe_operation` too large for one answer — need a
+schema larger than this document has; `make corpus` and the Kubernetes
+Deployment show them (two pages, [docs/corpus.md](../../docs/corpus.md)).
 
 ### Declared on purpose, refused on purpose
 
@@ -173,6 +217,8 @@ authProfiles:
 operationOverrides:
   - match: {operationId: renamePet}
     effect: write
+  - match: {operationId: createCharge}
+    effect: write
 server: {transport: http, listen: "127.0.0.1:8080", logLevel: debug}
 EOF
 
@@ -200,4 +246,7 @@ curl -X POST -H 'X-API-Key: demo-secret' -H 'Content-Type: application/json' \
 curl 'http://127.0.0.1:18080/v1/mirror/a%2Fb?tag=x&tag=y'
 curl --cacert /tmp/api-gateway-ca.pem -X POST https://127.0.0.1:18443/oauth/token \
   -d 'grant_type=client_credentials&client_id=demo-client&client_secret=demo-client-secret'
+curl -X POST -d '{"amount":500}' http://127.0.0.1:18080/v1/charges   # hangs up
+curl http://127.0.0.1:18080/v1/charges                               # ...and it was made
+curl -X POST http://127.0.0.1:18080/oauth/revoke
 ```

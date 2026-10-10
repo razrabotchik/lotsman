@@ -166,6 +166,8 @@ func newHandler(logger *slog.Logger) http.Handler {
 	registerShapes(mux)
 	registerRefused(mux)
 	newTokens().register(mux)
+	(&charges{}).register(mux)
+	mux.HandleFunc("GET /v1/ping", ping)
 
 	return requestLogger(logger, mux)
 }

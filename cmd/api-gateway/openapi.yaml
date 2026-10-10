@@ -197,6 +197,56 @@ paths:
       responses:
         "200": {description: Delay completed}
 
+  /v1/ping:
+    get:
+      operationId: ping
+      summary: An operation named like lotsman's own ping tool
+      description: >-
+        lotsman's built-in tool names are reserved: this operation is published
+        as ping_<hash>, and the built-in ping still answers. Before that, one of
+        the two replaced the other, depending on registration order.
+      responses:
+        "200": {description: pong}
+
+  # --- what happened, when no answer came back? -----------------------------
+
+  /v1/charges:
+    get:
+      operationId: listCharges
+      summary: The charges that were made - including the ones nobody heard about
+      responses:
+        "200": {description: Every charge recorded, in order}
+    post:
+      operationId: createCharge
+      summary: Make a charge, then hang up without answering
+      description: >-
+        The charge is recorded and the connection is closed before a response.
+        lotsman records outcome_unknown rather than a refusal and tells the
+        caller the API may have acted; listCharges shows that it did. A POST,
+        so its effect is unknown until the configuration says otherwise.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [amount]
+              properties:
+                amount: {type: integer, minimum: 1}
+      responses:
+        "201": {description: Never sent}
+
+  /v1/shapes/truncated:
+    get:
+      operationId: getTruncatedBody
+      summary: A 200 whose body stops halfway
+      description: >-
+        The status arrives and the body does not. That is an execution with a
+        known status, not a refusal and not an unknown outcome.
+      responses:
+        "200": {description: Half of a body}
+
   # --- a POST whose effect its method cannot reveal -------------------------
 
   /v1/pets/{petId}/actions/rename:
@@ -255,6 +305,13 @@ paths:
           in: query
           description: Reserved characters are percent-encoded unless told otherwise
           schema: {type: string}
+        - name: n
+          in: query
+          description: >-
+            An integer with int64's own bounds. 9007199254740993 has no float64
+            of its own; read `rawQuery` to see whether it arrived exactly, and
+            try 9223372036854775808 to see it refused before the network.
+          schema: {type: integer, minimum: -9223372036854775808, maximum: 9223372036854775807}
         - name: X-Trace
           in: header
           description: A header a document may set
@@ -264,6 +321,10 @@ paths:
     post:
       operationId: mirrorBody
       summary: Reflect a JSON body back exactly as it arrived
+      description: >-
+        Numbers come back as the literals that arrived. The body may be null --
+        `body: null` is the JSON value null, sent as one, and `body` reads
+        "null" -- which is a different request from no body at all.
       parameters:
         - {name: segment, in: path, required: true, schema: {type: string}}
       requestBody:
@@ -271,8 +332,8 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              description: Any object; it is reflected as `bodyJSON`
+              type: [object, "null"]
+              description: Any object, or null; it is reflected as `body` and `bodyJSON`
               additionalProperties: true
       responses:
         "200": {description: The request, reflected}

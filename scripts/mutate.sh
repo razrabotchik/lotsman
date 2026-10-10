@@ -396,6 +396,11 @@ mutate "schema: publish a bound as its float64 neighbour" \
 	"	return jsonnum.Exact(node.Value, decoded)" "	return decoded" \
 	./internal/openapi/
 
+mutate "fixture: the mirror rounds the numbers it reflects" \
+	cmd/api-gateway/mirror.go \
+	"	decoder.UseNumber()" "	_ = decoder" \
+	./cmd/api-gateway/
+
 mutate "serialization: stop percent-encoding path values" \
 	internal/requestbuild/serialize.go \
 	"func percentEncode(s string, allowReserved bool) string {" \

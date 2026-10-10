@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -112,10 +114,26 @@ func mirror(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(body) > 0 {
 		reflection.Body = string(body)
-		var decoded any
-		if json.Unmarshal(body, &decoded) == nil {
+		if decoded, ok := decodeExactly(body); ok {
 			reflection.BodyJSON = decoded
 		}
 	}
 	writeJSON(w, http.StatusOK, reflection)
+}
+
+// decodeExactly decodes JSON keeping every number as the literal that
+// arrived. The obvious json.Unmarshal into `any` turns numbers into float64,
+// so 9007199254740993 came back as 9007199254740992: the mirror would report
+// its own rounding as lotsman's, which is the one thing a mirror must not do.
+func decodeExactly(body []byte) (any, bool) {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var decoded any
+	if decoder.Decode(&decoded) != nil {
+		return nil, false
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return nil, false
+	}
+	return decoded, true
 }

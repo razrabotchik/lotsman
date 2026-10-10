@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -103,6 +104,17 @@ func TestTheQuickstartRunsAgainstTheDevelopmentAPI(t *testing.T) {
 // port, plain HTTP only, and returns its origin once it answers.
 func startDevelopmentAPI(t *testing.T) string {
 	t.Helper()
+	return startDevelopmentAPIWith(t, false).origin
+}
+
+// developmentAPI is a running fixture: its plain origin and, when asked for,
+// the TLS one a token endpoint has to live on, with the certificate to trust.
+type developmentAPI struct {
+	origin, tlsOrigin, certificate string
+}
+
+func startDevelopmentAPIWith(t *testing.T, withTLS bool) developmentAPI {
+	t.Helper()
 	if testing.Short() {
 		t.Skip("short mode: skipping the subprocess e2e test")
 	}
@@ -110,14 +122,25 @@ func startDevelopmentAPI(t *testing.T) string {
 	if out, err := exec.Command("go", "build", "-o", bin, "../api-gateway").CombinedOutput(); err != nil {
 		t.Fatalf("go build api-gateway: %v\n%s", err, out)
 	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	freeAddr := func() string {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer listener.Close()
+		return listener.Addr().String()
 	}
-	addr := listener.Addr().String()
-	_ = listener.Close()
 
-	cmd := exec.Command(bin, "--addr", addr, "--tls-addr", "", "--cert-dir", t.TempDir())
+	certDir := t.TempDir()
+	api := developmentAPI{origin: "http://" + freeAddr()}
+	tlsAddr := ""
+	if withTLS {
+		tlsAddr = freeAddr()
+		api.tlsOrigin = "https://" + tlsAddr
+		api.certificate = filepath.Join(certDir, "api-gateway-ca.pem")
+	}
+	cmd := exec.Command(bin, "--addr", strings.TrimPrefix(api.origin, "http://"),
+		"--tls-addr", tlsAddr, "--cert-dir", certDir)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start api-gateway: %v", err)
 	}
@@ -125,15 +148,21 @@ func startDevelopmentAPI(t *testing.T) string {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 	})
-	origin := "http://" + addr
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if res, err := http.Get(origin + "/health"); err == nil {
+		if res, err := http.Get(api.origin + "/health"); err == nil {
 			_ = res.Body.Close()
-			return origin
+			if !withTLS || fileExists(api.certificate) {
+				return api
+			}
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("api-gateway did not answer at %s", origin)
-	return ""
+	t.Fatalf("api-gateway did not answer at %s", api.origin)
+	return developmentAPI{}
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }

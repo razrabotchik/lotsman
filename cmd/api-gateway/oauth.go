@@ -22,6 +22,14 @@ import (
 //                                     that succeeds?
 //   - GET  /v1/minted/always-stale -- and does it then stop? One retry, not a
 //                                     loop.
+//   - POST /oauth/revoke           -- every token issued so far stops working
+//                                     at once: do twenty calls refused together
+//                                     cost one new token, or twenty?
+//
+// Two client secrets are accepted, the current one and the next, which is
+// what a rotation looks like from the authorization server's side. stats says
+// which one the last mint presented -- by name, never by value -- so a
+// rotated secret file can be watched taking effect at the next mint.
 //
 // The two refusing endpoints are the two halves of FR-35, and the difference
 // between them is the whole lesson. stale-once refuses the first call it ever
@@ -40,6 +48,9 @@ const (
 	// is that an operator can run the client-credentials flow without owning an
 	// authorization server. It authenticates nothing but this process.
 	oauthClientSecret = "demo-client-secret" //nolint:gosec // G101: a development fixture's documented demo credential, not a secret.
+	// oauthNextClientSecret is the secret a rotation moves to. Both are
+	// accepted, as an authorization server accepts both during a rotation.
+	oauthNextClientSecret = "demo-client-secret-next" //nolint:gosec // G101: as above.
 	// tokenLifetime is short enough to watch an expiry happen and long enough
 	// that a session's calls share one token.
 	tokenLifetime = 120 * time.Second
@@ -64,6 +75,11 @@ type tokens struct {
 	// client id and secret arrived in the Authorization header, "body" when
 	// they arrived as form fields.
 	lastStyle string
+	// lastSecret names the secret the last mint presented: "current" or
+	// "next".
+	lastSecret string
+	// revocations counts calls to /oauth/revoke.
+	revocations int
 }
 
 func newTokens() *tokens {
@@ -73,6 +89,9 @@ func newTokens() *tokens {
 func (t *tokens) register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /oauth/token", t.mint)
 	mux.HandleFunc("GET /oauth/stats", t.stats)
+	// Not in the OpenAPI document: revoking every token is the operator's
+	// lever for a test, not an operation an agent should be offered.
+	mux.HandleFunc("POST /oauth/revoke", t.revoke)
 	mux.HandleFunc("GET /v1/minted/profile", t.profile)
 	mux.HandleFunc("GET /v1/minted/stale-once", t.staleOnce)
 	mux.HandleFunc("GET /v1/minted/always-stale", t.alwaysStale)
@@ -95,7 +114,8 @@ func (t *tokens) mint(w http.ResponseWriter, r *http.Request) {
 	if headerID, headerSecret, ok := r.BasicAuth(); ok {
 		style, id, secret = "basic", headerID, headerSecret
 	}
-	if id != oauthClientID || secret != oauthClientSecret {
+	which := map[string]string{oauthClientSecret: "current", oauthNextClientSecret: "next"}[secret]
+	if id != oauthClientID || which == "" {
 		// 401 with invalid_client is what the RFC asks for, and it is also the
 		// status a client must not retry on: the credentials are wrong, not
 		// stale.
@@ -116,6 +136,7 @@ func (t *tokens) mint(w http.ResponseWriter, r *http.Request) {
 	t.mints++
 	t.lastScopes = r.PostForm.Get("scope")
 	t.lastStyle = style
+	t.lastSecret = which
 	t.mu.Unlock()
 
 	// No caching, ever: a cached token response is a token two callers share.
@@ -139,8 +160,23 @@ func (t *tokens) stats(w http.ResponseWriter, _ *http.Request) {
 		"live":        len(t.issued),
 		"lastScopes":  t.lastScopes,
 		"lastStyle":   t.lastStyle,
+		"lastSecret":  t.lastSecret,
 		"refusedOnce": len(t.refused),
+		"revocations": t.revocations,
 	})
+}
+
+// revoke makes every token issued so far unknown, so the next call with any of
+// them is a 401 -- the case where many calls hold one stale token at once.
+// A runtime that re-mints per refusal mints once per call; one that knows
+// which token was refused mints once.
+func (t *tokens) revoke(w http.ResponseWriter, _ *http.Request) {
+	t.mu.Lock()
+	revoked := len(t.issued)
+	t.issued = map[string]time.Time{}
+	t.revocations++
+	t.mu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"revoked": revoked})
 }
 
 // profile needs a minted token and says which one it saw -- truncated, because
