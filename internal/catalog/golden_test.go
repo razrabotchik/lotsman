@@ -71,7 +71,7 @@ func TestCatalogMiniSpecDeterministic(t *testing.T) {
 
 func buildMiniCatalog(t *testing.T) catalog.Catalog {
 	t.Helper()
-	spec, err := os.ReadFile(filepath.Join("..", "..", "testdata", "mini", "basic.yaml"))
+	spec, err := os.ReadFile(filepath.Join("..", "..", "test", "testdata", "mini", "basic.yaml"))
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}

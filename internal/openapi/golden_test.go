@@ -14,11 +14,11 @@ import (
 var update = flag.Bool("update", false, "update golden files")
 
 // TestParseMiniSpecGolden pins the IR produced for the shared fixture spec
-// (testdata/mini/basic.yaml, T008) byte for byte. Any change here is either
+// (test/testdata/mini/basic.yaml, T008) byte for byte. Any change here is either
 // a deliberate IR/normalization change (re-run with -update) or a
 // determinism regression (data-model.md invariant 1).
 func TestParseMiniSpecGolden(t *testing.T) {
-	spec, err := os.ReadFile(filepath.Join("..", "..", "testdata", "mini", "basic.yaml"))
+	spec, err := os.ReadFile(filepath.Join("..", "..", "test", "testdata", "mini", "basic.yaml"))
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestParseMiniSpecGolden(t *testing.T) {
 // two loads of the same spec produce byte-identical output, independent of
 // the golden fixture above.
 func TestParseMiniSpecDeterministic(t *testing.T) {
-	spec, err := os.ReadFile(filepath.Join("..", "..", "testdata", "mini", "basic.yaml"))
+	spec, err := os.ReadFile(filepath.Join("..", "..", "test", "testdata", "mini", "basic.yaml"))
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}

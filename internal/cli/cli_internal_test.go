@@ -47,7 +47,7 @@ paths:
 
 func TestLoadCatalogStrictRejectsUnsupportedOperation(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	spec := filepath.Join("..", "..", "testdata", "mini", "basic.yaml")
+	spec := filepath.Join("..", "..", "test", "testdata", "mini", "basic.yaml")
 	if _, err := loadCatalog(context.Background(), spec, logger, config.Runtime{}, catalog.ModeTools, nil); err == nil {
 		t.Fatal("strict loadCatalog accepted a rejected operation")
 	}

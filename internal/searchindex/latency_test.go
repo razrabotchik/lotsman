@@ -164,7 +164,7 @@ func scaledIndexFor(tb testing.TB) *searchindex.Index {
 // a production API added for a benchmark is a production API somebody uses.
 func corpusDocuments(tb testing.TB) []searchindex.Document {
 	tb.Helper()
-	root := filepath.Join("..", "..", "testdata", "corpus")
+	root := filepath.Join("..", "..", "test", "testdata", "corpus")
 	path := filepath.Join(root, "digitalocean-exploded", "specification", "DigitalOcean-public.v2.yaml")
 	spec, err := os.ReadFile(path)
 	if err != nil {

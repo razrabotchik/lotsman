@@ -128,7 +128,7 @@ func measure(index *searchindex.Index, tasks []task) (recall, mrr float64, misse
 
 func indexCorpus(t *testing.T, name string) *searchindex.Index {
 	t.Helper()
-	root := filepath.Join("..", "..", "testdata", "corpus")
+	root := filepath.Join("..", "..", "test", "testdata", "corpus")
 	path := filepath.Join(root, name)
 	spec, err := os.ReadFile(path)
 	if err != nil {

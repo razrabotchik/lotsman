@@ -10,7 +10,7 @@ import (
 // not been fetched (`make corpus`).
 func corpusDocument(b *testing.B, name string) []byte {
 	b.Helper()
-	path := filepath.Join("..", "..", "testdata", "corpus", name)
+	path := filepath.Join("..", "..", "test", "testdata", "corpus", name)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		b.Skipf("corpus document not fetched; run `make corpus`")
@@ -45,7 +45,7 @@ func BenchmarkParseCorpus(b *testing.B) {
 // BenchmarkParseMiniSpec is the floor: what the pipeline costs when the
 // document is not the bottleneck.
 func BenchmarkParseMiniSpec(b *testing.B) {
-	spec, err := os.ReadFile(filepath.Join("..", "..", "testdata", "mini", "basic.yaml"))
+	spec, err := os.ReadFile(filepath.Join("..", "..", "test", "testdata", "mini", "basic.yaml"))
 	if err != nil {
 		b.Fatal(err)
 	}

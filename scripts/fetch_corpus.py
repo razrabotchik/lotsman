@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch the vendor corpus pinned by testdata/corpus/MANIFEST.json.
+"""Fetch the vendor corpus pinned by test/testdata/corpus/MANIFEST.json.
 
 Each document is downloaded from an immutable ref and checked against the
 digest recorded in the manifest. A mismatch is a hard failure: the corpus
@@ -14,7 +14,7 @@ import subprocess
 import sys
 import urllib.request
 
-CORPUS = pathlib.Path(__file__).resolve().parent.parent / "testdata" / "corpus"
+CORPUS = pathlib.Path(__file__).resolve().parent.parent / "test" / "testdata" / "corpus"
 
 
 def digest(data: bytes) -> str:

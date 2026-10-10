@@ -9,7 +9,7 @@ import (
 
 func miniSpecPath(t *testing.T) string {
 	t.Helper()
-	abs, err := filepath.Abs(filepath.Join("..", "..", "testdata", "mini", "basic.yaml"))
+	abs, err := filepath.Abs(filepath.Join("..", "testdata", "mini", "basic.yaml"))
 	if err != nil {
 		t.Fatalf("resolve fixture path: %v", err)
 	}

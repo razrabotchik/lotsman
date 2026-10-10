@@ -296,7 +296,7 @@ serve и reload; серия reload не вызывает постоянный р
 до первого read-вызова по одной последовательной инструкции.
 
 Контекст: [README.md](../README.md),
-[mini/basic.yaml](../testdata/mini/basic.yaml).
+[mini/basic.yaml](../test/testdata/mini/basic.yaml).
 
 ### 15. Добавить диагностику готовности и генерацию конфигурации
 

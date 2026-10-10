@@ -1,7 +1,7 @@
 # Vendor corpus: what lotsman makes of real specifications
 
 Measured at the M0 gate (T022) with `lotsman inspect --json` over the documents pinned in
-`testdata/corpus/MANIFEST.json`. Fetch them with `make corpus`; the manifest pins an immutable
+`test/testdata/corpus/MANIFEST.json`. Fetch them with `make corpus`; the manifest pins an immutable
 ref and a sha256 for each, so these numbers are reproducible or the fetch fails.
 
 The corpus is not a scoreboard. It exists to answer one question per document: *when lotsman

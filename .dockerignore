@@ -4,6 +4,6 @@
 bin
 dist
 coverage.out
-testdata/corpus
+test/testdata/corpus
 specs
 docs

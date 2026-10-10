@@ -16,7 +16,7 @@ import (
 func BenchmarkBuildCorpus(b *testing.B) {
 	for _, name := range []string{"kubernetes-apps-v1.json", "stripe.yaml"} {
 		b.Run(name, func(b *testing.B) {
-			path := filepath.Join("..", "..", "testdata", "corpus", name)
+			path := filepath.Join("..", "..", "test", "testdata", "corpus", name)
 			spec, err := os.ReadFile(path)
 			if err != nil {
 				b.Skipf("corpus document not fetched; run `make corpus`")

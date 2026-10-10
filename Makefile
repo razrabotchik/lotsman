@@ -20,7 +20,7 @@ LDFLAGS         := -s -w \
 GOLANGCI_VERSION ?= v2.13.2
 GOLANGCI        ?= $(if $(wildcard bin/golangci-lint),bin/golangci-lint,golangci-lint)
 FUZZTIME        ?= 30s
-# SPEC/ARGS feed `make run`: make run SPEC=testdata/mini/basic.yaml
+# SPEC/ARGS feed `make run`: make run SPEC=test/testdata/mini/basic.yaml
 SPEC            ?=
 ARGS            ?=
 
@@ -82,7 +82,7 @@ bench: ## Run benchmarks (needs `make corpus` for the vendor documents)
 	$(GO) test $(PKG) -run '^$$' -bench . -benchmem
 
 .PHONY: corpus
-corpus: ## Fetch the vendor corpus into testdata/corpus (verifies pinned digests)
+corpus: ## Fetch the vendor corpus into test/testdata/corpus (verifies pinned digests)
 	@python3 scripts/fetch_corpus.py
 
 .PHONY: mutate
@@ -125,7 +125,7 @@ image-check: ## Prove the image runs nonroot on a read-only filesystem (criterio
 	  || { echo "image does not declare a nonroot user"; exit 1; }
 	@docker run --rm --read-only --network none $(IMAGE) version --json \
 	  | grep -q '"version"' || { echo "the image did not report its build"; exit 1; }
-	@docker run --rm --read-only --network none -v "$(CURDIR)/testdata/mini:/spec:ro" \
+	@docker run --rm --read-only --network none -v "$(CURDIR)/test/testdata/mini:/spec:ro" \
 	  $(IMAGE) inspect /spec/basic.yaml >/dev/null \
 	  || { echo "the image could not inspect a mounted document"; exit 1; }
 	@echo "image ok: nonroot, read-only root filesystem, no network needed to inspect"

@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// corpusManifest mirrors testdata/corpus/MANIFEST.json.
+// corpusManifest mirrors test/testdata/corpus/MANIFEST.json.
 type corpusManifest struct {
 	Specs []corpusSpec `json:"specs"`
 }
@@ -44,12 +44,12 @@ type corpusSpec struct {
 // TestCorpus runs the real binary over the vendor corpus and checks that
 // lotsman still makes of each document what it made of it at the M0 gate.
 //
-// The documents are not committed (see testdata/corpus/MANIFEST.json), so the
+// The documents are not committed (see test/testdata/corpus/MANIFEST.json), so the
 // test skips unless `make corpus` has fetched them. A diff here is the signal
 // the corpus exists for: support moved, and someone has to say whether that
 // was the intention.
 func TestCorpus(t *testing.T) {
-	root := filepath.Join("..", "..", "testdata", "corpus")
+	root := filepath.Join("..", "testdata", "corpus")
 	raw, err := os.ReadFile(filepath.Join(root, "MANIFEST.json"))
 	if err != nil {
 		t.Fatalf("read manifest: %v", err)
@@ -129,7 +129,7 @@ func TestCorpus(t *testing.T) {
 // The corpus is also the determinism test at scale: the biggest document in
 // it must produce the same report twice, byte for byte (Constitution IV).
 func TestCorpusReportsAreDeterministic(t *testing.T) {
-	path := filepath.Join("..", "..", "testdata", "corpus", "stripe.yaml")
+	path := filepath.Join("..", "testdata", "corpus", "stripe.yaml")
 	if _, err := os.Stat(path); err != nil {
 		t.Skipf("corpus document not fetched; run `make corpus`")
 	}

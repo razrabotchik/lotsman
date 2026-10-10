@@ -4,7 +4,7 @@ Baseline recorded at the v0.1.0-alpha preparation (T038) and re-measured since, 
 the diagnostic and reporting fixes. Reproduce with:
 
 ```bash
-make corpus   # fetch the vendor documents (pinned, see testdata/corpus/MANIFEST.json)
+make corpus   # fetch the vendor documents (pinned, see test/testdata/corpus/MANIFEST.json)
 make bench
 ```
 
