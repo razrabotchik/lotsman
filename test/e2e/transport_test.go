@@ -178,6 +178,7 @@ func newJSONAPI(t *testing.T, called chan<- struct{}) *httptest.Server {
 // TestServeOverEveryTransport is the checkpoint of step 1: the scenarios that
 // defined correct behaviour over stdio define it over HTTP too, unchanged.
 func TestServeOverEveryTransport(t *testing.T) {
+	t.Parallel()
 	for _, transport := range transports {
 		t.Run(transport.name, func(t *testing.T) {
 			requests := make(chan string, 8)
@@ -249,6 +250,7 @@ func TestServeOverEveryTransport(t *testing.T) {
 // memory, it would work on one replica and fail behind a round robin --
 // intermittently, which is the worst way to find out.
 func TestHTTPMutationSurvivesTheApprovalRoundTrip(t *testing.T) {
+	t.Parallel()
 	requests := make(chan string, 4)
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests <- r.Method + " " + r.URL.RequestURI()
@@ -291,6 +293,7 @@ func TestHTTPMutationSurvivesTheApprovalRoundTrip(t *testing.T) {
 // alternating caller answer one session's worth of traffic with no sticky
 // routing, because the profile has no sessions to be sticky about.
 func TestHTTPIsStatelessAcrossReplicas(t *testing.T) {
+	t.Parallel()
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"p-1","name":"Murka"}`))
@@ -378,6 +381,7 @@ func proxy(t *testing.T, w http.ResponseWriter, r *http.Request, target string) 
 // own boundary: not a warning, not a 403 on the first call, but a process
 // that does not come up.
 func TestPublicBindWithoutAuthenticationRefusesToStart(t *testing.T) {
+	t.Parallel()
 	out, err := exec.Command(buildBinary(t), "serve", miniSpecPath(t), "--lax",
 		"--transport", "http", "--listen", "0.0.0.0:0").CombinedOutput()
 	if err == nil {
@@ -394,6 +398,7 @@ func TestPublicBindWithoutAuthenticationRefusesToStart(t *testing.T) {
 // TestHTTPWithoutASpecIsRefused: a reachable endpoint publishing nothing is
 // indistinguishable from a broken deployment.
 func TestHTTPWithoutASpecIsRefused(t *testing.T) {
+	t.Parallel()
 	out, err := exec.Command(buildBinary(t), "serve", "--transport", "http").CombinedOutput()
 	if err == nil {
 		t.Fatalf("serve --transport=http started with no specification\n%s", out)
@@ -421,6 +426,7 @@ func exitCodeOf(t *testing.T, err error) int {
 // The upstream here answers slowly on purpose, so the request is provably still
 // in flight when the signal arrives.
 func TestSIGTERMDrainsAnInFlightCall(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("SIGTERM is not delivered on Windows")
 	}

@@ -102,6 +102,7 @@ components:
 // security is a client-credentials flow is called with a token lotsman
 // obtained from a real token endpoint.
 func TestServiceOAuthEndToEnd(t *testing.T) {
+	t.Parallel()
 	provider := newAuthorizationServer(t)
 
 	var presented atomic.Value
@@ -195,6 +196,7 @@ authProfiles:
 // And the report, which an operator may paste into an issue. It should say
 // the profile mints and what it asks for, and neither secret.
 func TestTheReportDescribesAMintingProfileWithoutItsSecret(t *testing.T) {
+	t.Parallel()
 	provider := newAuthorizationServer(t)
 	configPath := filepath.Join(t.TempDir(), "lotsman.yaml")
 	if err := os.WriteFile(configPath, []byte(`apiVersion: lotsman.dev/v1alpha1

@@ -20,6 +20,7 @@ func writeSpec(t *testing.T, content string) string {
 // document is broken" from "the document is fine but nothing is usable" from
 // "you called me wrong" without parsing prose.
 func TestValidateExitCodes(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name string
 		spec string
@@ -74,6 +75,7 @@ paths:
 }
 
 func TestValidateQuietPrintsNothing(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, code := runCLI(t, "validate", writeSpec(t, "hello: world\n"), "--quiet")
 	if code != 3 {
 		t.Errorf("exit = %d, want 3", code)
@@ -86,6 +88,7 @@ func TestValidateQuietPrintsNothing(t *testing.T) {
 // A document with a document-level error is unusable however many operations
 // it enumerates.
 func TestValidateRejectsDocumentLevelErrors(t *testing.T) {
+	t.Parallel()
 	spec := writeSpec(t, `openapi: 3.0.3
 info: { title: X, version: "1.0" }
 paths:

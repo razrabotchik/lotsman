@@ -2,7 +2,14 @@
 // subprocess, over stdio and HTTP, against real APIs and the development API in
 // cmd/api-gateway. The commands' own logic is tested next to it, in
 // internal/cli and the packages it drives.
-
+//
+// Every test runs in parallel unless it says why not. These tests spend their
+// time waiting -- for a watch interval, a signal, a socket -- not computing, so
+// in sequence the suite took the sum of its waits and in parallel it takes
+// about the longest one. What makes that safe is that each test owns what it
+// touches: its files are under t.TempDir and its listeners on port 0. A test
+// that sets an environment variable cannot be parallel (t.Setenv refuses), and
+// says so where it starts.
 package e2e
 
 import (

@@ -19,6 +19,7 @@ func writeArgs(t *testing.T, content string) string {
 // FR-31: everything explain-call prints is computed on the path a real call
 // takes, and then it stops.
 func TestExplainCallShowsTheDecisionTrail(t *testing.T) {
+	t.Parallel()
 	args := writeArgs(t, `{"path":{"petId":"p 1/2"},"query":{"verbose":true}}`)
 	stdout, stderr, code := runCLI(t, "explain-call", "get_pet",
 		"--spec", miniSpecPath(t), "--base-url", "https://api.example.com", "--args", args)
@@ -45,6 +46,7 @@ func TestExplainCallShowsTheDecisionTrail(t *testing.T) {
 // A call that policy would refuse is explained as a refusal, with the reason
 // and what would change it -- which is the question being asked.
 func TestExplainCallExplainsARefusal(t *testing.T) {
+	t.Parallel()
 	stdout, _, code := runCLI(t, "explain-call", "create_pet",
 		"--spec", miniSpecPath(t), "--base-url", "https://api.example.com")
 	if code != 0 {
@@ -60,6 +62,8 @@ func TestExplainCallExplainsARefusal(t *testing.T) {
 // The auth line names the profile and the *reference*: which environment
 // variable has to be set on the machine that will run this.
 func TestExplainCallNamesTheCredentialReferenceNotItsValue(t *testing.T) {
+	// Not parallel: it sets an environment variable, which t.Setenv only
+	// allows in a test that runs alone.
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "secure.yaml")
 	if err := os.WriteFile(specPath, []byte(`openapi: 3.0.3
@@ -102,6 +106,7 @@ authProfiles:
 }
 
 func TestExplainCallUsage(t *testing.T) {
+	t.Parallel()
 	if _, _, code := runCLI(t, "explain-call", "get_pet"); code != 2 {
 		t.Error("explain-call without --spec should be a usage error")
 	}
@@ -119,6 +124,8 @@ func TestExplainCallUsage(t *testing.T) {
 // so `-coverprofile` could not see it, and `describeCredential` read 18% with
 // nothing pointing at the branch it was missing.
 func TestExplainCallDescribesAMintedCredential(t *testing.T) {
+	// Not parallel: it sets an environment variable, which t.Setenv only
+	// allows in a test that runs alone.
 	specPath, configPath := mintingFixture(t)
 
 	stdout, stderr, code := runCLI(t, "explain-call", "list_things",
@@ -150,6 +157,8 @@ func TestExplainCallDescribesAMintedCredential(t *testing.T) {
 // useful part is where the token comes from and what it asks for. That branch
 // had no test either.
 func TestInspectNamesAMintingProfile(t *testing.T) {
+	// Not parallel: it sets an environment variable, which t.Setenv only
+	// allows in a test that runs alone.
 	specPath, configPath := mintingFixture(t)
 
 	stdout, stderr, code := runCLI(t, "inspect", specPath, "--config", configPath)
@@ -194,6 +203,8 @@ authProfiles:
 // The sentence was being written all along, in internal/auth, and then dropped
 // twice on the way out -- once by the selector's caller and once by the catalog.
 func TestTheReportSaysWhyAConfiguredProfileDoesNotFit(t *testing.T) {
+	// Not parallel: it sets an environment variable, which t.Setenv only
+	// allows in a test that runs alone.
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "openapi.yaml")
 	if err := os.WriteFile(specPath, []byte(`openapi: 3.0.3

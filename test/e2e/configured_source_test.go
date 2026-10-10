@@ -16,6 +16,7 @@ import (
 // happens to live in and fail from anywhere else — including from wherever a
 // service manager starts the process.
 func TestAConfigurationCanNameTheDocument(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	document, err := os.ReadFile(miniSpecPath(t))
 	if err != nil {
@@ -83,6 +84,7 @@ execution:
 // The command line still wins (FR-62): a configuration that could override an
 // argument would make a one-off `inspect OTHER.yaml` unreliable.
 func TestTheArgumentWinsOverTheConfiguredSource(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "lotsman.yaml"), []byte(`apiVersion: lotsman.dev/v1alpha1
 spec:
@@ -112,6 +114,7 @@ func runCLIIn(t *testing.T, dir string, args ...string) (stdout, stderr string, 
 // `specDigest` alone reports two different specifications as the same one --
 // which is the wrong answer to "am I serving what I think I am serving".
 func TestTheManifestIdentifiesEveryDocumentThatWasRead(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	referenced := filepath.Join(dir, "pet.yaml")
 	writeFile := func(path, body string) {

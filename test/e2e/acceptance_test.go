@@ -50,6 +50,7 @@ func session(t *testing.T, env []string, args ...string) (*mcp.ClientSession, *s
 // mutations enabled) both execute correctly, in one session, against a live
 // server -- which is the acceptance criterion as written.
 func TestAcceptanceUS1(t *testing.T) {
+	t.Parallel()
 	type received struct{ method, uri, body, contentType string }
 	requests := make(chan received, 8)
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -118,6 +119,7 @@ func TestAcceptanceUS1(t *testing.T) {
 // can while the operator is told what was dropped, and nothing unsupported
 // executes.
 func TestAcceptanceUS5(t *testing.T) {
+	t.Parallel()
 	client, stderr := session(t, nil, "serve", miniSpecPath(t), "--lax",
 		"--base-url", "https://api.example.com", "--log-level", "warn")
 
@@ -156,6 +158,7 @@ func TestAcceptanceUS5(t *testing.T) {
 // TestAcceptanceExitCodes checks the contract a pipeline depends on: the exit
 // code says which kind of problem it was (FR-77).
 func TestAcceptanceExitCodes(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	swagger := filepath.Join(dir, "swagger.yaml")
 	if err := os.WriteFile(swagger, []byte("swagger: \"2.0\"\ninfo: {title: X, version: \"1\"}\npaths: {}\n"), 0o600); err != nil {

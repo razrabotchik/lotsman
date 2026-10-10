@@ -23,6 +23,7 @@ func writeConfig(t *testing.T, content string) string {
 // nothing exits with a usage error rather than serving a slightly different
 // catalog.
 func TestOverrideThatMatchesNothingIsAStartupError(t *testing.T) {
+	t.Parallel()
 	cfg := writeConfig(t, `operationOverrides:
   - match: { operationId: listPetz }
     effect: read
@@ -47,6 +48,7 @@ func TestOverrideThatMatchesNothingIsAStartupError(t *testing.T) {
 // The overlay reaches the published catalog, and the report accounts for what
 // it removed: an operator who cannot see what a filter did cannot trust it.
 func TestOverlayIsAppliedAndReported(t *testing.T) {
+	t.Parallel()
 	cfg := writeConfig(t, `operationOverrides:
   - match: { operationId: deletePet }
     enabled: false
@@ -92,6 +94,7 @@ func TestOverlayIsAppliedAndReported(t *testing.T) {
 // A tag filter that matches nothing leaves a valid document with nothing to
 // publish, which `validate` reports as exit 4 -- and says whose decision it was.
 func TestSelectionCanEmptyTheCatalogAndValidateSaysSo(t *testing.T) {
+	t.Parallel()
 	cfg := writeConfig(t, "catalog:\n  includeTags: [nothing-carries-this]\n")
 	_, stderr, code := runCLI(t, "validate", miniSpecPath(t), "--config", cfg)
 	if code != 4 {

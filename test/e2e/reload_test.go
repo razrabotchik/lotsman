@@ -82,6 +82,7 @@ func waitForTool(t *testing.T, endpoint, name string, within time.Duration) bool
 // replaced under a running server and clients see the new catalog without
 // anyone restarting anything.
 func TestWatchRepublishesAChangedDocument(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "openapi.yaml")
 	replaceSpec(t, specPath, specWith("before"))
@@ -103,6 +104,7 @@ func TestWatchRepublishesAChangedDocument(t *testing.T) {
 // TestABrokenDocumentDoesNotDisturbAServingCatalog is acceptance criterion 9,
 // end to end: an operator breaks the document and the clients never find out.
 func TestABrokenDocumentDoesNotDisturbAServingCatalog(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "openapi.yaml")
 	replaceSpec(t, specPath, specWith("working"))
@@ -142,6 +144,7 @@ func TestABrokenDocumentDoesNotDisturbAServingCatalog(t *testing.T) {
 // TestSIGHUPReloads: a signal costs nothing, has no surface, and is what a
 // sidecar already sends.
 func TestSIGHUPReloads(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("SIGHUP is not delivered on Windows")
 	}
@@ -168,6 +171,7 @@ func TestSIGHUPReloads(t *testing.T) {
 // up per request, and a stdio session resolves one for its whole life. A flag
 // that would quietly do nothing is worse than one that refuses.
 func TestWatchIsRefusedOverStdio(t *testing.T) {
+	t.Parallel()
 	out, err := runBinary(t, "serve", miniSpecPath(t), "--lax", "--watch")
 	if err == nil {
 		t.Fatalf("--watch was accepted over stdio\n%s", out)
@@ -180,6 +184,7 @@ func TestWatchIsRefusedOverStdio(t *testing.T) {
 // TestToolsListCarriesCacheHints is FR-74: a hint saying when to ask again,
 // and a digest saying whether the answer changed.
 func TestToolsListCarriesCacheHints(t *testing.T) {
+	t.Parallel()
 	endpoint, _ := serveHTTP(t, miniSpecPath(t), "--lax")
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "cache", Version: "v0"}, approving())
@@ -223,6 +228,7 @@ func TestToolsListCarriesCacheHints(t *testing.T) {
 // The reload itself was always correct: it re-reads the whole closure. What was
 // missing was the trigger.
 func TestWatchNoticesAChangeInAReferencedDocument(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	referenced := filepath.Join(dir, "pet.yaml")
 	if err := os.WriteFile(referenced, []byte(`type: object
@@ -283,6 +289,7 @@ properties:
 // claim is that requests are independent of each other and of the server's
 // bookkeeping, and a reload is the one moment when that bookkeeping changes.
 func TestReloadingUnderConcurrentCallsDropsNothing(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("SIGHUP is not delivered on Windows")
 	}

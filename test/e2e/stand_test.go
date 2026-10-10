@@ -20,6 +20,7 @@ const standSpec = "../../cmd/api-gateway/openapi.yaml"
 // session against the real fixture, so that a scenario which stopped showing
 // what it claims fails here rather than in front of somebody trying it.
 func TestTheDevelopmentAPIShowsWhatTheRuntimeDoes(t *testing.T) {
+	t.Parallel()
 	origin := startDevelopmentAPI(t)
 	config := writeConfig(t, `operationOverrides:
   - match: { operationId: createCharge }
@@ -101,6 +102,7 @@ func TestTheDevelopmentAPIShowsWhatTheRuntimeDoes(t *testing.T) {
 // going stale at once costs one new one -- the two OAuth scenarios the
 // fixture's /oauth/stats makes countable.
 func TestTheDevelopmentAPIShowsRotationAndOneMintPerStaleToken(t *testing.T) {
+	t.Parallel()
 	api := startDevelopmentAPIWith(t, true)
 	secretFile := filepath.Join(t.TempDir(), "client-secret")
 	writeSecret := func(value string) {
@@ -174,6 +176,7 @@ authProfiles:
 // said 38 and 33 while the document had grown to 39 and 34. It is held to
 // what inspect reports.
 func TestTheDevelopmentAPIReadmeCountsItsOperations(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, code := runCLI(t, "inspect", standSpec, "--json")
 	if code != 0 {
 		t.Fatalf("inspect exited %d: %s", code, stderr)

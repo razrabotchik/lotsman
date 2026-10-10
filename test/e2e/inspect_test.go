@@ -116,6 +116,7 @@ func decodeReport(t *testing.T, stdout string) inspectReport {
 }
 
 func TestInspectJSONContract(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, code := runCLI(t, "inspect", miniSpecPath(t), "--json")
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0 (a rejected operation is a finding, not a failure)\n%s", code, stderr)
@@ -180,6 +181,7 @@ func TestInspectJSONContract(t *testing.T) {
 // The report describes the policy it was asked about, so a reader can preview
 // what enabling mutations would change before enabling it.
 func TestInspectReportsUnderTheRequestedPolicy(t *testing.T) {
+	t.Parallel()
 	stdout, _, code := runCLI(t, "inspect", miniSpecPath(t), "--json", "--allow-mutations")
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0", code)
@@ -200,6 +202,7 @@ func TestInspectReportsUnderTheRequestedPolicy(t *testing.T) {
 // A document lotsman refuses to serve is exactly the document inspect exists
 // to explain, so document-level errors are reported, not fatal.
 func TestInspectExplainsADocumentServeWouldRefuse(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "external-ref.yaml")
 	spec := []byte(`openapi: 3.0.3
 info: { title: X, version: "1.0" }
@@ -235,6 +238,7 @@ paths:
 }
 
 func TestInspectFailOnRejectedIsTheCIHelper(t *testing.T) {
+	t.Parallel()
 	_, stderr, code := runCLI(t, "inspect", miniSpecPath(t), "--fail-on-rejected")
 	if code != 4 {
 		t.Errorf("exit = %d, want 4 (valid spec, unsupported under the selected policy)", code)
@@ -245,6 +249,7 @@ func TestInspectFailOnRejectedIsTheCIHelper(t *testing.T) {
 }
 
 func TestInspectHumanOutput(t *testing.T) {
+	t.Parallel()
 	stdout, _, code := runCLI(t, "inspect", miniSpecPath(t))
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0", code)
@@ -265,6 +270,7 @@ func TestInspectHumanOutput(t *testing.T) {
 }
 
 func TestInspectRequiresSpec(t *testing.T) {
+	t.Parallel()
 	if _, _, code := runCLI(t, "inspect"); code != 2 {
 		t.Errorf("exit = %d, want 2 for a missing SPEC", code)
 	}
@@ -273,6 +279,7 @@ func TestInspectRequiresSpec(t *testing.T) {
 // Two runs of the same spec produce the same report, byte for byte
 // (Constitution IV, and the reason a report can be diffed in CI at all).
 func TestInspectIsDeterministic(t *testing.T) {
+	t.Parallel()
 	first, _, _ := runCLI(t, "inspect", miniSpecPath(t), "--json")
 	second, _, _ := runCLI(t, "inspect", miniSpecPath(t), "--json")
 	if first != second {
@@ -283,6 +290,7 @@ func TestInspectIsDeterministic(t *testing.T) {
 // T101/T102: the mode is reported with the measurement behind it, and an
 // operator who asks for a mode that does not exist is told so.
 func TestInspectReportsTheCatalogBudget(t *testing.T) {
+	t.Parallel()
 	stdout, _, code := runCLI(t, "inspect", miniSpecPath(t), "--json")
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
@@ -309,6 +317,7 @@ func TestInspectReportsTheCatalogBudget(t *testing.T) {
 
 // Search mode exists now; an unknown mode is still a usage error.
 func TestInspectAcceptsEveryKnownMode(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"tools", "search", "auto"} {
 		if _, stderr, code := runCLI(t, "inspect", miniSpecPath(t), "--mode="+mode); code != 0 {
 			t.Errorf("--mode=%s exited %d: %s", mode, code, stderr)
@@ -321,6 +330,7 @@ func TestInspectAcceptsEveryKnownMode(t *testing.T) {
 
 // A pinned mode is obeyed and reported, even when the measurement disagrees.
 func TestInspectReportsAPinnedMode(t *testing.T) {
+	t.Parallel()
 	stdout, _, code := runCLI(t, "inspect", miniSpecPath(t), "--mode=search", "--json")
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
@@ -353,6 +363,7 @@ func TestInspectReportsAPinnedMode(t *testing.T) {
 // switched to search mode to fit a budget was told, on the mode line itself,
 // that their tool list still weighed the old amount.
 func TestTheCatalogLineNamesWhatItMeasured(t *testing.T) {
+	t.Parallel()
 	tools, _, code := runCLI(t, "inspect", miniSpecPath(t), "--mode=tools")
 	if code != 0 {
 		t.Fatalf("inspect --mode=tools exited %d", code)

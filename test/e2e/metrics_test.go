@@ -34,6 +34,7 @@ func scrape(t *testing.T, endpoint, token string) (status int, body string) {
 // TestMetricsReflectWhatHappened is U13 over the wire: an operator watching
 // the endpoint sees calls, refusals and the catalog they were served from.
 func TestMetricsReflectWhatHappened(t *testing.T) {
+	t.Parallel()
 	requests := make(chan struct{}, 4)
 	api := newJSONAPI(t, requests)
 	defer api.Close()
@@ -88,6 +89,7 @@ func TestMetricsReflectWhatHappened(t *testing.T) {
 // is not public information, and an endpoint left open because nobody thought
 // about it is the failure this transport exists to avoid.
 func TestMetricsAreBehindInboundAuth(t *testing.T) {
+	t.Parallel()
 	endpoint, _ := serveHTTPEnv(t,
 		[]string{"LOTSMAN_INBOUND_CANARY=" + inboundCanary},
 		"--listen", "127.0.0.1:0", miniSpecPath(t), "--lax", "--config", bearerConfig(t))
@@ -108,6 +110,7 @@ func TestMetricsAreBehindInboundAuth(t *testing.T) {
 // it) but the audit record is not: what was called is worth writing down
 // wherever lotsman runs, and the log is the same channel in both cases.
 func TestAuditRecordsAreWrittenOverStdioToo(t *testing.T) {
+	t.Parallel()
 	requests := make(chan struct{}, 4)
 	api := newJSONAPI(t, requests)
 	defer api.Close()

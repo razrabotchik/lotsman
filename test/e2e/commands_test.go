@@ -21,6 +21,7 @@ import (
 // which is M4b -- and a comment on the line is how the document says so. A
 // command with no such note is a promise.
 func TestEveryDocumentedCommandExists(t *testing.T) {
+	t.Parallel()
 	documented := documentedCommands(t)
 	if len(documented) == 0 {
 		t.Fatal("docs/spec.md §4.11 no longer lists any commands")

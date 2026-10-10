@@ -21,6 +21,7 @@ const quickstartSpec = "../../examples/quickstart/openapi.yaml"
 // The quickstart document is a promise that a first run works: every
 // operation translates, so `inspect` says so and `serve` needs no --lax.
 func TestTheQuickstartDocumentIsServedStrictly(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, code := runCLI(t, "inspect", quickstartSpec)
 	if code != 0 {
 		t.Fatalf("inspect exited %d: %s", code, stderr)
@@ -37,6 +38,7 @@ func TestTheQuickstartDocumentIsServedStrictly(t *testing.T) {
 // operation: a quickstart that drifted from the API it points at would fail
 // on the first call, which is the one call a newcomer makes.
 func TestTheQuickstartIsASubsetOfTheDevelopmentAPI(t *testing.T) {
+	t.Parallel()
 	type document struct {
 		Servers []map[string]any          `yaml:"servers"`
 		Paths   map[string]map[string]any `yaml:"paths"`
@@ -75,6 +77,7 @@ func TestTheQuickstartIsASubsetOfTheDevelopmentAPI(t *testing.T) {
 // The README's first run, end to end: the development API, the quickstart
 // document, and a read through a real MCP session.
 func TestTheQuickstartRunsAgainstTheDevelopmentAPI(t *testing.T) {
+	t.Parallel()
 	origin := startDevelopmentAPI(t)
 	session, stderr := stdioSession(t, quickstartSpec, "--base-url", origin)
 

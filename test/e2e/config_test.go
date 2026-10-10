@@ -31,6 +31,7 @@ func writeConfigBeside(t *testing.T, body string) string {
 // that a sharper question than it sounds: a typo in a field that gates
 // something open is caught here instead of later.
 func TestConfigCheck(t *testing.T) {
+	t.Parallel()
 	good := writeConfigBeside(t, `apiVersion: lotsman.dev/v1alpha1
 spec:
   source: ./openapi.yaml
@@ -74,6 +75,8 @@ execution:
 // The property that makes it worth printing is that reading it back produces
 // the same thing, so the test does exactly that.
 func TestConfigExportCanBeReadBack(t *testing.T) {
+	// Not parallel: it sets an environment variable, which t.Setenv only
+	// allows in a test that runs alone.
 	t.Setenv("LOTSMAN_EXPORT_TOKEN", exportCanary)
 	path := writeConfigBeside(t, `apiVersion: lotsman.dev/v1alpha1
 spec:
@@ -129,6 +132,7 @@ authProfiles:
 // Both subcommands want exactly one file, and anything else is a usage error
 // rather than a guess.
 func TestConfigNeedsASubcommandAndAFile(t *testing.T) {
+	t.Parallel()
 	for _, args := range [][]string{
 		{"config"},
 		{"config", "explain"},

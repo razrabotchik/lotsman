@@ -20,6 +20,7 @@ import (
 // client — the same channel Claude Desktop uses (T003/T004; the full suite of
 // scenarios arrives with T039).
 func TestStdioEndToEnd(t *testing.T) {
+	t.Parallel()
 	bin := buildBinary(t)
 	ctx := t.Context()
 
@@ -91,6 +92,7 @@ func TestStdioEndToEnd(t *testing.T) {
 // transport Claude Desktop uses. Since Step 6 that includes the mutating
 // ones -- publication is discovery, and the policy gate decides execution.
 func TestServeWithSpecPublishesTools(t *testing.T) {
+	t.Parallel()
 	bin := buildBinary(t)
 	ctx := t.Context()
 
@@ -145,6 +147,7 @@ func TestServeWithSpecPublishesTools(t *testing.T) {
 // real transport: the agent calls a tool with a path and a query argument,
 // and a live HTTP server receives both, serialized per OAS.
 func TestServeExecutesParameterizedGETEndToEnd(t *testing.T) {
+	t.Parallel()
 	bin := buildBinary(t)
 	ctx := t.Context()
 
@@ -232,6 +235,7 @@ func TestServeExecutesParameterizedGETEndToEnd(t *testing.T) {
 
 // TestVersionCommand covers the one command that is allowed to write to stdout.
 func TestVersionCommand(t *testing.T) {
+	t.Parallel()
 	bin := buildBinary(t)
 
 	out, err := exec.Command(bin, "version", "--json").Output()
@@ -256,6 +260,7 @@ func TestVersionCommand(t *testing.T) {
 
 // TestUnknownCommandFails guards the exit-code contract (FR-77, expanded in T034).
 func TestUnknownCommandFails(t *testing.T) {
+	t.Parallel()
 	bin := buildBinary(t)
 
 	cmd := exec.Command(bin, "nope")
@@ -280,6 +285,7 @@ func TestUnknownCommandFails(t *testing.T) {
 // response is still in flight. That is a disconnect, not a crash — it must not
 // produce a non-zero exit or an ERROR log, or the client reports a failed server.
 func TestClientClosesStdinExitsCleanly(t *testing.T) {
+	t.Parallel()
 	bin := buildBinary(t)
 
 	cmd := exec.Command(bin, "serve")
@@ -331,6 +337,7 @@ func TestClientClosesStdinExitsCleanly(t *testing.T) {
 // transport: the same POST, with the same arguments, is refused under the
 // default policy and executes when mutations are enabled.
 func TestServeMutationPolicyEndToEnd(t *testing.T) {
+	t.Parallel()
 	bin := buildBinary(t)
 	ctx := t.Context()
 
@@ -471,6 +478,7 @@ func resultText(res *mcp.CallToolResult) string {
 // transport: a catalog published as five tools, searched, described and called,
 // with the mutation gate behaving exactly as it does in tools mode (T111).
 func TestServeSearchModeEndToEnd(t *testing.T) {
+	t.Parallel()
 	bin := buildBinary(t)
 	ctx := t.Context()
 

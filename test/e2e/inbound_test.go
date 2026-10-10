@@ -54,6 +54,7 @@ func (t tokenTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // endpoint is reachable, and reaching it is not the same as being allowed to
 // use it.
 func TestInboundBearerAdmitsOnlyTheConfiguredCaller(t *testing.T) {
+	t.Parallel()
 	endpoint, stderr := serveHTTPEnv(t,
 		[]string{"LOTSMAN_INBOUND_CANARY=" + inboundCanary},
 		"--listen", "127.0.0.1:0", miniSpecPath(t), "--lax", "--config", bearerConfig(t))
@@ -93,6 +94,7 @@ func TestInboundBearerAdmitsOnlyTheConfiguredCaller(t *testing.T) {
 // bind rule refuses an endpoint nothing authenticates, not a public interface
 // as such.
 func TestAuthenticatedEndpointMayBindPublicly(t *testing.T) {
+	t.Parallel()
 	endpoint, _ := serveHTTPEnv(t,
 		[]string{"LOTSMAN_INBOUND_CANARY=" + inboundCanary},
 		"--listen", "0.0.0.0:0", miniSpecPath(t), "--lax", "--config", bearerConfig(t))
@@ -108,6 +110,7 @@ func TestAuthenticatedEndpointMayBindPublicly(t *testing.T) {
 // inbound and one outbound. That is exactly why this is a test and not a
 // comment.
 func TestInboundTokenNeverReachesTheUpstream(t *testing.T) {
+	t.Parallel()
 	seen := make(chan string, 4)
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request strings.Builder
@@ -172,6 +175,7 @@ func TestInboundTokenNeverReachesTheUpstream(t *testing.T) {
 // the field, not a missing capability: `mode: oauth` is implemented now
 // (feature 005), so the thing that can be wrong is the configuration.
 func TestIncompleteOAuthConfigurationRefusesToStart(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "lotsman.yaml")
 	if err := os.WriteFile(path, []byte(`apiVersion: lotsman.dev/v1alpha1
 server:
@@ -197,6 +201,7 @@ server:
 // keys are fetched when a token first needs verifying, so a provider that is
 // slow or briefly down does not stop a deployment from coming up.
 func TestOAuthEndpointStartsWithoutReachingTheProvider(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "lotsman.yaml")
 	if err := os.WriteFile(path, []byte(`apiVersion: lotsman.dev/v1alpha1
 server:
@@ -229,6 +234,7 @@ server:
 // find out how to authenticate, so it cannot require authentication; nothing
 // else on the bind gets the same treatment.
 func TestMetadataIsTheOnlyRouteOutsideTheGuard(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "lotsman.yaml")
 	if err := os.WriteFile(path, []byte(`apiVersion: lotsman.dev/v1alpha1
 server:

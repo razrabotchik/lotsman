@@ -24,6 +24,7 @@ const canarySecret = "CANARY-a7f3e9d1c5b28046-DO-NOT-LEAK"
 // response body -- the nastiest case, because a token that arrives as *data*
 // would otherwise flow straight into a model's context.
 func TestCanarySecretNeverLeaks(t *testing.T) {
+	t.Parallel()
 	bin := buildBinary(t)
 	ctx := t.Context()
 

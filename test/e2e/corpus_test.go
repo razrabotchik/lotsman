@@ -49,6 +49,7 @@ type corpusSpec struct {
 // the corpus exists for: support moved, and someone has to say whether that
 // was the intention.
 func TestCorpus(t *testing.T) {
+	t.Parallel()
 	root := filepath.Join("..", "testdata", "corpus")
 	raw, err := os.ReadFile(filepath.Join(root, "MANIFEST.json"))
 	if err != nil {
@@ -129,6 +130,7 @@ func TestCorpus(t *testing.T) {
 // The corpus is also the determinism test at scale: the biggest document in
 // it must produce the same report twice, byte for byte (Constitution IV).
 func TestCorpusReportsAreDeterministic(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join("..", "testdata", "corpus", "stripe.yaml")
 	if _, err := os.Stat(path); err != nil {
 		t.Skipf("corpus document not fetched; run `make corpus`")

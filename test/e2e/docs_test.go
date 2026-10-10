@@ -21,6 +21,7 @@ import (
 // the command list is read out of the specification: a test carrying its own
 // copy of the thing it checks can drift from it as silently as the prose did.
 func TestTheReadmeCountsTheDependenciesCorrectly(t *testing.T) {
+	t.Parallel()
 	count := directDependencies(t)
 	if count == 0 {
 		t.Fatal("go.mod lists no direct dependencies, which cannot be right")
@@ -38,6 +39,7 @@ func TestTheReadmeCountsTheDependenciesCorrectly(t *testing.T) {
 // README is an instruction, and one that fails is worse than one that is
 // missing: the reader assumes they broke it.
 func TestEveryDocumentedMakeTargetExists(t *testing.T) {
+	t.Parallel()
 	makefile := readRepoFile(t, "Makefile")
 	readme := readRepoFile(t, "README.md")
 
@@ -106,6 +108,7 @@ func readRepoFile(t *testing.T, name string) string {
 // that does not exist fails with the usage text -- which reads as the reader's
 // mistake, not the document's.
 func TestEveryDocumentedFlagExists(t *testing.T) {
+	t.Parallel()
 	defined := definedFlags(t)
 	if len(defined) == 0 {
 		t.Fatal("no flags found in the source, so this test would pass vacuously")
@@ -194,6 +197,7 @@ func definedFlags(t *testing.T) map[string]bool {
 // operator about `--allow-mutations` -- so the search is the whole module while
 // the definitions live here.
 func TestEveryFlagNamedInAMessageExists(t *testing.T) {
+	t.Parallel()
 	defined := definedFlags(t)
 	// `--help` is the shell's way of asking, handled before any flag set, and
 	// the transport-less commands take it too.
@@ -286,6 +290,7 @@ func quotedGoStrings(line string) []string {
 // moves the real payload by more than a few percent fails here and has to be
 // stated, which is the whole point of quoting a number at all.
 func TestTheHelpTextQuotesTheRealSearchModeSize(t *testing.T) {
+	t.Parallel()
 	help, _, code := runCLI(t, "help")
 	if code != 0 {
 		t.Fatalf("help exited %d", code)

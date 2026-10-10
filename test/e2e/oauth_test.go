@@ -111,6 +111,7 @@ server:
 // TestOAuthEndToEnd is US-1: a token a real identity provider issued opens
 // the door, and nothing else does.
 func TestOAuthEndToEnd(t *testing.T) {
+	t.Parallel()
 	p := newIdentityProvider(t)
 	endpoint, stderr := serveHTTPEnv(t,
 		[]string{"SSL_CERT_FILE=" + p.caFile},
@@ -174,6 +175,7 @@ func TestOAuthEndToEnd(t *testing.T) {
 // TestTheAuditRecordNamesTheCaller is T414 end to end: the record says who
 // asked, and never what they presented.
 func TestTheAuditRecordNamesTheCaller(t *testing.T) {
+	t.Parallel()
 	requests := make(chan struct{}, 4)
 	api := newJSONAPI(t, requests)
 	defer api.Close()

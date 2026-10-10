@@ -107,6 +107,7 @@ func sessionless(t *testing.T, endpoint, method, id string) map[string]any {
 // client depends on and the SDK client would never exercise, because it
 // always does the right thing.
 func TestHTTPConformance(t *testing.T) {
+	t.Parallel()
 	endpoint, _ := serveHTTP(t, miniSpecPath(t), "--lax")
 
 	// This is FR-69's actual claim, and until this test existed nothing
@@ -237,6 +238,7 @@ func TestHTTPConformance(t *testing.T) {
 // carries protocol frames and nothing else (FR-68), and an unknown method is
 // an error rather than a silence.
 func TestStdioConformance(t *testing.T) {
+	t.Parallel()
 	cmd := exec.Command(buildBinary(t), "serve", miniSpecPath(t), "--lax", "--log-level", "debug")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

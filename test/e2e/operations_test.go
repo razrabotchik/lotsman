@@ -19,6 +19,7 @@ func miniSpecPath(t *testing.T) string {
 // TestOperationsCommand exercises T008 end to end against the shared fixture
 // spec: five operations, one deliberately rejected (missing path parameter).
 func TestOperationsCommand(t *testing.T) {
+	t.Parallel()
 	bin := buildBinary(t)
 
 	out, err := exec.Command(bin, "operations", miniSpecPath(t)).Output()
@@ -45,6 +46,7 @@ func TestOperationsCommand(t *testing.T) {
 // orders: the documented one (quickstart.md: SPEC before the flag) and the
 // conventional one (flag before SPEC).
 func TestOperationsRejectedFlag(t *testing.T) {
+	t.Parallel()
 	bin := buildBinary(t)
 	spec := miniSpecPath(t)
 
@@ -69,6 +71,7 @@ func TestOperationsRejectedFlag(t *testing.T) {
 }
 
 func TestOperationsSupportedFlag(t *testing.T) {
+	t.Parallel()
 	bin := buildBinary(t)
 	out, err := exec.Command(bin, "operations", miniSpecPath(t), "--supported").Output()
 	if err != nil {
@@ -85,6 +88,7 @@ func TestOperationsSupportedFlag(t *testing.T) {
 
 // TestOperationsMissingSpec guards the exit-code contract (FR-77).
 func TestOperationsMissingSpec(t *testing.T) {
+	t.Parallel()
 	bin := buildBinary(t)
 
 	cmd := exec.Command(bin, "operations")
@@ -107,6 +111,7 @@ func TestOperationsMissingSpec(t *testing.T) {
 // TestOperationsMissingFile guards the runtime-error exit code, distinct
 // from the usage error above.
 func TestOperationsMissingFile(t *testing.T) {
+	t.Parallel()
 	bin := buildBinary(t)
 
 	cmd := exec.Command(bin, "operations", "/no/such/spec.yaml")
