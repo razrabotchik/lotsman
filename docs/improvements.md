@@ -68,7 +68,7 @@ search и `explain-call`; проверены path, query и JSON body.
 Код: [mcpserver/server.go](../internal/mcpserver/server.go),
 [mcpserver/search.go](../internal/mcpserver/search.go),
 [requestbuild/serialize.go](../internal/requestbuild/serialize.go),
-[explain.go](../cmd/lotsman/explain.go).
+[explain.go](../internal/cli/explain.go).
 
 ### 3. Показывать фактическую цель действия в approval и аудите
 
@@ -323,7 +323,7 @@ API-вызова; генератор не раскрывает и не запи�
 **Критерий готовности:** пользователь может исправить типовой отказ без чтения
 исходников; подтверждение позволяет понять, что именно изменится и где.
 
-Код: [inspect.go](../cmd/lotsman/inspect.go),
+Код: [inspect.go](../internal/cli/inspect.go),
 [mcpserver/search.go](../internal/mcpserver/search.go),
 [mcpserver/approval.go](../internal/mcpserver/approval.go).
 

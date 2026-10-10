@@ -110,7 +110,7 @@ jobs:
       - name: Fetch the vendor corpus
         run: make corpus
       - name: Corpus smoke
-        run: go test -run 'TestCorpus' -count=1 ./cmd/lotsman/
+        run: go test -run 'TestCorpus' -count=1 ./test/e2e/
 
   fuzz:
     # A short fuzz run on every change: the seeds are the pitfalls, and a

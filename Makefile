@@ -53,9 +53,9 @@ test: ## Run tests with the race detector
 
 .PHONY: cover
 cover: ## Run tests and write coverage.out (includes the CLI's subprocesses)
-	# The CLI is tested through the real binary in a subprocess, which
-	# -coverprofile cannot see: without the second half of this target,
-	# cmd/lotsman reads 0% and the total understates the suite by a quarter.
+	# The CLI is tested through the real binary in a subprocess (test/e2e),
+	# which -coverprofile cannot see: without the second half of this target,
+	# internal/cli reads close to 0% and the total understates the suite by a quarter.
 	# LOTSMAN_CLI_COVERDIR makes the test harness build an instrumented binary
 	# and point its counters here; covdata then converts them into a profile
 	# that is appended to the in-process one (a profile is a mode line plus
