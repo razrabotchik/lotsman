@@ -1,6 +1,6 @@
 # Feature 008: corrections, and a local workbench to make them
 
-**Status**: design approved 2026-10-16. Not a roadmap milestone: docs/spec.md §10 defers an admin
+**Status**: implemented 2026-10-17 (stages 1–3); design approved 2026-10-16. Not a roadmap milestone: docs/spec.md §10 defers an admin
 interface to M6, and Constitution IX lists it among deferred hypotheses. This feature brings a
 *local, single-user* slice of it forward; ADR-0021 records why (stage 1, task 1).
 

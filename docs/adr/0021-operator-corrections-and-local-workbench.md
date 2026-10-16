@@ -41,3 +41,4 @@ hypotheses that must not leak web infrastructure into the core.
 - Components in external files of an exploded specification cannot be patched in this release.
 - A schema a correction produces is compiled at load; one that does not compile stops `serve`.
 - Constitution IX's "admin UI" hypothesis is confirmed for the local, single-user case only.
+- The workbench is implemented in `internal/workbench` and `internal/ui`, imported only by the `ui` and `inspect` commands; `serve` imports neither.
