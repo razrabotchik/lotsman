@@ -43,3 +43,6 @@ coverage-cli/
 # test/mutate.sh keeps its originals here while it runs; a leftover
 # directory means a run was killed, and the next run restores from it.
 .mutate-pristine/
+
+# git worktrees for parallel feature work
+.worktrees/
