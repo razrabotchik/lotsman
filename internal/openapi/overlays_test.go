@@ -3,6 +3,7 @@ package openapi
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -138,14 +139,29 @@ actions:
 	if !strings.Contains(string(out), "../secret.yaml") {
 		t.Fatalf("overlay did not write the reference: %s", out)
 	}
+	// The document parses; confinement is what refuses the reference, and it
+	// says so -- not some other failure that would make this test pass for
+	// the wrong reason.
 	doc, err := Parse(t.Context(), out, Options{RootPath: root})
 	if err != nil {
-		return
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(doc.Operations) == 0 {
+		t.Fatal("no operations parsed")
 	}
 	for _, op := range doc.Operations {
-		if op.Support.Level == domain.SupportSupported {
-			t.Fatalf("a $ref outside the root was followed: %s %+v", op.SourceOperationID, op.Input.Parameters)
+		if op.Support.Level != domain.SupportRejected || !slices.Contains(op.Support.Reasons, domain.ReasonRefOutsideRoot) {
+			t.Fatalf("%s: support = %+v, want rejected for ref_outside_root", op.SourceOperationID, op.Support)
 		}
+	}
+	confined := false
+	for _, d := range doc.Diagnostics {
+		if d.Code == domain.ReasonRefOutsideRoot && strings.Contains(d.Message, "../secret.yaml") {
+			confined = true
+		}
+	}
+	if !confined {
+		t.Fatalf("no ref_outside_root diagnostic for ../secret.yaml: %+v", doc.Diagnostics)
 	}
 	if len(doc.References) != 0 {
 		t.Fatalf("a file outside the root was read: %v", doc.References)
