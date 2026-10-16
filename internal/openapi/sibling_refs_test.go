@@ -101,8 +101,8 @@ func TestAnnotationsBesideARefDoNotHideTheReferencedSchema(t *testing.T) {
 				t.Fatalf("compile: %v", err)
 			}
 			for literal, valid := range map[string]bool{
-				`{"body":{"owner":{"name":"Ann"}}}`:  true,
-				`{"body":{"owner":{}}}`:              false,
+				`{"body":{"owner":{"name":"Ann"}}}`:                             true,
+				`{"body":{"owner":{}}}`:                                         false,
 				`{"body":{"owner":{"name":"` + strings.Repeat("n", 41) + `"}}}`: false,
 			} {
 				args, err := argvalidate.Decode([]byte(literal))
