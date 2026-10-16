@@ -388,7 +388,7 @@ func TestTheFormHasAHintForEveryDecidableCode(t *testing.T) {
 			t.Errorf("form.js has no hint for %s", code)
 		}
 	}
-	if !strings.Contains(string(form), `op.status === "unsupported" ? CANNOT`) {
+	if !strings.Contains(string(form), `(op.status === "unsupported" ? CANNOT`) {
 		t.Error("form.js says \"needs new code\" for an operation that is not unsupported")
 	}
 }

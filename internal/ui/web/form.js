@@ -90,8 +90,10 @@ export function renderForm(el, store) {
   for (const r of [...(op.reasons || []), ...(op.blockers || []).map((code) => ({ code }))]) {
     if (said.has(r.code)) continue;
     said.add(r.code);
-    const hint = HINTS[r.code] || (op.status === "unsupported" ? CANNOT : "");
-    const level = op.status === "unsupported" ? (HINTS[r.code] ? "warn" : "error") : op.status === "decision" ? "warn" : "info";
+    // A media type is a decision only when one of the offered types can be sent.
+    const liftable = HINTS[r.code] && !(r.code === "unsupported_media_type" && !(op.mediaTypes || []).some(sendable));
+    const hint = liftable ? HINTS[r.code] : (op.status === "unsupported" ? CANNOT : HINTS[r.code] || "");
+    const level = op.status === "unsupported" ? (liftable ? "warn" : "error") : op.status === "decision" ? "warn" : "info";
     el.append(h("div", { class: "banner " + level },
       h("b", {}, r.code), r.detail ? " — " + r.detail : "", hint ? h("br") : null, hint));
   }
