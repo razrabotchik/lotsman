@@ -74,6 +74,10 @@ store.removeStale = (p) => act(p.match
   ? { kind: "operation", match: p.match, remove: true }
   : { kind: "component", schema: p.schema, remove: true });
 
+store.apply = async (state) => { refresh(state); if (store.selected) await select(store.selected); };
+store.selectKey = (key) => select(key);
+store.toast = (m, k) => toast(m, k);
+
 function nextProblem() {
   const list = store.order.filter((o) => o.status === "decision" || o.status === "unsupported");
   if (!list.length) return toast("No problems left");

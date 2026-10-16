@@ -211,9 +211,8 @@ function editor(store, op, ov, ws, match, entryId, pending) {
   };
   const revert = async () => {
     try {
-      store.state = await api.revert(entryId);
       store.error = null;
-      store.detail = await api.operation(op.key);
+      await store.apply(await api.revert(entryId));
     } catch (e) {
       store.error = e.message;
     }
