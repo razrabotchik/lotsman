@@ -67,6 +67,15 @@ func validate(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 			return exitCode(optErr)
 		}
 		overlay = catalog.Overlay(doc.Operations, opts)
+		// A corrected schema that does not compile is refused by serve, so
+		// it is refused here too; only a configuration can correct one.
+		cat := catalog.Build(doc.digest, doc.Operations, opts)
+		if schemaErr := checkCorrectedSchemas(&cat); schemaErr != nil {
+			if !*quiet {
+				fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(schemaErr), schemaErr)
+			}
+			return exitCode(schemaErr)
+		}
 	}
 
 	var documentErrors, rejected, supported, excluded int

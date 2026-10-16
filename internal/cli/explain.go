@@ -72,6 +72,10 @@ func explainCall(ctx context.Context, args []string, stdout, stderr io.Writer) i
 		return exitCode(err)
 	}
 	cat := catalog.Build(doc.digest, doc.Operations, opts)
+	if err := checkCorrectedSchemas(&cat); err != nil {
+		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
+		return exitCode(err)
+	}
 	tool := findTool(&cat, target)
 	if tool == nil {
 		fmt.Fprintf(stderr, "lotsman: no published operation matches %q (try `lotsman inspect %s`)\n", target, *specPath)

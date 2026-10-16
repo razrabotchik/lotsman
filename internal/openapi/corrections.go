@@ -43,7 +43,8 @@ type OperationCorrection struct {
 	OperationID string
 	Method      string
 	Path        string
-	// MediaType is normalized (lower case, no parameters).
+	// MediaType is as configured; newFixes normalizes it (lower case, no
+	// parameters) with the same normalizer that reads the document.
 	MediaType  string
 	Parameters []ParameterCorrection
 	BodyPatch  domain.Schema
@@ -83,6 +84,11 @@ type fixes struct {
 
 func newFixes(c Corrections) *fixes {
 	f := &fixes{corrections: c, components: make(map[string]*ComponentCorrection, len(c.Components))}
+	// A copy, so normalizing never writes into the caller's Options.
+	f.corrections.Operations = append([]OperationCorrection(nil), c.Operations...)
+	for i := range f.corrections.Operations {
+		f.corrections.Operations[i].MediaType = normalizeMediaType(f.corrections.Operations[i].MediaType)
+	}
 	for i := range f.corrections.Components {
 		f.components[componentPointer(f.corrections.Components[i].Schema)] = &f.corrections.Components[i]
 	}

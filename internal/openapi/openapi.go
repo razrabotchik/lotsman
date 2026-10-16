@@ -156,7 +156,17 @@ func Parse(ctx context.Context, specBytes []byte, opts Options) (*Document, erro
 		}
 	}
 
+	// Corrections are checked before anything else can return: a correction
+	// that names nothing is an error even in a document with no paths.
+	corrections := newFixes(opts.Corrections)
+	var componentSchemas *orderedmap.Map[string, *base.SchemaProxy]
+	if model.Model.Components != nil {
+		componentSchemas = model.Model.Components.Schemas
+	}
+	corrections.checkComponents(componentSchemas)
+
 	if model.Model.Paths == nil {
+		out.CorrectionProblems = corrections.problems
 		return out, nil
 	}
 
@@ -170,16 +180,11 @@ func Parse(ctx context.Context, specBytes []byte, opts Options) (*Document, erro
 		namespace:    opts.Namespace,
 		rootServers:  model.Model.Servers,
 		rootSecurity: model.Model.Security,
+		fixes:        corrections,
 	}
 	if model.Model.Components != nil {
 		scope.schemes = model.Model.Components.SecuritySchemes
 	}
-	scope.fixes = newFixes(opts.Corrections)
-	var componentSchemas *orderedmap.Map[string, *base.SchemaProxy]
-	if model.Model.Components != nil {
-		componentSchemas = model.Model.Components.Schemas
-	}
-	scope.fixes.checkComponents(componentSchemas)
 	for _, path := range paths {
 		item, _ := model.Model.Paths.PathItems.Get(path)
 		for _, m := range methodOrder {

@@ -31,7 +31,7 @@ func correctionsFrom(runtime config.Runtime) openapi.Corrections {
 		}
 		c := openapi.OperationCorrection{
 			Index: i, OperationID: o.Match.OperationID, Method: o.Match.Method, Path: o.Match.Path,
-			MediaType: normalizeMediaType(o.MediaType), Note: o.Note,
+			MediaType: o.MediaType, Note: o.Note,
 		}
 		for j := range o.Parameters {
 			p := &o.Parameters[j]
@@ -46,13 +46,6 @@ func correctionsFrom(runtime config.Runtime) openapi.Corrections {
 		out.Operations = append(out.Operations, c)
 	}
 	return out
-}
-
-func normalizeMediaType(name string) string {
-	if semicolon := strings.IndexByte(name, ';'); semicolon >= 0 {
-		name = name[:semicolon]
-	}
-	return strings.ToLower(strings.TrimSpace(name))
 }
 
 // correctionError turns the adapter's problems into the one error a command
