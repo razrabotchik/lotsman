@@ -277,8 +277,33 @@ operationOverrides:
 	if code != exitOK {
 		t.Fatalf("exit %d, stderr %s", code, stderr)
 	}
-	if !strings.Contains(strings.ToLower(stdout), "correct") {
-		t.Fatalf("report does not mention the correction:\n%s", stdout)
+	if !strings.Contains(stdout, "corrected   1 operation") {
+		t.Fatalf("report does not count the correction:\n%s", stdout)
+	}
+}
+
+// explain-call names each correction with its provenance and note, on the
+// line an operator reads before letting an agent near the operation.
+func TestExplainCallShowsCorrectionProvenance(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	specPath, cfgPath, argsPath := filepath.Join(dir, "openapi.yaml"), filepath.Join(dir, "lotsman.yaml"), filepath.Join(dir, "args.json")
+	writeTestFile(t, specPath, listItemsSpec)
+	writeTestFile(t, cfgPath, `apiVersion: lotsman.dev/v1alpha1
+operationOverrides:
+  - match: { operationId: listItems }
+    parameters: [{ name: limit, in: query, schema: { type: string } }]
+    note: the API takes strings
+`)
+	writeTestFile(t, argsPath, `{"query": {"limit": "5"}}`)
+	var out, errOut strings.Builder
+	code := explainCall(context.Background(), []string{"default:GET:/items", "--spec", specPath, "--config", cfgPath,
+		"--args", argsPath, "--base-url", "https://api.example.test"}, &out, &errOut)
+	if code != exitOK {
+		t.Fatalf("exit %d, stderr %s", code, errOut.String())
+	}
+	if want := "corrected   parameter query/limit (local_override): the API takes strings\n"; !strings.Contains(out.String(), want) {
+		t.Fatalf("output does not contain %q:\n%s", want, out.String())
 	}
 }
 

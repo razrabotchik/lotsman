@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -102,6 +103,11 @@ func TestMediaTypePin(t *testing.T) {
 			op := opByID(t, doc, "patchX")
 			if op.Support.Level != tc.wantLevel {
 				t.Fatalf("support = %+v", op.Support)
+			}
+			// Without a pin the document offers a choice lotsman will not
+			// make, and it says which refusal that is.
+			if tc.pin == "" && !slices.Contains(op.Support.Reasons, domain.ReasonUnsupportedMediaType) {
+				t.Fatalf("reasons = %v, want %s", op.Support.Reasons, domain.ReasonUnsupportedMediaType)
 			}
 			if tc.wantMedia != "" && op.Input.Body.MediaType != tc.wantMedia {
 				t.Fatalf("media = %q", op.Input.Body.MediaType)
