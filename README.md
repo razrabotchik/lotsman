@@ -283,15 +283,18 @@ A local page opens: the API as a tree with the operations that need a decision f
 operation, and a tray of pending changes. Every change is run through the same pipeline `serve`
 runs before anything is written, and the form says what it fixes, breaks or alters. Changes that
 let an agent do more without asking — an effect lowered to `read`, an operation published again, a
-different credential — each need a tick at save. The page listens on 127.0.0.1 only, behind a
-one-time token, makes no request of its own and never reads a secret.
+different credential — each need a tick at save. The page listens on 127.0.0.1 only, makes no request
+of its own and never reads a secret. The printed address works once: opening it trades its token
+for a session cookie in that browser, and the address is refused after that — restart `lotsman ui`
+for a new one.
 
 Without SPEC, `lotsman ui` edits an existing configuration; if the file does not exist it refuses
 and asks for SPEC. `--port N` fixes the port, `--no-open` prints the address instead of opening a
 browser, and `--root DIR` confines `$ref` resolution.
 
 In CI, `lotsman inspect --config new.yaml --diff-against old.yaml [--json]` prints the same
-comparison. `--diff-against` needs `--config` and cannot be combined with `--fail-on-rejected`.
+comparison. `--diff-against` needs `--config` and cannot be combined with `--fail-on-rejected`,
+`--allow-mutations` or `--mode`: both files are evaluated as written.
 
 ### Serving it over HTTP
 
