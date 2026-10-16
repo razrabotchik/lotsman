@@ -89,7 +89,7 @@ func evaluate(ctx context.Context, data []byte, in pipelineInputs) (*workbench.S
 		return snap, nil, runtime
 	}
 	for _, p := range doc.CorrectionProblems {
-		snap.Problems = append(snap.Problems, problemFrom(p.Section, p.Index, p.Message, runtime))
+		snap.Problems = append(snap.Problems, problemFrom(p.Section, p.Index, p.Message, &runtime))
 	}
 
 	opts, err := catalogOptions(runtime, catalog.ModeTools, doc.Operations)
@@ -113,11 +113,11 @@ func evaluate(ctx context.Context, data []byte, in pipelineInputs) (*workbench.S
 		}
 	}
 
-	snap.Operations = snapshotOperations(doc.Operations, &cat, runtime)
+	snap.Operations = snapshotOperations(doc.Operations, &cat, &runtime)
 	return snap, &cat, runtime
 }
 
-func snapshotOperations(ops []domain.Operation, cat *catalog.Catalog, runtime config.Runtime) []workbench.Operation {
+func snapshotOperations(ops []domain.Operation, cat *catalog.Catalog, runtime *config.Runtime) []workbench.Operation {
 	verdicts := map[domain.OperationKey]*catalog.OperationVerdict{}
 	for i := range cat.Report.Operations {
 		verdicts[cat.Report.Operations[i].Key] = &cat.Report.Operations[i]
@@ -183,7 +183,7 @@ func overrideFor(op *domain.Operation, overrides []config.OperationOverride) *co
 	return nil
 }
 
-func problemFrom(section string, index int, message string, runtime config.Runtime) workbench.Problem {
+func problemFrom(section string, index int, message string, runtime *config.Runtime) workbench.Problem {
 	p := workbench.Problem{Section: section, Index: index, Message: message}
 	switch {
 	case section == "operationOverrides" && index >= 0 && index < len(runtime.Overrides):

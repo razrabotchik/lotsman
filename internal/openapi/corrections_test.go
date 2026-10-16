@@ -940,3 +940,106 @@ func TestCloneValueNeverCopiesAForeignMap(t *testing.T) {
 		t.Fatalf("properties = %#v, want nil", got["properties"])
 	}
 }
+
+// The form needs what the document declares, not only what lotsman
+// translated: every parameter (a refused one with its reason), every offered
+// media type in a stable order, and the component a body is named after.
+func TestDeclaredParametersAndOfferedMediaTypes(t *testing.T) {
+	t.Parallel()
+	doc := parseCorrected(t, `openapi: 3.0.3
+info: { title: X, version: "1" }
+paths:
+  /x:
+    patch:
+      operationId: patchX
+      parameters:
+        - { name: filter, in: query, style: deepObject, schema: { type: object } }
+        - { name: limit, in: query, required: true, schema: { type: integer } }
+      requestBody:
+        content:
+          application/strategic-merge-patch+json: { schema: { type: object } }
+          application/merge-patch+json: { schema: { type: object } }
+          application/apply-patch+yaml: { schema: { type: object } }
+          application/json-patch+json: { schema: { type: array } }
+      responses: { "200": { description: ok } }
+`, Corrections{})
+	op := opByID(t, doc, "patchX")
+	want := []string{"application/apply-patch+yaml", "application/json-patch+json",
+		"application/merge-patch+json", "application/strategic-merge-patch+json"}
+	if !reflect.DeepEqual(op.RequestMediaTypes, want) {
+		t.Fatalf("media types = %v, want %v", op.RequestMediaTypes, want)
+	}
+	byName := map[string]domain.DeclaredParameter{}
+	for _, p := range op.DeclaredParameters {
+		byName[p.Name] = p
+	}
+	if len(op.DeclaredParameters) != 2 {
+		t.Fatalf("declared = %+v", op.DeclaredParameters)
+	}
+	if f := byName["filter"]; f.Reason != domain.ReasonUnsupportedParameterStyle || f.In != "query" || f.Style != "deepObject" {
+		t.Fatalf("filter = %+v", f)
+	}
+	if l := byName["limit"]; l.Reason != "" || !l.Required {
+		t.Fatalf("limit = %+v", l)
+	}
+}
+
+// BodyComponent names a root component by the node the body references, so a
+// same-named component in another file of an exploded document is not it.
+func TestBodyComponentIsTheRootComponentOnly(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	if err := os.WriteFile(filepath.Join(root, "other.yaml"), []byte(`components:
+  schemas:
+    Pet:
+      type: object
+      properties:
+        name: { type: string }
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	spec := `openapi: 3.0.3
+info: { title: X, version: "1" }
+paths:
+  /pets:
+    post:
+      operationId: createPet
+      requestBody:
+        content: { application/json: { schema: { $ref: '#/components/schemas/Pet' } } }
+      responses: { "201": { description: ok } }
+  /others:
+    post:
+      operationId: createOtherPet
+      requestBody:
+        content: { application/json: { schema: { $ref: './other.yaml#/components/schemas/Pet' } } }
+      responses: { "201": { description: ok } }
+  /inline:
+    post:
+      operationId: createInline
+      requestBody:
+        content: { application/json: { schema: { type: object } } }
+      responses: { "201": { description: ok } }
+components:
+  schemas:
+    Pet: { type: object, properties: { age: { type: integer } } }
+`
+	doc, err := Parse(t.Context(), []byte(spec), Options{RootPath: root})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if doc.HasErrors() {
+		t.Fatalf("diagnostics: %+v", doc.Diagnostics)
+	}
+	if got := opByID(t, doc, "createPet").BodyComponent; got != "Pet" {
+		t.Fatalf("createPet body component = %q, want Pet", got)
+	}
+	if got := opByID(t, doc, "createOtherPet").BodyComponent; got != "" {
+		t.Fatalf("createOtherPet body component = %q, want none (another file's Pet)", got)
+	}
+	if got := opByID(t, doc, "createInline").BodyComponent; got != "" {
+		t.Fatalf("createInline body component = %q", got)
+	}
+}
