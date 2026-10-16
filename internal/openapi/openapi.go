@@ -57,6 +57,9 @@ type Document struct {
 	// stdin, which has no directory to resolve a reference against.
 	References  []domain.RefDocument `json:"references,omitempty"`
 	Diagnostics []domain.Diagnostic  `json:"diagnostics,omitempty"`
+	// CorrectionProblems are corrections that could not be applied as written.
+	// A caller that serves must refuse on any of them.
+	CorrectionProblems []CorrectionProblem `json:"correctionProblems,omitempty"`
 }
 
 // HasErrors reports whether parsing or model construction produced a
@@ -93,6 +96,10 @@ type Options struct {
 
 	// Limits bounds parse time, operation count and the $ref closure.
 	Limits Limits
+
+	// Corrections are the operator's changes to what the document says
+	// (feature 008). The zero value corrects nothing.
+	Corrections Corrections
 }
 
 // Parse builds the IR from raw OpenAPI 3.0/3.1 bytes: pipeline stage 1
@@ -167,6 +174,12 @@ func Parse(ctx context.Context, specBytes []byte, opts Options) (*Document, erro
 	if model.Model.Components != nil {
 		scope.schemes = model.Model.Components.SecuritySchemes
 	}
+	scope.fixes = newFixes(opts.Corrections)
+	var componentSchemas *orderedmap.Map[string, *base.SchemaProxy]
+	if model.Model.Components != nil {
+		componentSchemas = model.Model.Components.Schemas
+	}
+	scope.fixes.checkComponents(componentSchemas)
 	for _, path := range paths {
 		item, _ := model.Model.Paths.PathItems.Get(path)
 		for _, m := range methodOrder {
@@ -179,6 +192,7 @@ func Parse(ctx context.Context, specBytes []byte, opts Options) (*Document, erro
 		}
 	}
 	attachRefDiagnostics(out.Operations, scan.diagnostics)
+	out.CorrectionProblems = scope.fixes.problems
 
 	return out, nil
 }
@@ -346,6 +360,8 @@ type documentScope struct {
 	// schemes are the security scheme definitions a requirement refers to by
 	// name.
 	schemes *orderedmap.Map[string, *v3.SecurityScheme]
+	// fixes are the operator's corrections and the problems applying them.
+	fixes *fixes
 }
 
 // pathScope is what the operations under one path template share.
@@ -373,6 +389,7 @@ func buildOperation(method string, op *v3.Operation, in pathScope, scope documen
 	}
 
 	pointer := operationPointer(method, path)
+	fix := scope.fixes.forOperation(method, path, op.OperationId)
 	merged := mergeParameters(in.params, op.Parameters)
 
 	result.Effect = policy.Decide(policy.Candidate{
@@ -391,7 +408,9 @@ func buildOperation(method string, op *v3.Operation, in pathScope, scope documen
 	result.Diagnostics = append(result.Diagnostics, input.diagnostics...)
 	result.ExecutionBlockers = append(result.ExecutionBlockers, input.blockers...)
 
-	body := buildBody(op.RequestBody, pointer, defs)
+	body := buildBody(op.RequestBody, bodyFix{
+		mediaType: scope.fixes.pinnedMediaType(fix, op.RequestBody, &result),
+	}, pointer, defs)
 	result.Input.Body = body.spec
 	if len(defs.defs) > 0 {
 		result.Input.Defs = defs.defs

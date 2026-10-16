@@ -263,7 +263,7 @@ func (w *watchSet) documents() []string {
 //
 //nolint:gocritic // hugeParam: Runtime is resolved configuration, copied per call so no callee holds a pointer to the decision its caller already made.
 func loadCatalog(ctx context.Context, spec string, logger *slog.Logger, runtime config.Runtime, mode catalog.Mode, watched *watchSet) (*catalog.Catalog, error) {
-	doc, err := parseSpec(ctx, spec, runtime.Root, logger)
+	doc, err := parseSpec(ctx, spec, runtime, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -288,6 +288,9 @@ func loadCatalog(ctx context.Context, spec string, logger *slog.Logger, runtime 
 		}
 	}
 	cat := catalog.Build(doc.digest, doc.Operations, opts)
+	if err := checkCorrectedSchemas(&cat); err != nil {
+		return nil, err
+	}
 	if len(cat.Tools) == 0 {
 		return nil, errs.Errorf(errs.ClassUnsupported, "spec contains zero supported operations")
 	}
@@ -401,7 +404,9 @@ func (d *specDoc) manifestDigest() string {
 // `serve SPEC`, which reduces the result to a Catalog, and `operations
 // SPEC`, which prints every operation including the rejected ones a
 // Catalog would silently drop.
-func parseSpec(ctx context.Context, spec, root string, logger *slog.Logger) (*specDoc, error) {
+//
+//nolint:gocritic // hugeParam: Runtime is resolved configuration, copied per call so no callee holds a pointer to the decision its caller already made.
+func parseSpec(ctx context.Context, spec string, runtime config.Runtime, logger *slog.Logger) (*specDoc, error) {
 	src, err := specsource.Load(ctx, spec, specsource.Options{})
 	if err != nil {
 		return nil, err
@@ -415,11 +420,16 @@ func parseSpec(ctx context.Context, spec, root string, logger *slog.Logger) (*sp
 	// -- the same shape as `--base-url` for egress. Inside the stated root a
 	// reference is still confined; outside it is still refused.
 	rootPath := src.RootPath
-	if root != "" {
-		rootPath = root
+	if runtime.Root != "" {
+		rootPath = runtime.Root
 	}
-	doc, err := openapi.Parse(ctx, src.Bytes, openapi.Options{Logger: logger, RootPath: rootPath})
+	doc, err := openapi.Parse(ctx, src.Bytes, openapi.Options{
+		Logger: logger, RootPath: rootPath, Corrections: correctionsFrom(runtime),
+	})
 	if err != nil {
+		return nil, err
+	}
+	if err := correctionError(doc.CorrectionProblems); err != nil {
 		return nil, err
 	}
 	// One exploded specification can produce hundreds of identical-looking

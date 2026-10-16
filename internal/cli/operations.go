@@ -56,7 +56,7 @@ func operations(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	// land here.
 	logger := slog.New(redact.NewHandler(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelWarn})))
 
-	doc, err := parseSpec(ctx, spec, runtime.Root, logger)
+	doc, err := parseSpec(ctx, spec, runtime, logger)
 	if err != nil {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
 		return exitCode(err)

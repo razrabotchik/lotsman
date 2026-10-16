@@ -62,6 +62,9 @@ type Operation struct {
 	// the only thing the read-only gate consults: annotations are hints to a
 	// client, never an input to policy (data-model.md invariant 4).
 	Effect EffectDecision `json:"effect"`
+	// Corrections are the operator's changes to what the document says,
+	// in the order they were applied. Empty for an uncorrected operation.
+	Corrections []Correction `json:"corrections,omitempty"`
 	// Security is the effective security after operation->root inheritance:
 	// alternatives are OR, requirements inside one alternative are AND
 	// (FR-55/56). An empty slice means the operation is public, which an
@@ -128,6 +131,17 @@ type EffectDecision struct {
 // IsRead reports whether the operation is safe for a read-only runtime. It is
 // deliberately not "!= write": unknown is not read.
 func (d EffectDecision) IsRead() bool { return d.Effect == EffectRead }
+
+// Correction records that the operator changed what the document says about
+// an operation (feature 008). It travels into every report, so that nobody
+// mistakes a corrected operation for the document's own.
+type Correction struct {
+	Source EffectSource `json:"source"` // always local_override in this release
+	// Target names what was corrected: "mediaType application/merge-patch+json",
+	// "parameter query/limit", "requestBody", "component Pet".
+	Target string `json:"target"`
+	Note   string `json:"note,omitempty"`
+}
 
 // SecurityAlternative is one way to authenticate a call. Every requirement
 // inside it must be satisfied together (AND); satisfying any one alternative

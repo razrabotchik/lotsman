@@ -60,7 +60,7 @@ func explainCall(ctx context.Context, args []string, stdout, stderr io.Writer) i
 	}
 
 	logger := slog.New(redact.NewHandler(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelError})))
-	doc, err := parseSpec(ctx, pick(*specPath, runtime.Source), runtime.Root, logger)
+	doc, err := parseSpec(ctx, pick(*specPath, runtime.Source), runtime, logger)
 	if err != nil {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
 		return exitCode(err)
@@ -130,6 +130,13 @@ func explain(w io.Writer, tool *catalog.Tool, arguments requestbuild.Arguments, 
 	fmt.Fprintf(w, "effect      %s (%s, %s)\n", tool.Effect.Effect, tool.Effect.Source, tool.Effect.Confidence)
 	for _, warning := range tool.Effect.Warnings {
 		fmt.Fprintf(w, "            warning: %s\n", warning)
+	}
+	for _, c := range tool.Corrections {
+		line := fmt.Sprintf("corrected   %s (%s)", c.Target, c.Source)
+		if c.Note != "" {
+			line += ": " + c.Note
+		}
+		fmt.Fprintln(w, line)
 	}
 
 	fmt.Fprintf(w, "policy      %s\n", policyLine(tool, runtime))

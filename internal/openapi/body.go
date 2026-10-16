@@ -24,16 +24,26 @@ type bodyBuild struct {
 	rejections  []domain.ReasonCode
 }
 
+// bodyFix is what the operator said about one operation's body.
+type bodyFix struct {
+	// mediaType is a validated pin, or "".
+	mediaType string
+	// patch is an RFC 7396 merge patch over the normalized body schema.
+	patch domain.Schema
+	// index is the operationOverrides entry, for messages.
+	index int
+}
+
 // buildBody normalizes a request body into the IR: one deterministically
 // chosen media type and a JSON Schema 2020-12 fragment to validate against.
-func buildBody(rb *v3.RequestBody, pointer string, defs *bundle) bodyBuild {
+func buildBody(rb *v3.RequestBody, fix bodyFix, pointer string, defs *bundle) bodyBuild {
 	var out bodyBuild
 	if rb == nil {
 		return out
 	}
 	bodyPointer := pointer + "/requestBody"
 
-	mediaType, content, reason := selectMediaType(rb.Content)
+	mediaType, content, reason := selectMediaType(rb.Content, fix.mediaType)
 	if reason != "" {
 		out.reject(reason, bodyPointer, fmt.Sprintf(
 			"request body offers %s; lotsman sends %s only",
@@ -85,9 +95,19 @@ func bodyReasonText(code domain.ReasonCode) string {
 // exact application/json wins, then a single JSON-structured type such as
 // application/merge-patch+json. Anything else is refused -- "pick the first
 // one" is how a converter ends up sending a JSON body to a multipart endpoint.
-func selectMediaType(content *orderedmap.Map[string, *v3.MediaType]) (string, *v3.MediaType, domain.ReasonCode) {
+func selectMediaType(content *orderedmap.Map[string, *v3.MediaType], pinned string) (string, *v3.MediaType, domain.ReasonCode) {
 	if orderedmap.Len(content) == 0 {
 		return "", nil, domain.ReasonUnsupportedMediaType
+	}
+
+	// A pin the operator stated wins (FR-29). It was checked against the
+	// declared types and against what lotsman sends before it got here.
+	if pinned != "" {
+		for name, media := range content.FromOldest() {
+			if normalizeMediaType(name) == pinned {
+				return pinned, media, ""
+			}
+		}
 	}
 
 	var jsonLike []string

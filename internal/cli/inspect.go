@@ -103,7 +103,7 @@ func inspect(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 
 	logger := slog.New(redact.NewHandler(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelError})))
-	doc, err := parseSpec(ctx, spec, runtime.Root, logger)
+	doc, err := parseSpec(ctx, spec, runtime, logger)
 	if err != nil {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
 		return exitCode(err)
@@ -119,6 +119,10 @@ func inspect(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return exitCode(err)
 	}
 	cat := catalog.Build(doc.digest, doc.Operations, opts)
+	if err := checkCorrectedSchemas(&cat); err != nil {
+		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
+		return exitCode(err)
+	}
 
 	info := buildinfo.Get()
 	report := inspectDocument{
@@ -147,6 +151,7 @@ func inspect(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 	} else {
 		writeHumanReport(stdout, &report)
+		writeCorrections(stdout, report.Operations)
 		writeNextStep(stdout, &report, nextStep{
 			spec: spec, lax: runtime.Lax, baseURL: runtime.BaseURL, documentServer: firstServer(doc.Operations),
 		})
@@ -157,6 +162,20 @@ func inspect(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return exitUnsupported
 	}
 	return exitOK
+}
+
+// writeCorrections says how many operations the configuration corrected, so a
+// reader of the human report never takes a corrected document for the vendor's.
+func writeCorrections(w io.Writer, operations []catalog.OperationVerdict) {
+	corrected := 0
+	for i := range operations {
+		if len(operations[i].Corrections) > 0 {
+			corrected++
+		}
+	}
+	if corrected > 0 {
+		fmt.Fprintf(w, "\ncorrected   %d operation(s) differ from the document by configuration (see --json)\n", corrected)
+	}
 }
 
 // nextStep is what the closing line of the human report needs to know.

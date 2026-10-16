@@ -134,6 +134,9 @@ type OperationVerdict struct {
 	// AuthProfiles names the configured credentials the operation would use.
 	AuthProfiles []string `json:"authProfiles,omitempty"`
 	Reasons      []Reason `json:"reasons,omitempty"`
+	// Corrections are the operator's changes to what the document says
+	// about this operation (feature 008).
+	Corrections []domain.Correction `json:"corrections,omitempty"`
 }
 
 // Reason is a machine-readable refusal with enough provenance to act on:
@@ -176,6 +179,7 @@ func buildReport(operations []domain.Operation, tools []Tool, excluded map[domai
 			Effect:            op.Effect,
 			ExecutionBlockers: append([]domain.ReasonCode(nil), op.ExecutionBlockers...),
 			Reasons:           reasonsFor(op),
+			Corrections:       op.Corrections,
 		}
 		if reason, gone := excluded[op.Key]; gone {
 			verdict.Excluded = true

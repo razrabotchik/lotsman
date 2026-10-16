@@ -51,6 +51,9 @@ type Tool struct {
 	// Effect drives the published annotations and the runtime gate. It is
 	// carried on the tool so a report can show what was decided and why.
 	Effect domain.EffectDecision `json:"effect"`
+	// Corrections are the operator's changes to the document behind this
+	// tool. Not part of the digest: a client is shown their effect, not them.
+	Corrections []domain.Correction `json:"-"`
 	// AuthProfiles names the credentials this tool presents. Names and secret
 	// references are safe to publish; values never appear anywhere.
 	AuthProfiles []string `json:"authProfiles,omitempty"`
@@ -228,6 +231,7 @@ func Build(specDigest string, operations []domain.Operation, opts Options) Catal
 			Input:             op.Input,
 			InputSchema:       inputSchema(op.Input),
 			Effect:            op.Effect,
+			Corrections:       op.Corrections,
 			Executable:        op.Executable() && verdict.Allowed && credentials.Bound(),
 			ExecutionBlockers: append([]domain.ReasonCode(nil), op.ExecutionBlockers...),
 		}

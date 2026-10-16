@@ -45,7 +45,7 @@ func validate(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	}
 
 	logger := slog.New(redact.NewHandler(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelError})))
-	doc, err := parseSpec(ctx, spec, configured.Root, logger)
+	doc, err := parseSpec(ctx, spec, configured, logger)
 	if err != nil {
 		if !*quiet {
 			fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
