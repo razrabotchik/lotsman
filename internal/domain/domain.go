@@ -215,7 +215,12 @@ type RefDocument struct {
 // these the same bytes", and a document that was moved or renamed on the way in
 // is the same specification. Referenced documents keep their paths, because a
 // `$ref` resolving to a different file *is* a different specification.
-func ManifestDigest(rootDigest string, references []RefDocument) string {
+//
+// Overlays are folded in too, in the order they were applied: an overlay
+// changes what was parsed as surely as an edit to the document would, and the
+// same overlays applied in another order can produce another document. With
+// no overlays the digest is what it was before overlays existed.
+func ManifestDigest(rootDigest string, references, overlays []RefDocument) string {
 	var canonical strings.Builder
 	fmt.Fprintf(&canonical, ".\x00%s\n", rootDigest)
 	// The caller sorts; sorting again here makes the digest independent of that
@@ -224,6 +229,9 @@ func ManifestDigest(rootDigest string, references []RefDocument) string {
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Path < sorted[j].Path })
 	for i := range sorted {
 		fmt.Fprintf(&canonical, "%s\x00%s\n", sorted[i].Path, sorted[i].Digest)
+	}
+	for i := range overlays {
+		fmt.Fprintf(&canonical, "overlay %d\x00%s\x00%s\n", i, overlays[i].Path, overlays[i].Digest)
 	}
 	sum := sha256.Sum256([]byte(canonical.String()))
 	return "sha256:" + hex.EncodeToString(sum[:])

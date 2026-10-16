@@ -2,9 +2,11 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -383,5 +385,62 @@ componentOverrides:
 `)
 	if code != exitUsage || !strings.Contains(stderr, "key 1 is not a string") {
 		t.Fatalf("exit %d, stderr %s", code, stderr)
+	}
+}
+
+// Overlays are named relative to the configuration's directory, `..` and all:
+// two files called fix.yaml are two names, and none of them is a host path.
+func TestOverlaysAreNamedRelativeToTheConfigurationAndInTheManifest(t *testing.T) {
+	t.Parallel()
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "cfg")
+	for _, d := range []string{filepath.Join(dir, "fixes"), filepath.Join(parent, "shared")} {
+		if err := os.MkdirAll(d, 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	overlay := `overlay: 1.0.0
+info: { title: fix, version: "1" }
+actions:
+  - target: $.info
+    update: { description: fixed }
+`
+	writeTestFile(t, filepath.Join(dir, "fixes", "fix.yaml"), overlay)
+	writeTestFile(t, filepath.Join(parent, "shared", "fix.yaml"), overlay)
+	specPath := filepath.Join(dir, "openapi.yaml")
+	writeTestFile(t, specPath, listItemsSpec)
+
+	report := func(cfg string) inspectDocument {
+		t.Helper()
+		cfgPath := filepath.Join(dir, "lotsman.yaml")
+		writeTestFile(t, cfgPath, "apiVersion: lotsman.dev/v1alpha1\n"+cfg)
+		var out, errOut strings.Builder
+		if code := inspect(context.Background(), []string{"--config", cfgPath, "--json", specPath}, &out, &errOut); code != exitOK {
+			t.Fatalf("exit %d: %s", code, errOut.String())
+		}
+		var doc inspectDocument
+		if err := json.Unmarshal([]byte(out.String()), &doc); err != nil {
+			t.Fatalf("%v: %s", err, out.String())
+		}
+		return doc
+	}
+	plain := report("")
+	both := report("spec:\n  overlays: [./fixes/fix.yaml, ../shared/fix.yaml]\n")
+	names := []string{}
+	for _, o := range both.Spec.Overlays {
+		names = append(names, o.Path)
+	}
+	if want := []string{"fixes/fix.yaml", "../shared/fix.yaml"}; !reflect.DeepEqual(names, want) {
+		t.Fatalf("overlay names = %v, want %v", names, want)
+	}
+	if strings.Contains(strings.Join(names, " "), parent) {
+		t.Fatalf("an overlay name leaks the host path: %v", names)
+	}
+	one := report("spec:\n  overlays: [./fixes/fix.yaml]\n")
+	if plain.Spec.ManifestDigest == one.Spec.ManifestDigest || one.Spec.ManifestDigest == both.Spec.ManifestDigest {
+		t.Fatalf("manifest digests: plain %s, one %s, both %s", plain.Spec.ManifestDigest, one.Spec.ManifestDigest, both.Spec.ManifestDigest)
+	}
+	if plain.Spec.Digest != one.Spec.Digest {
+		t.Fatal("the root document's own digest moved with an overlay")
 	}
 }

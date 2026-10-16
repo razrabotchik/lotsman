@@ -436,7 +436,7 @@ type specDoc struct {
 // value that sometimes means "the root" and sometimes "everything" would be
 // worse than two that always mean what they say.
 func (d *specDoc) manifestDigest() string {
-	return domain.ManifestDigest(d.digest, d.References)
+	return domain.ManifestDigest(d.digest, d.References, d.overlays)
 }
 
 // parseSpec runs pipeline stages 0-1 (specsource, openapi): shared by
@@ -465,7 +465,7 @@ func parseSpec(ctx context.Context, spec string, runtime config.Runtime, logger 
 	specBytes := src.Bytes
 	var overlays []domain.RefDocument
 	if len(runtime.Overlays) > 0 {
-		docs, manifest, readErr := readOverlays(runtime.Overlays)
+		docs, manifest, readErr := readOverlays(runtime.Overlays, runtime.ConfigDir)
 		if readErr != nil {
 			return nil, readErr
 		}
@@ -505,7 +505,7 @@ func parseSpec(ctx context.Context, spec string, runtime config.Runtime, logger 
 // readOverlays reads the configured overlay files and their digests. The
 // digest is reported beside the document's, because an overlay changes what
 // was parsed as surely as an edit to the document would.
-func readOverlays(paths []string) ([]openapi.OverlayDocument, []domain.RefDocument, error) {
+func readOverlays(paths []string, configDir string) ([]openapi.OverlayDocument, []domain.RefDocument, error) {
 	docs := make([]openapi.OverlayDocument, 0, len(paths))
 	manifest := make([]domain.RefDocument, 0, len(paths))
 	for _, path := range paths {
@@ -517,10 +517,25 @@ func readOverlays(paths []string) ([]openapi.OverlayDocument, []domain.RefDocume
 		sum := sha256.Sum256(data)
 		docs = append(docs, openapi.OverlayDocument{Path: path, Bytes: data})
 		manifest = append(manifest, domain.RefDocument{
-			Path: filepath.Base(path), Digest: "sha256:" + hex.EncodeToString(sum[:]),
+			Path: overlayName(path, configDir), Digest: "sha256:" + hex.EncodeToString(sum[:]),
 		})
 	}
 	return docs, manifest, nil
+}
+
+// overlayName is how a report names an overlay: its path relative to the
+// configuration file's directory, `..` segments and all, slash-separated. Two
+// overlays with the same file name in different directories are two names,
+// and none of them says where on the host the configuration lives. Without a
+// configuration directory there is nothing to be relative to, and the file
+// name is all that is said.
+func overlayName(path, configDir string) string {
+	if configDir != "" {
+		if rel, err := filepath.Rel(configDir, absolute(path)); err == nil {
+			return filepath.ToSlash(rel)
+		}
+	}
+	return filepath.Base(path)
 }
 
 // diagnosticLevel maps a domain.Diagnostic's severity to the matching slog

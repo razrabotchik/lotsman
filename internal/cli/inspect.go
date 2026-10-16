@@ -55,7 +55,11 @@ type specIdentity struct {
 	// References are those documents, each with its own digest, so a reader can
 	// see *which* one moved rather than only that something did.
 	References []domain.RefDocument `json:"references,omitempty"`
-	// Overlays are the OpenAPI Overlay documents applied before parsing.
+	// Overlays are the OpenAPI Overlay documents applied before parsing, in
+	// the order they were applied. Each path is relative to the configuration
+	// file's directory (with `..` segments when the overlay lives outside it),
+	// slash-separated, so it names the file without naming the host. They are
+	// part of ManifestDigest.
 	Overlays []domain.RefDocument `json:"overlays,omitempty"`
 	OpenAPI  string               `json:"openapi,omitempty"`
 }

@@ -496,6 +496,9 @@ type File struct {
 	AuthProfiles       map[string]Profile  `yaml:"authProfiles,omitempty"`
 	OperationOverrides []OperationOverride `yaml:"operationOverrides,omitempty"`
 	ComponentOverrides []ComponentOverride `yaml:"componentOverrides,omitempty"`
+
+	// dir is the absolute directory Load read the file from; "" after Parse.
+	dir string
 }
 
 // Load reads and validates a configuration file.
@@ -516,6 +519,9 @@ func Load(path string) (*File, error) {
 	}
 	if err := file.resolvePaths(filepath.Dir(path)); err != nil {
 		return nil, err
+	}
+	if dir, absErr := filepath.Abs(filepath.Dir(path)); absErr == nil {
+		file.dir = dir
 	}
 	return file, nil
 }

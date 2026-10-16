@@ -31,6 +31,10 @@ type Runtime struct {
 	ComponentOverrides []ComponentOverride
 	// Overlays are the OpenAPI Overlay files applied before parsing, absolute.
 	Overlays []string
+	// ConfigDir is the absolute directory of the configuration file, or ""
+	// when the configuration was not loaded from one. Reports name overlays
+	// relative to it rather than by an absolute path that describes the host.
+	ConfigDir string
 	// AllowedOrigins is the egress allowlist. The base URL is added to it, so
 	// the common single-origin case needs no configuration at all.
 	AllowedOrigins       []string
@@ -147,6 +151,7 @@ func Resolve(file *File, env Environment, flags Overrides) Runtime {
 		runtime.Overrides = append([]OperationOverride(nil), file.OperationOverrides...)
 		runtime.ComponentOverrides = append([]ComponentOverride(nil), file.ComponentOverrides...)
 		runtime.Overlays = append([]string(nil), file.Spec.Overlays...)
+		runtime.ConfigDir = file.dir
 		runtime.BaseURL = file.Execution.BaseURL
 		runtime.AllowedOrigins = append([]string(nil), file.Execution.AllowedOrigins...)
 		runtime.AllowPrivateNetworks = file.Execution.AllowPrivateNetworks
