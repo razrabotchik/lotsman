@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"reflect"
 	"strings"
 
 	"github.com/razrabotchik/lotsman/internal/argvalidate"
@@ -78,4 +79,54 @@ func checkCorrectedSchemas(cat *catalog.Catalog) error {
 		}
 	}
 	return nil
+}
+
+// reloadRuntime is the configuration a reload builds from: the file as it is
+// now, provided it differs from the running one only where a catalog is
+// shaped. Policy, credentials and the server are fixed for the life of the
+// process -- FR-72 republishes a catalog, not a policy.
+//
+//nolint:gocritic // hugeParam: Runtime is resolved configuration; the running one is never modified.
+func reloadRuntime(running config.Runtime, configPath string,
+	resolve func() (config.Runtime, error)) (config.Runtime, catalog.Mode, error) {
+	current := running
+	if configPath != "" {
+		fresh, err := resolve()
+		if err != nil {
+			return config.Runtime{}, "", err
+		}
+		if changed := changedOutsideCatalog(running, fresh); len(changed) > 0 {
+			return config.Runtime{}, "", errs.Errorf(errs.ClassUsage,
+				"reload: the configuration changed in %s; a reload applies spec.overlays, componentOverrides, "+
+					"operationOverrides and catalog only, the rest needs a restart", strings.Join(changed, ", "))
+		}
+		current = fresh
+	}
+	mode, err := parseMode(current.Mode)
+	if err != nil {
+		return config.Runtime{}, "", err
+	}
+	return current, mode, nil
+}
+
+// changedOutsideCatalog names the Runtime fields that differ outside the
+// sections a reload may change.
+//
+//nolint:gocritic // hugeParam: compared by value on purpose.
+func changedOutsideCatalog(before, after config.Runtime) []string {
+	b, a := reflect.ValueOf(withoutCatalog(before)), reflect.ValueOf(withoutCatalog(after))
+	var changed []string
+	for i := range b.NumField() {
+		if !reflect.DeepEqual(b.Field(i).Interface(), a.Field(i).Interface()) {
+			changed = append(changed, b.Type().Field(i).Name)
+		}
+	}
+	return changed
+}
+
+//nolint:gocritic // hugeParam: returns a modified copy.
+func withoutCatalog(r config.Runtime) config.Runtime {
+	r.Overrides, r.ComponentOverrides, r.Overlays, r.IncludeTags = nil, nil, nil, nil
+	r.Mode, r.MaxSerializedBytes, r.DescriptionBytesPerTool = "", 0, 0
+	return r
 }

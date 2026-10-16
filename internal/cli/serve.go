@@ -65,7 +65,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 	// The configuration is resolved before the logger exists, because the
 	// file may be where the log level was stated (docs/spec.md 5.1). Errors
 	// until then go to stderr directly, which is where they went anyway.
-	runtime, err := resolveConfig(*configPath, fs, &flagValues{
+	values := &flagValues{
 		allowMutations:  *allowMutations,
 		readOnly:        *readOnly,
 		baseURL:         *baseURL,
@@ -77,12 +77,22 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 		logLevel:        *level,
 		mode:            *mode,
 		lax:             *lax,
-	})
+	}
+	runtime, err := resolveConfig(*configPath, fs, values)
 	if err != nil {
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
 		return exitCode(err)
 	}
 	runtime.AllowPrivateNetworks = runtime.AllowPrivateNetworks || *allowPrivate
+	// A reload resolves the file again exactly as startup did, flags included,
+	// so a flag keeps winning over the file after the file changes (FR-62).
+	resolve := func() (config.Runtime, error) {
+		fresh, resolveErr := resolveConfig(*configPath, fs, values)
+		if resolveErr == nil {
+			fresh.AllowPrivateNetworks = fresh.AllowPrivateNetworks || *allowPrivate
+		}
+		return fresh, resolveErr
+	}
 
 	logger, err := newLogger(stderr, runtime.Server.LogLevel)
 	if err != nil {
@@ -122,7 +132,7 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 		return exitUsage
 	}
 
-	watched := &watchSet{}
+	watched := &watchSet{config: absolute(*configPath)}
 	opts := mcpserver.Options{
 		Logger: logger, BaseURL: runtime.BaseURL, Egress: egressPolicy,
 		Approval:         runtime.InteractiveApproval,
@@ -144,7 +154,11 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 	}
 
 	source := func(ctx context.Context) (*catalog.Catalog, error) {
-		return loadCatalog(ctx, spec, logger, runtime, catalogMode, watched)
+		current, currentMode, err := reloadRuntime(runtime, *configPath, resolve)
+		if err != nil {
+			return nil, err
+		}
+		return loadCatalog(ctx, spec, logger, current, currentMode, watched)
 	}
 	if err := runTransport(ctx, runtime, &opts, source, reloadTriggers(spec, *watch, watched)); err != nil {
 		logger.Error("serve failed", "class", string(errs.ClassOf(err)), "error", err)
@@ -239,16 +253,35 @@ func reloadTriggers(spec string, watch bool, watched *watchSet) reload.Triggers 
 // It is written by the loader and read by the watcher's ticker, hence the
 // atomic: the two are on different goroutines by construction, and a reload
 // replaces the whole set at once rather than editing it in place.
-type watchSet struct{ paths atomic.Pointer[[]string] }
+type watchSet struct {
+	paths  atomic.Pointer[[]string]
+	config string // absolute path of the configuration file, or ""
+}
+
+// absolute is path made absolute, or "" for no path. The watcher compares
+// files by path, and a relative one would follow the working directory.
+func absolute(path string) string {
+	if path == "" {
+		return ""
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+	return path
+}
 
 // record stores the absolute path of every document a load read.
-func (w *watchSet) record(root string, references []domain.RefDocument) {
+func (w *watchSet) record(root string, references []domain.RefDocument, overlays []string) {
 	paths := make([]string, 0, len(references))
 	for i := range references {
 		if root == "" {
 			continue // stdin: nothing on disk to watch
 		}
 		paths = append(paths, filepath.Join(root, filepath.FromSlash(references[i].Path)))
+	}
+	paths = append(paths, overlays...)
+	if w.config != "" {
+		paths = append(paths, w.config)
 	}
 	w.paths.Store(&paths)
 }
@@ -274,7 +307,7 @@ func loadCatalog(ctx context.Context, spec string, logger *slog.Logger, runtime 
 		// Recorded before the checks below: a document that referenced others
 		// and then failed validation is still the one an operator is editing,
 		// and the next edit is what should be noticed.
-		watched.record(doc.rootPath, doc.References)
+		watched.record(doc.rootPath, doc.References, runtime.Overlays)
 	}
 	opts, err := catalogOptions(runtime, mode, doc.Operations)
 	if err != nil {
