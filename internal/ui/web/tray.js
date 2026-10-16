@@ -30,9 +30,21 @@ let reviewing = false;
 async function review(store) {
   if (reviewing) return;
   reviewing = true;
+  let dlg = null;
+  try {
+    await showReview(store, (d) => (dlg = d));
+  } catch (e) {
+    if (dlg) dlg.remove();
+    reviewing = false;
+    store.toast(e.message || String(e), "error");
+  }
+}
+
+async function showReview(store, setDialog) {
   let diff = "", diffError = null;
-  try { diff = (await api.diff()).diff; } catch (e) { diffError = e.message; }
+  try { diff = String((await api.diff()).diff); } catch (e) { diffError = e.message; }
   const dlg = h("dialog");
+  setDialog(dlg);
   dlg.addEventListener("close", () => { dlg.remove(); reviewing = false; });
   const close = () => dlg.close();
   const st = store.state;
