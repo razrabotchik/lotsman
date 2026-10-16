@@ -68,7 +68,11 @@ func buildBody(rb *v3.RequestBody, fix bodyFix, pointer string, defs *bundle) bo
 		Schema:      converted,
 	}
 	if fix.patch != nil {
-		patched := mergePatch(inlineTopRef(converted, defs), fix.patch)
+		patched := defs.mergePatch(converted, fix.patch, "", func(def, at string) {
+			defs.fixes.problem("operationOverrides", fix.index,
+				"requestBody.patch reaches through a reference to %s at %s; patch component %s instead",
+				defs.componentName(def), at, defs.componentName(def))
+		})
 		if shapeReason := checkCorrectedShape(patched, bodyTarget); shapeReason != "" {
 			out.spec = nil
 			out.reject(shapeReason, bodyPointer, fmt.Sprintf(

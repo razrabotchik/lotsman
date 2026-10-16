@@ -418,7 +418,7 @@ func buildOperation(method string, op *v3.Operation, in pathScope, scope *docume
 	bf := bodyFix{mediaType: scope.fixes.pinnedMediaType(fix, op.RequestBody, &result)}
 	if fix != nil {
 		bf.patch, bf.index = fix.BodyPatch, fix.Index
-		if bf.patch != nil && op.RequestBody == nil {
+		if bf.patch != nil && declaresNoBody(op.RequestBody) {
 			scope.fixes.problem("operationOverrides", fix.Index,
 				"requestBody.patch is set, but %s %s declares no request body", result.Method, result.PathTemplate)
 		}

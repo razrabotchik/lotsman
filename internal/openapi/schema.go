@@ -88,7 +88,7 @@ func (b *bundle) normalizeProxy(proxy *base.SchemaProxy, target schemaTarget, de
 		if reason != "" || !proxy.IsReference() {
 			return normalized, reason
 		}
-		return b.patchComponent(proxy.GetReference(), normalized, target)
+		return b.patchComponent(proxy, normalized, target)
 	}
 
 	pointer := proxy.GetReference()
@@ -110,7 +110,7 @@ func (b *bundle) normalizeProxy(proxy *base.SchemaProxy, target schemaTarget, de
 		if reason != "" {
 			return nil, reason
 		}
-		normalized, reason = b.patchComponent(pointer, normalized, target)
+		normalized, reason = b.patchComponent(proxy, normalized, target)
 		if reason != "" {
 			return nil, reason
 		}
@@ -119,19 +119,21 @@ func (b *bundle) normalizeProxy(proxy *base.SchemaProxy, target schemaTarget, de
 	return domain.Schema{"$ref": defsPointer(name)}, ""
 }
 
-// patchComponent applies the operator's correction for the component a
-// reference points at, if there is one. The result must still have a shape the
-// target can carry; if it does not, the operation is refused for its usual
-// reason -- a correction can break an operation, and saying so is the point.
-func (b *bundle) patchComponent(pointer string, normalized domain.Schema, target schemaTarget) (domain.Schema, domain.ReasonCode) {
-	if b.fixes == nil {
+// patchComponent applies the operator's correction for the root-document
+// component a reference resolves to, if there is one. The result must still
+// have a shape the target can carry; if it does not, the operation is refused
+// for its usual reason -- a correction can break an operation, and saying so
+// is the point.
+func (b *bundle) patchComponent(proxy *base.SchemaProxy, normalized domain.Schema, target schemaTarget) (domain.Schema, domain.ReasonCode) {
+	fix := b.fixes.forComponent(proxy)
+	if fix == nil {
 		return normalized, ""
 	}
-	fix, ok := b.fixes.components[pointer]
-	if !ok {
-		return normalized, ""
-	}
-	patched := mergePatch(normalized, fix.Patch)
+	patched := b.mergePatch(normalized, fix.Patch, "", func(def, at string) {
+		b.fixes.problem("componentOverrides", fix.Index,
+			"patch reaches through a reference to %s at %s; patch component %s instead",
+			b.componentName(def), at, b.componentName(def))
+	})
 	if reason := checkCorrectedShape(patched, target); reason != "" {
 		return nil, reason
 	}

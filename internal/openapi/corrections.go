@@ -2,13 +2,15 @@ package openapi
 
 import (
 	"fmt"
+	"maps"
 	"reflect"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/pb33f/libopenapi/datamodel/high/base"
 	v3 "github.com/pb33f/libopenapi/datamodel/high/v3"
 	"github.com/pb33f/libopenapi/orderedmap"
+	yaml "go.yaml.in/yaml/v4"
 
 	"github.com/razrabotchik/lotsman/internal/domain"
 )
@@ -81,11 +83,20 @@ type fixes struct {
 	corrections Corrections
 	// components maps a component pointer to its correction.
 	components map[string]*ComponentCorrection
-	problems   []CorrectionProblem
+	// roots maps the node a root-document component was parsed from to its
+	// correction. A reference matches a correction by the node it resolves
+	// to, never by its text: "#/components/schemas/Pet" written inside an
+	// external file names that file's Pet, which no correction matches.
+	roots    map[*yaml.Node]*ComponentCorrection
+	problems []CorrectionProblem
 }
 
 func newFixes(c Corrections) *fixes {
-	f := &fixes{corrections: c, components: make(map[string]*ComponentCorrection, len(c.Components))}
+	f := &fixes{
+		corrections: c,
+		components:  make(map[string]*ComponentCorrection, len(c.Components)),
+		roots:       map[*yaml.Node]*ComponentCorrection{},
+	}
 	// A copy, so normalizing never writes into the caller's Options.
 	f.corrections.Operations = append([]OperationCorrection(nil), c.Operations...)
 	for i := range f.corrections.Operations {
@@ -99,8 +110,15 @@ func newFixes(c Corrections) *fixes {
 
 func componentPointer(name string) string { return "#/components/schemas/" + name }
 
+// problem records a correction that could not be applied. The same problem
+// found again (a component patch fails the same way in every operation that
+// uses the component) is recorded once.
 func (f *fixes) problem(section string, index int, format string, args ...any) {
-	f.problems = append(f.problems, CorrectionProblem{Section: section, Index: index, Message: fmt.Sprintf(format, args...)})
+	p := CorrectionProblem{Section: section, Index: index, Message: fmt.Sprintf(format, args...)}
+	if slices.Contains(f.problems, p) {
+		return
+	}
+	f.problems = append(f.problems, p)
 }
 
 // forOperation returns the correction naming this operation, matched the way
@@ -125,12 +143,16 @@ func (f *fixes) forOperation(method, path, operationID string) *OperationCorrect
 	return nil
 }
 
-// checkComponents reports component corrections that name nothing.
+// checkComponents reports component corrections that name nothing, and
+// records the node each one that does name something was parsed from.
 func (f *fixes) checkComponents(schemas *orderedmap.Map[string, *base.SchemaProxy]) {
 	for i := range f.corrections.Components {
 		c := &f.corrections.Components[i]
 		if schemas != nil {
-			if _, ok := schemas.Get(c.Schema); ok {
+			if proxy, ok := schemas.Get(c.Schema); ok {
+				if node := sourceNode(proxy); node != nil {
+					f.roots[node] = c
+				}
 				continue
 			}
 		}
@@ -139,13 +161,45 @@ func (f *fixes) checkComponents(schemas *orderedmap.Map[string, *base.SchemaProx
 	}
 }
 
+// forComponent returns the correction for the root-document component a
+// reference resolves to, if there is one.
+func (f *fixes) forComponent(proxy *base.SchemaProxy) *ComponentCorrection {
+	if f == nil || len(f.roots) == 0 {
+		return nil
+	}
+	node := sourceNode(proxy)
+	if node == nil {
+		return nil
+	}
+	return f.roots[node]
+}
+
+// sourceNode is the YAML node a schema was parsed from: for a reference, the
+// node it resolved to, in whichever file that is.
+func sourceNode(proxy *base.SchemaProxy) *yaml.Node {
+	if proxy == nil {
+		return nil
+	}
+	low := proxy.GoLow()
+	if low == nil {
+		return nil
+	}
+	return low.GetValueNode()
+}
+
+// declaresNoBody reports whether an operation has no request body to correct:
+// none at all, or one with no content.
+func declaresNoBody(rb *v3.RequestBody) bool {
+	return rb == nil || orderedmap.Len(rb.Content) == 0
+}
+
 // pinnedMediaType checks the operator's media type against the operation and
 // returns it, or "" when there is nothing usable to pin.
 func (f *fixes) pinnedMediaType(c *OperationCorrection, rb *v3.RequestBody, result *domain.Operation) string {
 	if c == nil || c.MediaType == "" {
 		return ""
 	}
-	if rb == nil || orderedmap.Len(rb.Content) == 0 {
+	if declaresNoBody(rb) {
 		f.problem("operationOverrides", c.Index, "mediaType is set, but %s %s declares no request body",
 			result.Method, result.PathTemplate)
 		return ""
@@ -177,32 +231,6 @@ func correction(target, note string) domain.Correction {
 	return domain.Correction{Source: domain.EffectSourceLocalOverride, Target: target, Note: note}
 }
 
-// mergePatch applies an RFC 7396 merge patch to a copy of target: null removes
-// a key, an object merges into an object, anything else replaces.
-//
-// Nested values come out as map[string]any, never domain.Schema: the catalog's
-// schema walkers (sanitizeSchema and friends) assert map[string]any, and a
-// nested domain.Schema would silently skip description sanitizing.
-func mergePatch(target, patch domain.Schema) domain.Schema {
-	out := cloneSchema(target)
-	if out == nil {
-		out = domain.Schema{}
-	}
-	for key, value := range patch {
-		if value == nil {
-			delete(out, key)
-			continue
-		}
-		if patchObject, ok := asObject(value); ok {
-			current, _ := asObject(out[key])
-			out[key] = map[string]any(mergePatch(current, patchObject))
-			continue
-		}
-		out[key] = cloneValue(value)
-	}
-	return out
-}
-
 func asObject(v any) (domain.Schema, bool) {
 	switch m := v.(type) {
 	case domain.Schema:
@@ -222,32 +250,92 @@ func asObject(v any) (domain.Schema, bool) {
 	return nil, false
 }
 
-// inlineTopRef returns a copy of schema that a correction may change without
-// touching anything shared: a top-level reference into the bundle is replaced
-// by a copy of what it points at, its sibling annotations kept.
-func inlineTopRef(schema domain.Schema, defs *bundle) domain.Schema {
+// mergePatch applies an RFC 7396 merge patch to a copy of target: null removes
+// a key, an object merges into an object, anything else replaces.
+//
+// Wherever the patch descends into a reference into the bundle
+// ({"$ref": "#/$defs/X"}), it descends into a copy of X instead, the
+// reference's sibling annotations kept: X is shared with every other use of
+// it, and a patch is local to where it was written. Merging beside the $ref
+// would not do either -- in 2020-12 a sibling of $ref is a conjunction, so a
+// changed type yields a schema nothing satisfies. A reference whose
+// definition is not available yet (a cycle still being built) cannot be
+// copied; the merge stops there and blocked is told the definition and the
+// path, so the caller can refuse the correction by name.
+//
+// Nested values come out as map[string]any, never domain.Schema: the catalog's
+// schema walkers (sanitizeSchema and friends) assert map[string]any, and a
+// nested domain.Schema would silently skip description sanitizing.
+func (b *bundle) mergePatch(target, patch domain.Schema, at string, blocked func(def, at string)) domain.Schema {
+	out, unavailable := b.followRef(target)
+	if unavailable != "" {
+		blocked(unavailable, at)
+		return cloneSchema(target)
+	}
+	for _, key := range sortedKeys(patch) {
+		value := patch[key]
+		if value == nil {
+			delete(out, key)
+			continue
+		}
+		if patchObject, ok := asObject(value); ok {
+			current, _ := asObject(out[key])
+			out[key] = map[string]any(b.mergePatch(current, patchObject, joinPath(at, key), blocked))
+			continue
+		}
+		out[key] = cloneValue(value)
+	}
+	return out
+}
+
+// followRef returns a copy of schema a patch may change: for a reference into
+// the bundle, a copy of the definition with the reference's siblings on it.
+// It returns the definition's name instead when that definition is not
+// available to copy.
+func (b *bundle) followRef(schema domain.Schema) (out domain.Schema, unavailable string) {
 	ref, _ := schema["$ref"].(string)
 	name, isDef := strings.CutPrefix(ref, "#/$defs/")
-	target, known := defs.defs[name]
-	if !isDef || !known {
-		return cloneSchema(schema)
+	if !isDef {
+		out = cloneSchema(schema)
+		if out == nil {
+			out = domain.Schema{}
+		}
+		return out, ""
 	}
-	out := cloneSchema(target)
+	target, known := b.defs[name]
+	if !known {
+		return nil, name
+	}
+	out = cloneSchema(target)
 	for key, value := range schema {
 		if key != "$ref" {
 			out[key] = cloneValue(value)
 		}
 	}
-	return out
+	return out, ""
 }
 
-func sortedKeys(set map[string]bool) []string {
-	keys := make([]string, 0, len(set))
-	for key := range set {
-		keys = append(keys, key)
+// componentName is the document's name for a $defs entry, for messages.
+func (b *bundle) componentName(def string) string {
+	for pointer, name := range b.names {
+		if name == def {
+			return lastSegment(pointer)
+		}
 	}
-	sort.Strings(keys)
-	return keys
+	return def
+}
+
+func joinPath(at, key string) string {
+	if at == "" {
+		return key
+	}
+	return at + "." + key
+}
+
+// sortedKeys returns a map's keys in order: nothing reaches output, a
+// problem list included, in map order.
+func sortedKeys[V any](m map[string]V) []string {
+	return slices.Sorted(maps.Keys(m))
 }
 
 // cloneSchema deep-copies a schema, so a correction never writes into a
