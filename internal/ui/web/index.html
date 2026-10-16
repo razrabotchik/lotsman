@@ -1,3 +1,26 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>lotsman ui</title></head>
-<body><p>lotsman ui — frontend arrives in the next task.</p></body></html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lotsman ui</title>
+<link rel="stylesheet" href="style.css">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<header class="top">
+  <span class="brand"><span class="mark" aria-hidden="true"></span>lotsman</span>
+  <span id="file" class="file"></span>
+  <span id="counts" class="counts"></span>
+  <input id="search" type="search" placeholder="Search path, operationId, summary" autocomplete="off">
+  <label class="toggle"><input id="only-problems" type="checkbox"> only problems</label>
+  <button id="next-problem" type="button">Next problem →</button>
+</header>
+<div class="layout">
+  <nav id="tree" class="tree" aria-label="API"></nav>
+  <main id="main" class="main"></main>
+</div>
+<footer id="tray" class="tray"></footer>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
