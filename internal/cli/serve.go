@@ -2,10 +2,13 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sync/atomic"
 
@@ -389,6 +392,9 @@ type specDoc struct {
 	// rootPath is the directory references were confined to, so a caller that
 	// watches the specification knows where its documents live.
 	rootPath string
+	// overlays are the OpenAPI Overlay documents applied before parsing, with
+	// their digests: they change what was parsed as surely as an edit would.
+	overlays []domain.RefDocument
 }
 
 // manifestDigest identifies the root document and every document it read
@@ -423,7 +429,19 @@ func parseSpec(ctx context.Context, spec string, runtime config.Runtime, logger 
 	if runtime.Root != "" {
 		rootPath = runtime.Root
 	}
-	doc, err := openapi.Parse(ctx, src.Bytes, openapi.Options{
+	specBytes := src.Bytes
+	var overlays []domain.RefDocument
+	if len(runtime.Overlays) > 0 {
+		docs, manifest, readErr := readOverlays(runtime.Overlays)
+		if readErr != nil {
+			return nil, readErr
+		}
+		if specBytes, err = openapi.ApplyOverlays(specBytes, docs); err != nil {
+			return nil, err
+		}
+		overlays = manifest
+	}
+	doc, err := openapi.Parse(ctx, specBytes, openapi.Options{
 		Logger: logger, RootPath: rootPath, Corrections: correctionsFrom(runtime),
 	})
 	if err != nil {
@@ -448,7 +466,28 @@ func parseSpec(ctx context.Context, spec string, runtime config.Runtime, logger 
 			slog.String("pointer", d.Pointer),
 			slog.String("message", d.Message))
 	}
-	return &specDoc{Document: doc, digest: src.Digest, rootPath: rootPath}, nil
+	return &specDoc{Document: doc, digest: src.Digest, rootPath: rootPath, overlays: overlays}, nil
+}
+
+// readOverlays reads the configured overlay files and their digests. The
+// digest is reported beside the document's, because an overlay changes what
+// was parsed as surely as an edit to the document would.
+func readOverlays(paths []string) ([]openapi.OverlayDocument, []domain.RefDocument, error) {
+	docs := make([]openapi.OverlayDocument, 0, len(paths))
+	manifest := make([]domain.RefDocument, 0, len(paths))
+	for _, path := range paths {
+		// #nosec G304 -- operator-named in the configuration.
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, nil, errs.Errorf(errs.ClassUsage, "config: spec.overlays: cannot read %s", path)
+		}
+		sum := sha256.Sum256(data)
+		docs = append(docs, openapi.OverlayDocument{Path: path, Bytes: data})
+		manifest = append(manifest, domain.RefDocument{
+			Path: filepath.Base(path), Digest: "sha256:" + hex.EncodeToString(sum[:]),
+		})
+	}
+	return docs, manifest, nil
 }
 
 // diagnosticLevel maps a domain.Diagnostic's severity to the matching slog

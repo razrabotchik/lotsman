@@ -55,7 +55,9 @@ type specIdentity struct {
 	// References are those documents, each with its own digest, so a reader can
 	// see *which* one moved rather than only that something did.
 	References []domain.RefDocument `json:"references,omitempty"`
-	OpenAPI    string               `json:"openapi,omitempty"`
+	// Overlays are the OpenAPI Overlay documents applied before parsing.
+	Overlays []domain.RefDocument `json:"overlays,omitempty"`
+	OpenAPI  string               `json:"openapi,omitempty"`
 }
 
 // documentIssue is a diagnostic that belongs to the document rather than to
@@ -133,6 +135,7 @@ func inspect(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			Digest:         doc.digest,
 			ManifestDigest: doc.manifestDigest(),
 			References:     doc.References,
+			Overlays:       doc.overlays,
 			OpenAPI:        doc.Version,
 		},
 		Totals:         cat.Report.Totals,
