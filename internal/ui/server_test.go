@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/razrabotchik/lotsman/internal/config"
+	"github.com/razrabotchik/lotsman/internal/domain"
 	"github.com/razrabotchik/lotsman/internal/workbench"
 )
 
@@ -365,5 +366,29 @@ func TestThePageNeedsNothingTheCSPForbids(t *testing.T) {
 		if strings.Contains(html, bad) {
 			t.Errorf("index.html contains %q", bad)
 		}
+	}
+}
+
+// Every refusal or blocker the workbench can lift, or that the configuration
+// decides, has its own hint in the form, so the form never tells the
+// operator such a thing "needs new code".
+func TestTheFormHasAHintForEveryDecidableCode(t *testing.T) {
+	t.Parallel()
+	form, err := fs.ReadFile(web, "web/form.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, code := range []domain.ReasonCode{
+		domain.ReasonUnsupportedMediaType, domain.ReasonUnsupportedParameterStyle, domain.ReasonUnsupportedParameterSchema,
+		domain.ReasonAmbiguousSecurity, domain.ReasonPolicyUnknownEffectBlocked, domain.ReasonPolicyMutationBlocked,
+		domain.ReasonPolicyDeniedByRule, domain.ReasonPolicyNotAllowedByRule, domain.ReasonDisabledByOverride,
+		domain.ReasonExcludedBySelection, domain.ReasonAuthenticationNotImplemented,
+	} {
+		if !strings.Contains(string(form), "\n  "+string(code)+": ") {
+			t.Errorf("form.js has no hint for %s", code)
+		}
+	}
+	if !strings.Contains(string(form), `op.status === "unsupported" ? CANNOT`) {
+		t.Error("form.js says \"needs new code\" for an operation that is not unsupported")
 	}
 }

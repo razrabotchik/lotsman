@@ -12,6 +12,11 @@ const HINTS = {
   ambiguous_security: "Pick which configured credential this operation uses.",
   policy_unknown_effect_blocked: "Lotsman could not tell what this does. State its effect; anything but read still needs mutations enabled.",
   policy_mutation_blocked: "Mutations are off (execution.allowMutations, restart needed).",
+  policy_denied_by_rule: "Blocked by execution rules in lotsman.yaml.",
+  policy_not_allowed_by_rule: "Blocked by execution rules in lotsman.yaml.",
+  disabled_by_override: "Hidden by a correction — use Publication below.",
+  excluded_by_selection: "Excluded by catalog.includeTags in lotsman.yaml.",
+  authentication_not_implemented: "Lotsman has no credential for this operation: add an authProfiles entry to lotsman.yaml (restart/reload).",
 };
 const CANNOT = "This needs new code in lotsman or a fixed document; the workbench cannot lift it.";
 const STYLES = {
@@ -79,10 +84,16 @@ export function renderForm(el, store) {
   el.append(h("p", { class: "muted" }, op.operationId || "", op.summary ? " — " + op.summary : "",
     d.before && d.before.status !== op.status ? " (was " + d.before.status + ")" : ""));
   if (store.error) el.append(h("div", { class: "banner error" }, "The change was not taken: ", String(store.error).replace(/^the change was not taken: /i, "")));
-  for (const r of op.reasons || []) {
-    const hint = HINTS[r.code] || CANNOT;
-    el.append(h("div", { class: "banner " + (HINTS[r.code] ? "warn" : "error") },
-      h("b", {}, r.code), r.detail ? " — " + r.detail : "", h("br"), hint));
+  // Refusals and blockers, coloured by the operation's status: red only for
+  // what the workbench cannot lift; "needs new code" only there too.
+  const said = new Set();
+  for (const r of [...(op.reasons || []), ...(op.blockers || []).map((code) => ({ code }))]) {
+    if (said.has(r.code)) continue;
+    said.add(r.code);
+    const hint = HINTS[r.code] || (op.status === "unsupported" ? CANNOT : "");
+    const level = op.status === "unsupported" ? (HINTS[r.code] ? "warn" : "error") : op.status === "decision" ? "warn" : "info";
+    el.append(h("div", { class: "banner " + level },
+      h("b", {}, r.code), r.detail ? " — " + r.detail : "", hint ? h("br") : null, hint));
   }
   if ((op.corrections || []).length) {
     el.append(h("div", { class: "banner info" }, "Corrected by configuration: ",
@@ -298,7 +309,7 @@ function buildEntries(op, ov, match, controls, rest) {
     if (texts.component !== initial.component) {
       out.push(compPatch
         ? { kind: "component", schema: op.bodyComponent,
-          component: { match: { schema: op.bodyComponent }, patch: compPatch, note: (comp && comp.note) || rest.note || undefined } }
+          component: { match: { schema: op.bodyComponent }, patch: compPatch, note: (comp && comp.note) || undefined } }
         : { kind: "component", schema: op.bodyComponent, remove: true });
     }
   }
