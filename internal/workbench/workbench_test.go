@@ -583,3 +583,68 @@ func TestSaveRefusesUnacknowledgedWideningOnANewOperation(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A save touches only the lines of the entry it changes: the file keeps its
+// four-space indentation, a long double-quoted string stays on one line, a
+// flow mapping keeps its spacing, blank lines stay.
+func TestSaveTouchesOnlyTheChangedEntry(t *testing.T) {
+	t.Parallel()
+	long := `"` + strings.Repeat("a long reason that goes past eighty columns ", 3) + `"`
+	source := "# head comment\n" +
+		"apiVersion: lotsman.dev/v1alpha1\n" +
+		"spec:\n" +
+		"    source: ./openapi.yaml   # spaced comment\n" +
+		"\n" +
+		"operationOverrides:\n" +
+		"    -   match: {  operationId: other  }\n" +
+		"        note: " + long + "\n" +
+		"        enabled: false\n" +
+		"\n" +
+		"execution:\n" +
+		"    allowMutations: false\n"
+	wb, path := newBench(t, source)
+	if _, err := wb.Apply(t.Context(), createPetEffect("write")); err != nil {
+		t.Fatal(err)
+	}
+	diff, err := wb.Diff()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wb.Save(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+	out := readFile(t, path)
+	for _, line := range strings.Split(strings.TrimSuffix(source, "\n"), "\n") {
+		if !strings.Contains(out, line+"\n") {
+			t.Errorf("line %q changed; saved:\n%s", line, out)
+		}
+	}
+	for _, line := range strings.Split(diff, "\n") {
+		if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---") {
+			t.Errorf("the diff removes %q:\n%s", line, diff)
+		}
+	}
+	if !strings.Contains(out, "    - match:\n") || !strings.Contains(out, "        operationId: createPet\n") ||
+		!strings.Contains(out, "      effect: write\n") {
+		t.Errorf("the new entry is not in the file's indentation:\n%s", out)
+	}
+}
+
+// The style a file uses is read off it.
+func TestStyleOf(t *testing.T) {
+	t.Parallel()
+	cases := map[string]layout{
+		"":                              {indent: 2},
+		"a:\n  b: 1\n":                  {indent: 2},
+		"a:\n    b: 1\nl:\n    - x\n":   {indent: 4},
+		"l:\n- match:\n    x: 1\n":      {indent: 2, compact: true},
+		"l:\n  - match:\n      x: 1\n":  {indent: 2},
+		"l:\n  - m: {a: 1}\n    e: w\n": {indent: 2},
+		"# c\na:\n   b:\n      c: 1\n":  {indent: 3},
+	}
+	for src, want := range cases {
+		if got := styleOf([]byte(src)); got != want {
+			t.Errorf("styleOf(%q) = %+v, want %+v", src, got, want)
+		}
+	}
+}

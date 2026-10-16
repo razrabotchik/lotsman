@@ -48,3 +48,12 @@ func TestUnifiedDiffSplitsDistantChanges(t *testing.T) {
 		t.Fatalf("a line far from both changes was shown:\n%s", d)
 	}
 }
+
+// A replaced line reads as the old one removed, then the new one added.
+func TestUnifiedDiffRemovesBeforeAdding(t *testing.T) {
+	t.Parallel()
+	d := UnifiedDiff("f", []byte("a\nb\nc\n"), []byte("a\nX\nY\nc\n"))
+	if !strings.Contains(d, "@@ -1,3 +1,4 @@\n a\n-b\n+X\n+Y\n c\n") {
+		t.Fatalf("diff:\n%s", d)
+	}
+}

@@ -90,13 +90,14 @@ func lcsOps(a, b []string) []diffOp {
 			ops = append(ops, diffOp{' ', a[i], i + 1, j + 1})
 			i++
 			j++
-		case j < m && (i == n || table[i][j+1] >= table[i+1][j]):
-			ops = append(ops, diffOp{'+', b[j], 0, j + 1})
-			j++
-			changed = true
-		default:
+		case i < n && (j == m || table[i+1][j] >= table[i][j+1]):
+			// Removals first, so a replaced line reads "-old" then "+new".
 			ops = append(ops, diffOp{'-', a[i], i + 1, 0})
 			i++
+			changed = true
+		default:
+			ops = append(ops, diffOp{'+', b[j], 0, j + 1})
+			j++
 			changed = true
 		}
 	}

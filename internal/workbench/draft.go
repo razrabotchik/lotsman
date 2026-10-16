@@ -212,7 +212,7 @@ func (w *Workbench) draftBytes(entries map[string]Entry, order []string) ([]byte
 			return nil, err
 		}
 	}
-	return render(doc)
+	return render(doc, w.disk)
 }
 
 func applyEntry(root *yaml.Node, e *Entry) error {

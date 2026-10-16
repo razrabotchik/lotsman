@@ -36,18 +36,161 @@ func document(data []byte, spec string) (*yaml.Node, error) {
 	return &doc, nil
 }
 
-func render(doc *yaml.Node) ([]byte, error) {
+// render writes doc back. The file is the person's: it keeps the
+// indentation they use, never folds a long line, and every line the edit did
+// not touch is written back byte for byte (see splice).
+func render(doc *yaml.Node, source []byte) ([]byte, error) {
+	style := styleOf(source)
+	out, err := dump(doc, style)
+	if err != nil || len(bytes.TrimSpace(source)) == 0 {
+		return out, err
+	}
+	orig, err := document(source, "")
+	if err != nil {
+		return out, nil //nolint:nilerr // the source does not parse: nothing to keep, the rendering stands.
+	}
+	base, err := dump(orig, style)
+	if err != nil {
+		return out, nil //nolint:nilerr // as above.
+	}
+	spliced := splice(source, base, out)
+	// The spliced file must say exactly what the rendering says; if mixing
+	// the person's lines with the encoder's ever changed the meaning (an
+	// indentation read wrong), the rendering is written instead.
+	if !sameYAML(spliced, out) {
+		return out, nil
+	}
+	return spliced, nil
+}
+
+func sameYAML(x, y []byte) bool {
+	var a, b any
+	if yaml.Unmarshal(x, &a) != nil || yaml.Unmarshal(y, &b) != nil {
+		return false
+	}
+	return reflect.DeepEqual(a, b)
+}
+
+// layout is how a file indents.
+type layout struct {
+	indent  int
+	compact bool // "- " at the column of its parent key
+}
+
+// styleOf reads the indentation off the source: the first indented mapping
+// key gives the width, the first sequence item says whether "- " sits at its
+// parent's column. A new file gets two spaces, items indented.
+func styleOf(source []byte) layout {
+	style := layout{indent: 2}
+	lines := strings.Split(string(source), "\n")
+	foundIndent, foundSeq := false, false
+	prevCol, prevContent, prevIsKey := -1, -1, false
+	for _, line := range lines {
+		trimmed := strings.TrimLeft(line, " ")
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		col := len(line) - len(trimmed)
+		item := strings.HasPrefix(trimmed, "- ") || trimmed == "-"
+		content := col // the column of what the line says, past any "- "
+		if item {
+			content = col + 1 + len(trimmed[1:]) - len(strings.TrimLeft(trimmed[1:], " "))
+		}
+		// A key nested under a key line: the step between them is the
+		// indentation.
+		if !foundIndent && !item && prevIsKey && col > prevContent {
+			if step := col - prevContent; step >= 2 && step <= 9 {
+				style.indent = step
+			}
+			foundIndent = true
+		}
+		if !foundSeq && item && prevIsKey {
+			style.compact = col == prevCol
+			foundSeq = true
+		}
+		prevCol, prevContent = col, content
+		prevIsKey = strings.HasSuffix(strings.TrimRight(trimmed, " "), ":")
+		if foundIndent && foundSeq {
+			break
+		}
+	}
+	return style
+}
+
+func dump(doc *yaml.Node, style layout) ([]byte, error) {
 	var out bytes.Buffer
-	enc := yaml.NewEncoder(&out)
-	enc.SetIndent(2)
-	if err := enc.Encode(doc); err != nil {
+	d, err := yaml.NewDumper(&out, yaml.WithV3Defaults(), yaml.WithIndent(style.indent),
+		yaml.WithCompactSeqIndent(style.compact), yaml.WithLineWidth(-1))
+	if err != nil {
 		return nil, err
 	}
-	if err := enc.Close(); err != nil {
+	if err := d.Dump(doc); err != nil {
+		return nil, err
+	}
+	if err := d.Close(); err != nil {
 		return nil, err
 	}
 	return out.Bytes(), nil
 }
+
+// splice keeps the person's lines. base is the source rendered unchanged,
+// out the source rendered with the edits; the lines out shares with base are
+// taken from the source as written (spacing, quotes, flow style, blank
+// lines), and only the lines the edit changed come from out. When base does
+// not line up with the source line for line (a multi-line flow value the
+// encoder joined, say), out is returned as it is.
+func splice(source, base, out []byte) []byte {
+	src := splitLines(string(source))
+	baseLines := splitLines(string(base))
+	var kept []int // indices of src lines that are not blank
+	for i, line := range src {
+		if strings.TrimSpace(line) != "" {
+			kept = append(kept, i)
+		}
+	}
+	if len(kept) != len(baseLines) {
+		return out
+	}
+	for i, b := range baseLines {
+		x, y := strings.TrimSpace(src[kept[i]]), strings.TrimSpace(b)
+		if x[0] != y[0] && !isQuote(x[0]) && !isQuote(y[0]) {
+			return out
+		}
+	}
+	ops := lcsOps(baseLines, splitLines(string(out)))
+	if ops == nil {
+		return source
+	}
+	var b strings.Builder
+	blanksBefore := func(i int) { // the blank source lines before base line i
+		from := 0
+		if i > 0 {
+			from = kept[i-1] + 1
+		}
+		for _, line := range src[from:kept[i]] {
+			b.WriteString(line + "\n")
+		}
+	}
+	for _, op := range ops {
+		switch op.kind {
+		case ' ':
+			blanksBefore(op.aIdx - 1)
+			b.WriteString(src[kept[op.aIdx-1]] + "\n")
+		case '-':
+			blanksBefore(op.aIdx - 1)
+		default:
+			b.WriteString(op.line + "\n")
+		}
+	}
+	if len(kept) > 0 {
+		for _, line := range src[kept[len(kept)-1]+1:] {
+			b.WriteString(line + "\n")
+		}
+	}
+	return []byte(b.String())
+}
+
+func isQuote(c byte) bool { return c == '"' || c == '\'' }
 
 func scalar(v string) *yaml.Node { return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: v} }
 
