@@ -29,6 +29,18 @@ func ApplyOverlays(spec []byte, overlays []OverlayDocument) ([]byte, error) {
 		if err != nil {
 			return nil, errs.Errorf(errs.ClassUsage, "config: spec.overlays %s: %w", doc.Path, err)
 		}
+		// libopenapi skips an action without a target without a word, so a
+		// missing or misspelled `target:` would be an overlay that applies
+		// nothing while the operator believes it applies. An overlay that
+		// states no actions at all is the same silence.
+		if len(parsed.Actions) == 0 {
+			return nil, errs.Errorf(errs.ClassUsage, "config: spec.overlays %s: the overlay states no actions", doc.Path)
+		}
+		for i, action := range parsed.Actions {
+			if action == nil || action.Target == "" {
+				return nil, errs.Errorf(errs.ClassUsage, "config: spec.overlays %s: actions[%d] has no target", doc.Path, i)
+			}
+		}
 		result, err := overlay.Apply(out, parsed)
 		if err != nil {
 			return nil, errs.Errorf(errs.ClassUsage, "config: spec.overlays %s: %w", doc.Path, err)
