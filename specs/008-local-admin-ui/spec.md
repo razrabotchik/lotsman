@@ -93,7 +93,9 @@ today (`internal/catalog/overlay.go`).
 - `spec.overlays` apply to the bytes of the root document before parsing, through libopenapi's
   overlay engine (already a dependency, v0.38.7 — Constitution VII holds). Overlay targets reach
   the root document only; for exploded specifications the native language is the tool. Overlay
-  files are confined to the spec root like any `$ref` target.
+  files are operator input, read from paths relative to the configuration like `spec.source`; a
+  `$ref` an overlay writes into the document is confined to the spec root like any other. An
+  overlay action whose target matches nothing is an error, not a warning.
 - Component, parameter, body and media-type corrections are inputs to `openapi.Parse`, applied in
   the adapter before an operation is translated into the IR — that is where
   `unsupported_parameter_style` and `unsupported_media_type` are decided, so a correction applied
@@ -111,8 +113,18 @@ It replaces the choice in `selectMediaType`; it never makes an unsupported type 
 - A patch must not contain `$ref`, and nothing in this language can touch `servers`,
   `securitySchemes`, method or path. A correction cannot widen what the document may read or where
   a request may go.
-- `parameters[].schema` replaces the parameter's schema; `patch` merges. Both are validated as
-  schemas after application; an invalid result is a startup error, not a rejected operation.
+- A parameter correction may set `schema` (replaces the parameter's schema), `required`, `style`
+  and `explode`. `required: false` on a path parameter is refused. `patch` (body and components)
+  merges. Corrections apply to schemas *after* lotsman normalizes them, so they are written in
+  JSON Schema 2020-12 (`type: [string, "null"]`, not `nullable: true`). A correction cannot rescue
+  a schema normalization itself refused (a conditional subschema stays `unsupported_body_schema`);
+  a parameter's `schema` replacement can, because it replaces rather than patches.
+- A correction whose result no longer has a shape lotsman can carry (an object in a query value)
+  rejects the operation with the usual reason code; that is a consequence the workbench shows, not
+  a configuration error.
+- `componentOverrides` match `#/components/schemas/NAME` in the root document. Components in
+  external files of an exploded specification are not matched in this release; such a correction
+  matches nothing and is refused by name.
 - Corrected things carry provenance `local_override` with the `note` into `inspect` (text and
   `--json`) and `explain-call`, the same way effect sources do today. Nobody is surprised that a
   call does not follow the vendor document.
@@ -250,7 +262,8 @@ The suite each stage ends with:
 
 ## Success criteria
 
-- Kubernetes `apps/v1`: 77/77 supported with a five-line configuration.
+- Kubernetes `apps/v1`: 77/77 supported with one `mediaType` override per PATCH operation (12);
+  the workbench makes them with one "apply to all like this" action.
 - A correction that no longer matches its spec stops `serve` and is named.
 - From `lotsman ui` start to a saved fix of a `needs decision` operation: under five minutes for
   someone who has not read the docs.
