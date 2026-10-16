@@ -61,7 +61,9 @@ export async function act(entry) {
     return true;
   } catch (e) {
     store.error = e.message;
-    if (e.data && e.data.state) store.state = e.data.state;
+    // A refusal's body carries the draft as it would have been; the real
+    // draft did not move, so show that one.
+    try { store.state = await api.state(); } catch { /* keep the last good state */ }
     rerender();
     return false;
   }
