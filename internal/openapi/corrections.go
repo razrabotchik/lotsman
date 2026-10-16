@@ -318,7 +318,9 @@ func (b *bundle) mergePatch(target, patch domain.Schema, at string, blocked func
 func (b *bundle) followRef(schema domain.Schema) (out domain.Schema, unavailable string) {
 	ref, _ := schema["$ref"].(string)
 	name, isDef := strings.CutPrefix(ref, "#/$defs/")
-	if !isDef {
+	// "#/$defs/" names no definition; the empty name is the "available"
+	// sentinel below, so it must not reach the lookup.
+	if !isDef || name == "" {
 		out = cloneSchema(schema)
 		if out == nil {
 			out = domain.Schema{}
