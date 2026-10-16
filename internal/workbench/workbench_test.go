@@ -464,7 +464,8 @@ func TestCompareWidening(t *testing.T) {
 	after := &Snapshot{Operations: []Operation{
 		{Key: "post", Method: "POST", Path: "/p", Effect: "read"},
 		{Key: "hidden", Method: "GET", Path: "/h", Effect: "read"},
-		{Key: "auth", Method: "GET", Path: "/a", Effect: "read", AuthProfiles: []string{"admin"}},
+		{Key: "auth", Method: "GET", Path: "/a", Effect: "read", AuthProfiles: []string{"admin"},
+			Override: &config.OperationOverride{AuthProfile: "admin"}},
 		{Key: "same", Method: "GET", Path: "/s", Effect: "read"},
 	}}
 	cmp := Compare(before, after)
@@ -498,5 +499,87 @@ func TestClassify(t *testing.T) {
 		if tc.op.Status != tc.want {
 			t.Errorf("case %d: %s, want %s", i, tc.op.Status, tc.want)
 		}
+	}
+}
+
+// Fixing an operation publishes it, and a published tool lists the
+// credential it would use: that is not a change of authProfile.
+func TestPublishingAnOperationIsNotAnAuthProfileChange(t *testing.T) {
+	t.Parallel()
+	pinned := &config.OperationOverride{AuthProfile: "main"}
+	before := &Snapshot{Operations: []Operation{
+		{Key: "fixed", Method: "GET", Path: "/f", Effect: "read", Support: "rejected"},
+		{Key: "pinned", Method: "GET", Path: "/p", Effect: "read", Excluded: true, Override: pinned},
+		{Key: "repinned", Method: "GET", Path: "/r", Effect: "read", Override: pinned},
+	}}
+	after := &Snapshot{Operations: []Operation{
+		{Key: "fixed", Method: "GET", Path: "/f", Effect: "read", Support: "supported", Published: true, AuthProfiles: []string{"main"}},
+		{Key: "pinned", Method: "GET", Path: "/p", Effect: "read", Published: true, AuthProfiles: []string{"main"}, Override: pinned},
+		{Key: "repinned", Method: "GET", Path: "/r", Effect: "read", Override: &config.OperationOverride{AuthProfile: "admin"}},
+	}}
+	cmp := Compare(before, after)
+	SortWidening(cmp.Widening)
+	var ids []string
+	for _, w := range cmp.Widening {
+		ids = append(ids, w.ID)
+	}
+	if strings.Join(ids, ",") != "pinned#enabled,repinned#auth-profile" {
+		t.Fatalf("widening = %v", ids)
+	}
+}
+
+// An operation the base does not have (its document did not parse, or an
+// overlay in the draft adds it) still owes acknowledgements for what its
+// override says explicitly.
+func TestWideningOfAnOperationTheBaseDoesNotHave(t *testing.T) {
+	t.Parallel()
+	yes := true
+	before := &Snapshot{SpecError: "does not parse"}
+	after := &Snapshot{Operations: []Operation{
+		{Key: "del", Method: "DELETE", Path: "/d", Effect: "read", Override: &config.OperationOverride{Effect: "read"}},
+		{Key: "get", Method: "GET", Path: "/g", Effect: "read", Override: &config.OperationOverride{Effect: "read"}},
+		{Key: "on", Method: "GET", Path: "/o", Effect: "read", Override: &config.OperationOverride{Enabled: &yes, AuthProfile: "main"}},
+		{Key: "plain", Method: "POST", Path: "/p", Effect: "write"},
+	}}
+	cmp := Compare(before, after)
+	SortWidening(cmp.Widening)
+	var ids []string
+	for _, w := range cmp.Widening {
+		ids = append(ids, w.ID)
+	}
+	if strings.Join(ids, ",") != "del#effect-read,on#auth-profile,on#enabled" {
+		t.Fatalf("widening = %v", ids)
+	}
+}
+
+// End to end through the workbench: with no base operations, effect: read on
+// a DELETE is not saved without its acknowledgement.
+func TestSaveRefusesUnacknowledgedWideningOnANewOperation(t *testing.T) {
+	t.Parallel()
+	pipe := Pipeline{
+		Evaluate: func(_ context.Context, data []byte) (*Snapshot, error) {
+			file, err := config.Parse(data)
+			if err != nil || len(file.OperationOverrides) == 0 {
+				return &Snapshot{SpecError: "does not parse"}, nil
+			}
+			ov := file.OperationOverrides[0]
+			return &Snapshot{Operations: []Operation{{Key: "default:DELETE:/d", Method: "DELETE", Path: "/d",
+				OperationID: "del", Effect: ov.Effect, Override: &ov}}}, nil
+		},
+		Explain: func(context.Context, []byte, string, []byte) (string, error) { return "", nil },
+	}
+	wb, path := newBenchWith(t, "apiVersion: lotsman.dev/v1alpha1\n", pipe)
+	if _, err := wb.Apply(t.Context(), Entry{Kind: "operation", OperationKey: "default:DELETE:/d",
+		Operation: &config.OperationOverride{Match: config.Match{OperationID: "del"}, Effect: "read"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wb.Save(t.Context(), nil); !errors.Is(err, ErrUnacknowledged) {
+		t.Fatalf("save = %v, want ErrUnacknowledged", err)
+	}
+	if strings.Contains(readFile(t, path), "effect") {
+		t.Fatal("the unacknowledged widening was written")
+	}
+	if _, err := wb.Save(t.Context(), []string{"default:DELETE:/d#effect-read"}); err != nil {
+		t.Fatal(err)
 	}
 }

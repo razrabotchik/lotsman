@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"sort"
 	"strings"
 
@@ -64,6 +63,10 @@ func Compare(before, after *Snapshot) Comparison {
 		a := &after.Operations[i]
 		b, ok := old[a.Key]
 		if !ok {
+			// Not in the base at all (the base document did not parse, or
+			// an overlay in the draft adds it): nothing to compare, but an
+			// explicit widening override still needs its acknowledgement.
+			out.Widening = append(out.Widening, explicitWidening(a)...)
 			continue
 		}
 		if change, changed := compareOperation(b, a); changed {
@@ -150,18 +153,64 @@ func widening(b, a *Operation) []Widening {
 	var out []Widening
 	read := string(domain.EffectRead)
 	if a.Effect == read && b.Effect != read {
-		out = append(out, Widening{ID: a.Key + "#effect-read", Key: a.Key, Kind: "effect-read",
-			Message: fmt.Sprintf("%s %s is treated as a read: it runs without the mutation policy and without approval", a.Method, a.Path)})
+		out = append(out, effectRead(a))
 	}
 	if b.Excluded && !a.Excluded {
-		out = append(out, Widening{ID: a.Key + "#enabled", Key: a.Key, Kind: "enabled",
-			Message: fmt.Sprintf("%s %s is published again", a.Method, a.Path)})
+		out = append(out, enabled(a))
 	}
-	if !reflect.DeepEqual(b.AuthProfiles, a.AuthProfiles) && len(a.AuthProfiles) > 0 {
-		out = append(out, Widening{ID: a.Key + "#auth-profile", Key: a.Key, Kind: "auth-profile",
-			Message: fmt.Sprintf("%s %s uses credential %s", a.Method, a.Path, strings.Join(a.AuthProfiles, ", "))})
+	// Changing authProfile is the override's own field: the published tool's
+	// credentials appear and disappear with publication, which is not a
+	// change of credential.
+	if profile := overrideProfile(a); profile != "" && profile != overrideProfile(b) {
+		out = append(out, authProfile(a, profile))
 	}
 	return out
+}
+
+// explicitWidening is the widening an operation absent from the base can
+// still be seen to carry: what its override says explicitly.
+func explicitWidening(a *Operation) []Widening {
+	ov := a.Override
+	if ov == nil {
+		return nil
+	}
+	var out []Widening
+	if ov.Effect == string(domain.EffectRead) && !safeMethod(a.Method) {
+		out = append(out, effectRead(a))
+	}
+	if ov.Enabled != nil && *ov.Enabled {
+		out = append(out, enabled(a))
+	}
+	if ov.AuthProfile != "" {
+		out = append(out, authProfile(a, ov.AuthProfile))
+	}
+	return out
+}
+
+func safeMethod(method string) bool {
+	return strings.EqualFold(method, "GET") || strings.EqualFold(method, "HEAD")
+}
+
+func overrideProfile(op *Operation) string {
+	if op.Override == nil {
+		return ""
+	}
+	return op.Override.AuthProfile
+}
+
+func effectRead(a *Operation) Widening {
+	return Widening{ID: a.Key + "#effect-read", Key: a.Key, Kind: "effect-read",
+		Message: fmt.Sprintf("%s %s is treated as a read: it runs without the mutation policy and without approval", a.Method, a.Path)}
+}
+
+func enabled(a *Operation) Widening {
+	return Widening{ID: a.Key + "#enabled", Key: a.Key, Kind: "enabled",
+		Message: fmt.Sprintf("%s %s is published again", a.Method, a.Path)}
+}
+
+func authProfile(a *Operation, profile string) Widening {
+	return Widening{ID: a.Key + "#auth-profile", Key: a.Key, Kind: "auth-profile",
+		Message: fmt.Sprintf("%s %s uses credential %s", a.Method, a.Path, profile)}
 }
 
 // fieldOf maps a refusal's document pointer to the form field it concerns.
