@@ -1,6 +1,7 @@
 package argvalidate
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -172,5 +173,46 @@ func TestValidateAcceptsAbsentArgumentsForAParameterlessTool(t *testing.T) {
 	}
 	if err := v.Validate(map[string]any{}); err != nil {
 		t.Errorf("Validate(empty): %v", err)
+	}
+}
+
+// The published schema is self-contained. A reference to anything outside it
+// -- a file, a URL, a relative document -- is a compile error, never a read.
+func TestCompileLoadsNothingExternal(t *testing.T) {
+	dir := t.TempDir()
+	secret := dir + "/secret.json"
+	if err := os.WriteFile(secret, []byte(`{"type":"string"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, ref := range []string{"file://" + secret, "http://127.0.0.1:1/schema.json", "other.json"} {
+		_, err := Compile("leaky", map[string]any{"type": "object", "properties": map[string]any{
+			"name": map[string]any{"$ref": ref},
+		}})
+		if err == nil {
+			t.Fatalf("%s: compiled; want a refusal", ref)
+		}
+		if !strings.Contains(err.Error(), "outside the published schema") {
+			t.Errorf("%s: err = %v", ref, err)
+		}
+		if got := errs.ClassOf(err); got != errs.ClassSpecInvalid {
+			t.Errorf("%s: class = %q, want %q", ref, got, errs.ClassSpecInvalid)
+		}
+	}
+}
+
+// Local references are what the catalog publishes, and they still compile.
+func TestCompileResolvesLocalDefs(t *testing.T) {
+	v, err := Compile("local", map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"pet": map[string]any{"$ref": "#/$defs/Pet"}},
+		"$defs": map[string]any{"Pet": map[string]any{
+			"type": "object", "properties": map[string]any{"age": map[string]any{"type": "integer"}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if err := v.Validate(map[string]any{"pet": map[string]any{"age": "old"}}); err == nil {
+		t.Error("a string age validated through the local $ref")
 	}
 }

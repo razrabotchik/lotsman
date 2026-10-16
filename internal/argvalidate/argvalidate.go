@@ -53,6 +53,12 @@ func Compile(toolName string, schema map[string]any) (*Validator, error) {
 	// that is not one must not reach the API. Formats the library does not
 	// know stay annotations, so this cannot reject an unknown OAS format.
 	compiler.AssertFormat()
+	// The published schema is self-contained: every reference the catalog
+	// writes is a local "#/$defs/…". The library's default loader would read
+	// a file:// URL from disk, so a reference to anything else is a compile
+	// error here rather than a read. The JSON Schema metaschemas are embedded
+	// in the library and never reach a loader.
+	compiler.UseLoader(noExternalResources{})
 
 	if addErr := compiler.AddResource(schemaURL, doc); addErr != nil {
 		return nil, errs.Errorf(errs.ClassSpecInvalid, "argvalidate: %s: %w", toolName, addErr)
@@ -62,6 +68,14 @@ func Compile(toolName string, schema map[string]any) (*Validator, error) {
 		return nil, errs.Errorf(errs.ClassSpecInvalid, "argvalidate: %s: %w", toolName, err)
 	}
 	return &Validator{tool: toolName, schema: compiled}, nil
+}
+
+// noExternalResources is the loader of a compiler that reads nothing: no
+// file, no URL. A schema that needs one does not compile.
+type noExternalResources struct{}
+
+func (noExternalResources) Load(url string) (any, error) {
+	return nil, fmt.Errorf("%s is outside the published schema; only local references (#/$defs/…) are allowed", url)
 }
 
 // Validate reports whether args satisfy the tool's input schema.
