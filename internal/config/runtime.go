@@ -27,6 +27,10 @@ type Runtime struct {
 	DescriptionBytesPerTool int
 	// Overrides are the operator's per-operation statements, in file order.
 	Overrides []OperationOverride
+	// ComponentOverrides patch shared schemas (feature 008), in file order.
+	ComponentOverrides []ComponentOverride
+	// Overlays are the OpenAPI Overlay files applied before parsing, absolute.
+	Overlays []string
 	// AllowedOrigins is the egress allowlist. The base URL is added to it, so
 	// the common single-origin case needs no configuration at all.
 	AllowedOrigins       []string
@@ -141,6 +145,8 @@ func Resolve(file *File, env Environment, flags Overrides) Runtime {
 		runtime.MaxSerializedBytes = file.Catalog.MaxSerializedBytes
 		runtime.DescriptionBytesPerTool = file.Catalog.DescriptionBytesPerTool
 		runtime.Overrides = append([]OperationOverride(nil), file.OperationOverrides...)
+		runtime.ComponentOverrides = append([]ComponentOverride(nil), file.ComponentOverrides...)
+		runtime.Overlays = append([]string(nil), file.Spec.Overlays...)
 		runtime.BaseURL = file.Execution.BaseURL
 		runtime.AllowedOrigins = append([]string(nil), file.Execution.AllowedOrigins...)
 		runtime.AllowPrivateNetworks = file.Execution.AllowPrivateNetworks

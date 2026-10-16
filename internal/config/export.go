@@ -24,6 +24,7 @@ func (r Runtime) Export() File {
 			Root:       r.Root,
 			RemoteRefs: boolField(false),
 			Strict:     boolField(!r.Lax),
+			Overlays:   append([]string(nil), r.Overlays...),
 		},
 		Catalog: Catalog{
 			Mode:                    r.Mode,
@@ -46,6 +47,7 @@ func (r Runtime) Export() File {
 		},
 		Server:             r.Server.export(),
 		OperationOverrides: append([]OperationOverride(nil), r.Overrides...),
+		ComponentOverrides: append([]ComponentOverride(nil), r.ComponentOverrides...),
 	}
 	if r.Timeout > 0 {
 		file.Execution.Timeout = r.Timeout.String()

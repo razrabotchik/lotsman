@@ -219,6 +219,11 @@ type Spec struct {
 	// Strict refuses a document with any unsupported operation. `false` is the
 	// file spelling of `--lax`.
 	Strict *bool `yaml:"strict,omitempty"`
+	// Overlays are OpenAPI Overlay documents applied, in order, to the root
+	// document before it is parsed (feature 008). They are operator input, read
+	// from paths relative to this file like Source; a `$ref` one writes into the
+	// document is confined like any other.
+	Overlays []string `yaml:"overlays,omitempty"`
 }
 
 // Redirects is what lotsman does when an upstream answers with one.
@@ -434,6 +439,50 @@ type OperationOverride struct {
 	// which is how an ambiguous_security refusal is resolved by decision
 	// rather than by deleting a profile the rest of the catalog needs.
 	AuthProfile string `yaml:"authProfile,omitempty"`
+	// MediaType pins the request media type when the document offers several
+	// (FR-29). It must be one the operation declares and one lotsman sends.
+	MediaType string `yaml:"mediaType,omitempty"`
+	// Parameters correct what the document says about this operation's
+	// parameters, for this operation only.
+	Parameters []ParameterOverride `yaml:"parameters,omitempty"`
+	// RequestBody patches this operation's body schema.
+	RequestBody *BodyOverride `yaml:"requestBody,omitempty"`
+	// Note is the operator's reason, carried into every report.
+	Note string `yaml:"note,omitempty"`
+}
+
+// Patch is an RFC 7396 merge patch over a schema as lotsman publishes it:
+// JSON Schema 2020-12, after normalization. A key starting with `$` is
+// refused, so a patch cannot reach another document or redefine $defs.
+type Patch map[string]any
+
+// ParameterOverride corrects one parameter, matched by name and location.
+type ParameterOverride struct {
+	Name string `yaml:"name"`
+	In   string `yaml:"in"`
+	// Schema replaces the parameter's schema.
+	Schema   Patch  `yaml:"schema,omitempty"`
+	Required *bool  `yaml:"required,omitempty"`
+	Style    string `yaml:"style,omitempty"`
+	Explode  *bool  `yaml:"explode,omitempty"`
+}
+
+// BodyOverride patches one operation's request body schema.
+type BodyOverride struct {
+	Patch Patch `yaml:"patch"`
+}
+
+// ComponentMatch names a schema under #/components/schemas of the root
+// document.
+type ComponentMatch struct {
+	Schema string `yaml:"schema"`
+}
+
+// ComponentOverride patches a shared schema wherever it is used.
+type ComponentOverride struct {
+	Match ComponentMatch `yaml:"match"`
+	Patch Patch          `yaml:"patch"`
+	Note  string         `yaml:"note,omitempty"`
 }
 
 // File is a parsed configuration document.
@@ -446,6 +495,7 @@ type File struct {
 	Server             Server              `yaml:"server,omitempty"`
 	AuthProfiles       map[string]Profile  `yaml:"authProfiles,omitempty"`
 	OperationOverrides []OperationOverride `yaml:"operationOverrides,omitempty"`
+	ComponentOverrides []ComponentOverride `yaml:"componentOverrides,omitempty"`
 }
 
 // Load reads and validates a configuration file.
@@ -473,6 +523,11 @@ func Load(path string) (*File, error) {
 // resolvePaths makes the spec section's paths absolute against base and checks
 // that they describe a document lotsman could actually read.
 func (f *File) resolvePaths(base string) error {
+	for i, overlay := range f.Spec.Overlays {
+		if !filepath.IsAbs(overlay) {
+			f.Spec.Overlays[i] = filepath.Join(base, overlay)
+		}
+	}
 	if f.Spec.Source != "" && f.Spec.Source != "-" && !filepath.IsAbs(f.Spec.Source) {
 		f.Spec.Source = filepath.Join(base, f.Spec.Source)
 	}
@@ -564,6 +619,18 @@ func (f *File) validate() error {
 			return err
 		}
 	}
+	components := map[string]int{}
+	for i := range f.ComponentOverrides {
+		if err := validateComponentOverride(i, &f.ComponentOverrides[i]); err != nil {
+			return err
+		}
+		name := f.ComponentOverrides[i].Match.Schema
+		if first, dup := components[name]; dup {
+			return errs.Errorf(errs.ClassUsage,
+				"config: componentOverrides[%d] and [%d] both patch %q; one schema, one correction", first, i, name)
+		}
+		components[name] = i
+	}
 	return nil
 }
 
@@ -587,6 +654,11 @@ func validateSpec(spec *Spec) error {
 		return errs.Errorf(errs.ClassUsage,
 			"config: spec.remoteRefs cannot be true: a remote reference is never fetched, because a "+
 				"document must not be able to make lotsman issue a request of its choosing (FR-5)")
+	}
+	for i, overlay := range spec.Overlays {
+		if strings.TrimSpace(overlay) == "" || overlay == "-" {
+			return errs.Errorf(errs.ClassUsage, "config: spec.overlays[%d] must name a file", i)
+		}
 	}
 	return nil
 }
@@ -918,8 +990,31 @@ func (f *File) validateOverride(index int, override *OperationOverride) error {
 
 	// An override that states nothing is a typo, and a typo in an override is
 	// a security control that silently did not apply.
-	if override.Effect == "" && override.Enabled == nil && override.AuthProfile == "" {
-		return where("states nothing; set effect, enabled or authProfile")
+	if override.Effect == "" && override.Enabled == nil && override.AuthProfile == "" &&
+		override.MediaType == "" && len(override.Parameters) == 0 && override.RequestBody == nil {
+		return where("states nothing; set effect, enabled, authProfile, mediaType, parameters or requestBody")
+	}
+	if override.MediaType != "" && !strings.Contains(override.MediaType, "/") {
+		return where("mediaType %q is not a type/subtype", override.MediaType)
+	}
+	seen := map[string]bool{}
+	for j := range override.Parameters {
+		p := &override.Parameters[j]
+		if err := validateParameterOverride(p); err != nil {
+			return where("parameters[%d]: %v", j, err)
+		}
+		if seen[p.In+"/"+p.Name] {
+			return where("parameters[%d]: %s/%s is corrected twice", j, p.In, p.Name)
+		}
+		seen[p.In+"/"+p.Name] = true
+	}
+	if override.RequestBody != nil {
+		if len(override.RequestBody.Patch) == 0 {
+			return where("requestBody states nothing; set patch")
+		}
+		if err := validatePatch("requestBody.patch", override.RequestBody.Patch); err != nil {
+			return where("%v", err)
+		}
 	}
 	if override.Effect != "" && !knownEffect(override.Effect) {
 		return where("effect %q is not read, write, destructive or unknown", override.Effect)
@@ -927,6 +1022,72 @@ func (f *File) validateOverride(index int, override *OperationOverride) error {
 	if override.AuthProfile != "" {
 		if _, configured := f.AuthProfiles[override.AuthProfile]; !configured {
 			return where("authProfile %q is not one of the configured authProfiles", override.AuthProfile)
+		}
+	}
+	return nil
+}
+
+func validateParameterOverride(p *ParameterOverride) error {
+	if p.Name == "" {
+		return fmt.Errorf("name is required")
+	}
+	switch p.In {
+	case "path", "query", "header", "cookie":
+	default:
+		return fmt.Errorf("in %q is not path, query, header or cookie", p.In)
+	}
+	if p.Schema == nil && p.Required == nil && p.Style == "" && p.Explode == nil {
+		return fmt.Errorf("states nothing; set schema, required, style or explode")
+	}
+	if p.In == "path" && p.Required != nil && !*p.Required {
+		return fmt.Errorf("a path parameter is always required")
+	}
+	if p.Schema != nil {
+		if len(p.Schema) == 0 {
+			return fmt.Errorf("schema is empty")
+		}
+		return validatePatch("schema", p.Schema)
+	}
+	return nil
+}
+
+func validateComponentOverride(index int, c *ComponentOverride) error {
+	where := func(format string, args ...any) error {
+		return errs.Errorf(errs.ClassUsage, "config: componentOverrides[%d]: "+format, append([]any{index}, args...)...)
+	}
+	if c.Match.Schema == "" {
+		return where("match needs a schema name")
+	}
+	if len(c.Patch) == 0 {
+		return where("states nothing; set patch")
+	}
+	if err := validatePatch("patch", c.Patch); err != nil {
+		return where("%v", err)
+	}
+	return nil
+}
+
+// validatePatch refuses `$` keywords anywhere in a patch: `$ref` would reach
+// another document or component, `$defs` would redefine one, and neither is a
+// correction of what this schema says.
+func validatePatch(field string, value any) error {
+	switch v := value.(type) {
+	case Patch:
+		return validatePatch(field, map[string]any(v))
+	case map[string]any:
+		for key, nested := range v {
+			if strings.HasPrefix(key, "$") {
+				return fmt.Errorf("%s: %q is not allowed in a correction", field, key)
+			}
+			if err := validatePatch(field+"."+key, nested); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for i, nested := range v {
+			if err := validatePatch(fmt.Sprintf("%s[%d]", field, i), nested); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
