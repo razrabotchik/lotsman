@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -72,7 +74,7 @@ func evaluate(ctx context.Context, data []byte, in pipelineInputs) (*workbench.S
 	if in.root != "" {
 		runtime.Root = in.root
 	}
-	snap.Overlays = append([]string(nil), runtime.Overlays...)
+	snap.Overlays = writtenOverlays(data, &runtime)
 	snap.Components = append([]config.ComponentOverride(nil), runtime.ComponentOverrides...)
 	for _, name := range sortedProfileNames(runtime.AuthProfiles) {
 		snap.Profiles = append(snap.Profiles, workbench.Profile{Name: name, Scheme: string(runtime.AuthProfiles[name].Scheme)})
@@ -81,6 +83,10 @@ func evaluate(ctx context.Context, data []byte, in pipelineInputs) (*workbench.S
 	spec := pick(in.spec, runtime.Source)
 	if spec == "" {
 		snap.SpecError = "no specification: pass SPEC or set spec.source in the configuration"
+		return snap, nil, runtime
+	}
+	if err := checkOverlayFiles(runtime.Overlays); err != nil {
+		snap.SpecError = err.Error()
 		return snap, nil, runtime
 	}
 	doc, err := loadDocument(ctx, spec, runtime, quiet)
@@ -115,6 +121,52 @@ func evaluate(ctx context.Context, data []byte, in pipelineInputs) (*workbench.S
 
 	snap.Operations = snapshotOperations(doc.Operations, &cat, &runtime)
 	return snap, &cat, runtime
+}
+
+// maxOverlayBytes bounds an overlay the workbench reads: an overlay is a
+// page of corrections, not a document.
+const maxOverlayBytes = 4 << 20
+
+// checkOverlayFiles refuses, before anything reads them, overlays that are
+// not regular files or are too large: a path typed in the browser could name
+// a FIFO or a device, and reading one would block the workbench.
+func checkOverlayFiles(paths []string) error {
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			continue // readOverlays says it cannot read it
+		}
+		if !info.Mode().IsRegular() {
+			return errs.Errorf(errs.ClassUsage, "config: spec.overlays: %s is not a regular file", path)
+		}
+		if info.Size() > maxOverlayBytes {
+			return errs.Errorf(errs.ClassUsage, "config: spec.overlays: %s is larger than %d MiB", path, maxOverlayBytes>>20)
+		}
+	}
+	return nil
+}
+
+// writtenOverlays are the overlay paths as the configuration file spells
+// them, so the landing panel hands them back unchanged when it edits the
+// list. When the file cannot be read that way, the resolved paths are said
+// relative to the configuration's directory when they lie under it.
+func writtenOverlays(data []byte, runtime *config.Runtime) []string {
+	if file, err := config.Parse(data); err == nil && len(file.Spec.Overlays) == len(runtime.Overlays) {
+		return append([]string(nil), file.Spec.Overlays...)
+	}
+	out := make([]string, 0, len(runtime.Overlays))
+	for _, path := range runtime.Overlays {
+		if runtime.ConfigDir != "" {
+			if rel, err := filepath.Rel(runtime.ConfigDir, path); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				path = filepath.ToSlash(rel)
+			}
+		}
+		out = append(out, path)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func snapshotOperations(ops []domain.Operation, cat *catalog.Catalog, runtime *config.Runtime) []workbench.Operation {

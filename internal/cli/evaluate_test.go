@@ -181,3 +181,69 @@ func TestTheWorkbenchOpensOnABrokenDocument(t *testing.T) {
 		t.Fatalf("draft = %+v", st.Draft)
 	}
 }
+
+const fixOverlay = "overlay: 1.0.0\ninfo: { title: fix, version: \"1\" }\nactions:\n  - target: $.info\n    update: { description: fixed }\n"
+
+// The landing panel edits the overlays list by handing back the whole list:
+// the snapshot spells each path as the file does, so adding one leaves the
+// others written as they were.
+func TestAddingAnOverlayKeepsTheOthersSpelling(t *testing.T) {
+	t.Parallel()
+	dir, cfg := evaluateDir(t, evaluateSpec)
+	for _, name := range []string{"a.overlay.yaml", "sub/b.overlay.yaml", "c.overlay.yaml"} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(fixOverlay), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	source := "apiVersion: lotsman.dev/v1alpha1\nspec:\n  source: ./openapi.yaml\n  overlays:\n    - ./a.overlay.yaml\n    - " + filepath.Join(dir, "sub", "b.overlay.yaml") + "\n"
+	if err := os.WriteFile(cfg, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wb, err := workbench.New(t.Context(), cfg, "", newPipeline(pipelineInputs{configPath: cfg}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := wb.State(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Draft.SpecError != "" || len(st.Draft.Overlays) != 2 || st.Draft.Overlays[0] != "./a.overlay.yaml" {
+		t.Fatalf("overlays = %q (%s)", st.Draft.Overlays, st.Draft.SpecError)
+	}
+	if _, err := wb.Apply(t.Context(), workbench.Entry{Kind: "overlays", Overlays: append(st.Draft.Overlays, "c.overlay.yaml")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wb.Save(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := os.ReadFile(cfg)
+	if want := source + "    - c.overlay.yaml\n"; string(out) != want {
+		t.Fatalf("saved:\n%s\nwant:\n%s", out, want)
+	}
+}
+
+// An overlay path typed in the browser that names a directory, a FIFO or a
+// huge file is refused before anything reads it.
+func TestOverlaysMustBeSmallRegularFiles(t *testing.T) {
+	t.Parallel()
+	dir, cfg := evaluateDir(t, evaluateSpec)
+	huge := filepath.Join(dir, "huge.yaml")
+	f, err := os.Create(huge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(maxOverlayBytes + 1); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+	for name, want := range map[string]string{dir: "not a regular file", huge: "larger than"} {
+		data := []byte("apiVersion: lotsman.dev/v1alpha1\nspec:\n  source: ./openapi.yaml\n  overlays: [" + name + "]\n")
+		snap, cat, _ := evaluate(t.Context(), data, pipelineInputs{configPath: cfg})
+		if cat != nil || !strings.Contains(snap.SpecError, want) || !strings.Contains(snap.SpecError, name) {
+			t.Errorf("%s: spec error = %q", name, snap.SpecError)
+		}
+	}
+}
