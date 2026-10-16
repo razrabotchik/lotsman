@@ -415,9 +415,9 @@ type Catalog struct {
 // `operationId` or a method+path pair -- never a mix, and never a fragment:
 // half a coordinate would match by accident (docs/spec.md 5.2).
 type Match struct {
-	OperationID string `yaml:"operationId,omitempty"`
-	Method      string `yaml:"method,omitempty"`
-	Path        string `yaml:"path,omitempty"`
+	OperationID string `yaml:"operationId,omitempty" json:"operationId,omitempty"`
+	Method      string `yaml:"method,omitempty" json:"method,omitempty"`
+	Path        string `yaml:"path,omitempty" json:"path,omitempty"`
 }
 
 // OperationOverride is the operator's reviewed statement about one operation:
@@ -427,28 +427,28 @@ type Match struct {
 // (docs/spec.md 4.7), which is why it lives in the operator's configuration
 // and not in anything the document can influence.
 type OperationOverride struct {
-	Match Match `yaml:"match"`
+	Match Match `yaml:"match" json:"match"`
 	// Effect states what the operation actually does. Empty leaves lotsman's
 	// own classification in place.
-	Effect string `yaml:"effect,omitempty"`
+	Effect string `yaml:"effect,omitempty" json:"effect,omitempty"`
 	// Enabled: false removes the operation from publication entirely. Nil
 	// means "not stated", which is the difference between an operator who
 	// wants it hidden and one who never mentioned it.
-	Enabled *bool `yaml:"enabled,omitempty"`
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 	// AuthProfile pins which configured credential satisfies this operation,
 	// which is how an ambiguous_security refusal is resolved by decision
 	// rather than by deleting a profile the rest of the catalog needs.
-	AuthProfile string `yaml:"authProfile,omitempty"`
+	AuthProfile string `yaml:"authProfile,omitempty" json:"authProfile,omitempty"`
 	// MediaType pins the request media type when the document offers several
 	// (FR-29). It must be one the operation declares and one lotsman sends.
-	MediaType string `yaml:"mediaType,omitempty"`
+	MediaType string `yaml:"mediaType,omitempty" json:"mediaType,omitempty"`
 	// Parameters correct what the document says about this operation's
 	// parameters, for this operation only.
-	Parameters []ParameterOverride `yaml:"parameters,omitempty"`
+	Parameters []ParameterOverride `yaml:"parameters,omitempty" json:"parameters,omitempty"`
 	// RequestBody patches this operation's body schema.
-	RequestBody *BodyOverride `yaml:"requestBody,omitempty"`
+	RequestBody *BodyOverride `yaml:"requestBody,omitempty" json:"requestBody,omitempty"`
 	// Note is the operator's reason, carried into every report.
-	Note string `yaml:"note,omitempty"`
+	Note string `yaml:"note,omitempty" json:"note,omitempty"`
 }
 
 // Patch is an RFC 7396 merge patch over a schema as lotsman publishes it:
@@ -458,31 +458,31 @@ type Patch map[string]any
 
 // ParameterOverride corrects one parameter, matched by name and location.
 type ParameterOverride struct {
-	Name string `yaml:"name"`
-	In   string `yaml:"in"`
+	Name string `yaml:"name" json:"name"`
+	In   string `yaml:"in" json:"in"`
 	// Schema replaces the parameter's schema.
-	Schema   Patch  `yaml:"schema,omitempty"`
-	Required *bool  `yaml:"required,omitempty"`
-	Style    string `yaml:"style,omitempty"`
-	Explode  *bool  `yaml:"explode,omitempty"`
+	Schema   Patch  `yaml:"schema,omitempty" json:"schema,omitempty"`
+	Required *bool  `yaml:"required,omitempty" json:"required,omitempty"`
+	Style    string `yaml:"style,omitempty" json:"style,omitempty"`
+	Explode  *bool  `yaml:"explode,omitempty" json:"explode,omitempty"`
 }
 
 // BodyOverride patches one operation's request body schema.
 type BodyOverride struct {
-	Patch Patch `yaml:"patch"`
+	Patch Patch `yaml:"patch" json:"patch,omitempty"`
 }
 
 // ComponentMatch names a schema under #/components/schemas of the root
 // document.
 type ComponentMatch struct {
-	Schema string `yaml:"schema"`
+	Schema string `yaml:"schema" json:"schema"`
 }
 
 // ComponentOverride patches a shared schema wherever it is used.
 type ComponentOverride struct {
-	Match ComponentMatch `yaml:"match"`
-	Patch Patch          `yaml:"patch"`
-	Note  string         `yaml:"note,omitempty"`
+	Match ComponentMatch `yaml:"match" json:"match"`
+	Patch Patch          `yaml:"patch" json:"patch,omitempty"`
+	Note  string         `yaml:"note,omitempty" json:"note,omitempty"`
 }
 
 // File is a parsed configuration document.
