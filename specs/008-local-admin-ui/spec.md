@@ -35,9 +35,9 @@ In:
 - `lotsman inspect --diff-against OLD.yaml`.
 - `lotsman ui`: a local web workbench over the same engine.
 
-Out: adding parameters or operations; editing servers, security schemes or `$ref`s; support for
-constructs that need new code (`deepObject`, form bodies, multipart, cookies) — the workbench
-names them, it cannot fix them; exporting corrections as an Overlay; multi-user, remote or
+Out: adding parameters or operations; editing servers, security schemes or `$ref`s through
+correction fields (an overlay edits the document itself, §1); support for constructs that need new
+code (`deepObject`, form bodies, multipart, cookies) — the workbench names them, it cannot fix them; exporting corrections as an Overlay; multi-user, remote or
 authenticated admin (that is the PRO/M6 shape); MCP tools for corrections; hot-reloading policy,
 execution or credentials (FR-72 republishes a catalog, not a policy — as in feature 007).
 
@@ -110,9 +110,12 @@ It replaces the choice in `selectMediaType`; it never makes an unsupported type 
 - A correction that matches nothing — no operation, no parameter by `name`+`in`, no component — is
   a startup error naming it, not a smaller catalog. One that matches more than one thing is an
   error too.
-- A patch must not contain `$ref`, and nothing in this language can touch `servers`,
+- A patch must not contain `$ref` (or any key starting with `$`, or a key that is not a string),
+  and no correction field — `operationOverrides` or `componentOverrides` — can touch `servers`,
   `securitySchemes`, method or path. A correction cannot widen what the document may read or where
-  a request may go.
+  a request may go. An overlay is not a correction field: it edits the document itself, so it can
+  change anything the vendor could, and it is bound by the same `$ref` confinement, egress
+  (`--base-url`, `allowedOrigins`) and policy as the vendor's text.
 - A parameter correction may set `schema` (replaces the parameter's schema), `required`, `style`
   and `explode`. `required: false` on a path parameter is refused. `patch` (body and components)
   merges. Corrections apply to schemas *after* lotsman normalizes them, so they are written in

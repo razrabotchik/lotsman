@@ -22,8 +22,11 @@ hypotheses that must not leak web infrastructure into the core.
    `spec.overlays` applies standard OpenAPI Overlay documents. They are applied in the adapter,
    after schema normalization, because that is where the refusals they lift are decided.
 2. **Strict, like overrides.** A correction that matches nothing is an error that names it. A patch
-   cannot contain a `$`-keyword and nothing touches servers, security schemes, method or path.
-   Corrected operations carry `local_override` provenance into every report.
+   cannot contain a `$`-keyword or a key that is not a string, and no correction field
+   (`operationOverrides`, `componentOverrides`) touches servers, security schemes, method or path.
+   An overlay is different in kind: it edits the document itself, so it can change anything the
+   vendor could, and it is bound by the same `$ref` confinement, `--base-url` egress and policy as
+   the vendor's text. Corrected operations carry `local_override` provenance into every report.
 3. **Reload republishes corrections, not policy.** A reload that finds anything else changed in the
    configuration is refused and the running catalog stays (consistent with FR-72 and feature 007).
 4. **The local workbench is brought forward from M6, narrowed.** `lotsman ui` is single-user,
