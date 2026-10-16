@@ -241,8 +241,11 @@ operationOverrides:
 ```
 
 An override that matches no operation is a startup error, not a smaller catalog: a control you
-believe is in force has to be in force. An override cannot publish something lotsman refused to
-translate — it classifies, hides or binds, and support is not a matter of opinion.
+believe is in force has to be in force. The decisions above (`effect`, `enabled`, `authProfile`)
+classify, hide or bind; they never publish something lotsman refused to translate. The corrections
+below change what the document says, so they can lift a refusal that was about the document — a
+media type it left ambiguous, a parameter schema it got wrong — but never one about support lotsman
+does not have.
 
 When the document itself is wrong — or offers a choice lotsman will not make for you — correct it
 in the same file, not in the vendor's:
@@ -256,13 +259,13 @@ operationOverrides:
   - match: { operationId: patchAppsV1NamespacedDeployment }
     mediaType: application/merge-patch+json      # one of the four the document offers
   - match: { operationId: listItems }
-    parameters: [{ name: limit, in: query, schema: { type: string } }]
+    parameters: [{ name: limit, in: query, schema: { type: string } }]   # corrects a declared parameter; cannot add one
 spec:
   overlays: [./vendor-fixes.overlay.yaml]        # standard OpenAPI Overlay, applied before parsing
 ```
 
 Patches are JSON Merge Patch over the schema as lotsman publishes it (JSON Schema 2020-12); a key
-starting with `$` is refused. A patch that reaches through a `$ref` changes a copy for that
+starting with `$`, or one YAML reads as something other than a string (`1:`, `true:`), is refused. A patch that reaches through a `$ref` changes a copy for that
 operation, not the shared component. A correction that no longer matches the document stops `serve`
 and is named; the same goes for an overlay with no actions or whose target matches nothing.
 `inspect` and `explain-call` mark every corrected operation. `serve --watch` picks corrections up

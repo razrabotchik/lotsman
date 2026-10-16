@@ -28,8 +28,8 @@ competing patch media types at once (`application/apply-patch+yaml`, `applicatio
 `application/merge-patch+json`, `application/strategic-merge-patch+json`). Choosing one of four
 without being told which is exactly the guess FR-29 forbids.
 
-With one `mediaType: application/merge-patch+json` override per PATCH operation (twelve lines of
-configuration, feature 008) all 77 operations are supported; the test
+With one `mediaType: application/merge-patch+json` override per PATCH operation (twelve overrides,
+feature 008) all 77 operations are supported; the test
 `TestKubernetesMediaTypeCorrectionsPublishEveryOperation` holds that number.
 
 **Found by this run:** Kubernetes declares its DELETE bodies as `*/*`, which lotsman refused
