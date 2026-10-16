@@ -68,7 +68,7 @@ func orDefault[T int | int64 | time.Duration](v, fallback T) T {
 type Source struct {
 	Bytes    []byte
 	Origin   string // file path, or "stdin"
-	Digest   string // sha256 of Bytes, encoded as "sha256:<hex>"
+	Digest   string // sha256 of the authored bytes, encoded as "sha256:<hex>"
 	LoadedAt time.Time
 
 	// RootPath is the absolute directory the document was read from, and the
@@ -121,13 +121,16 @@ func load(ctx context.Context, origin, rootPath string, r io.Reader, opts Option
 		return nil, errs.Wrap(readClass(err), errs.Errorf(errs.ClassInternal, "specsource: read %s: %w", origin, err))
 	}
 
-	if err := checkBudget(data, opts); err != nil {
+	readable := readableAsYAML(data)
+	if err := checkBudget(readable, opts); err != nil {
 		return nil, err
 	}
 
+	// The digest is of the document as authored, so that it is the number
+	// `sha256sum` prints for the file.
 	sum := sha256.Sum256(data)
 	return &Source{
-		Bytes:    data,
+		Bytes:    readable,
 		Origin:   origin,
 		Digest:   "sha256:" + hex.EncodeToString(sum[:]),
 		LoadedAt: time.Now().UTC(),

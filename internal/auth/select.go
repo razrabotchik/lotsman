@@ -194,7 +194,7 @@ func compatible(profile *config.Profile, requirement *domain.SecurityRequirement
 		if profile.In != "" && string(profile.In) != requirement.In {
 			return "the API carries the key in the " + requirement.In
 		}
-		if profile.Name != "" && profile.Name != requirement.Name {
+		if profile.Name != "" && !sameKeyName(requirement.In, profile.Name, requirement.Name) {
 			return "the API names the key " + requirement.Name
 		}
 		return ""
@@ -235,6 +235,17 @@ func compatible(profile *config.Profile, requirement *domain.SecurityRequirement
 	default:
 		return "unsupported security scheme type " + requirement.Type
 	}
+}
+
+// sameKeyName compares a configured key name with the document's. Header names
+// are case-insensitive (RFC 9110 §5.1), so X-API-Key names the header an API
+// calls X-API-KEY; query and cookie names are not, and `Sig` is not `sig`. The
+// name sent is the document's either way (applyAPIKey).
+func sameKeyName(in, configured, documented string) bool {
+	if in == "header" {
+		return strings.EqualFold(configured, documented)
+	}
+	return configured == documented
 }
 
 // distinct collapses bindings that present exactly the same credentials.

@@ -113,8 +113,37 @@ func ValidateOverrides(operations []domain.Operation, overrides []config.Operati
 				first, i, key)
 		}
 		claimed[key] = i
+
+		if pinned := overrides[i].AuthProfile; pinned != "" {
+			if op := operationByKey(operations, key); op != nil && len(authenticated(op.Security)) == 0 {
+				return errs.Errorf(errs.ClassUsage,
+					"config: operationOverrides[%d]: authProfile %q is pinned on %s, which the document says takes no credential; "+
+						"lotsman presents a credential only where the document asks for one", i, pinned, key)
+			}
+		}
 	}
 	return nil
+}
+
+func operationByKey(operations []domain.Operation, key domain.OperationKey) *domain.Operation {
+	for i := range operations {
+		if operations[i].Key == key {
+			return &operations[i]
+		}
+	}
+	return nil
+}
+
+// authenticated returns the security alternatives that present a credential,
+// leaving out the anonymous `{}` a document may offer beside them.
+func authenticated(alternatives []domain.SecurityAlternative) []domain.SecurityAlternative {
+	var out []domain.SecurityAlternative
+	for _, alternative := range alternatives {
+		if len(alternative.Requirements) > 0 {
+			out = append(out, alternative)
+		}
+	}
+	return out
 }
 
 // applyOverrides returns a copy of operations with the overlay applied, plus

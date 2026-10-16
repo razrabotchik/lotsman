@@ -14,7 +14,7 @@ import subprocess
 import sys
 import urllib.request
 
-CORPUS = pathlib.Path(__file__).resolve().parent.parent / "test" / "testdata" / "corpus"
+CORPUS = pathlib.Path(__file__).resolve().parent / "testdata" / "corpus"
 
 
 def digest(data: bytes) -> str:

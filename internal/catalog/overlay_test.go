@@ -262,3 +262,63 @@ func TestAuthProfilePinIsAppliedPerOperation(t *testing.T) {
 		t.Errorf("blockers = %v, want ambiguous_security", unpinned.ExecutionBlockers)
 	}
 }
+
+// A pin on an operation the document asks no credential for is a pin with
+// nothing to decide: Build would call it anonymously and the report would show
+// it executable, so the operator believes a credential is presented when none
+// is. That is a control not in force, refused like an override that matches
+// nothing. (Presenting a credential the document never asks for is a different
+// feature, and one that would need its own reason to exist.)
+func TestValidateOverridesRefusesAPinWhereTheDocumentAsksForNoCredential(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		security []domain.SecurityAlternative
+	}{
+		{"no security at all", nil},
+		{"only an anonymous alternative", []domain.SecurityAlternative{{}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			op := supportedOp("ns:GET:/me", "GET", "/me", "getMe")
+			op.Security = tc.security
+			err := ValidateOverrides([]domain.Operation{op}, []config.OperationOverride{
+				{Match: config.Match{OperationID: "getMe"}, AuthProfile: "personal"},
+			})
+			if err == nil {
+				t.Fatal("a pin on an operation that takes no credential was accepted")
+			}
+			for _, want := range []string{"personal", "ns:GET:/me", "no credential"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error = %v, want it to say %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+// When the document offers an anonymous way in beside an authenticated one,
+// an unpinned operation goes in anonymously -- nothing configured can beat
+// what the document allows. A pin is the operator saying otherwise, and it
+// used to lose to the anonymous alternative without a word.
+func TestAuthProfilePinWinsOverAnAnonymousAlternative(t *testing.T) {
+	profiles := auth.NewProfiles(map[string]config.Profile{
+		"bearerAuth": {Scheme: config.SchemeBearer, TokenRef: "env:TOKEN"},
+	})
+	op := supportedOp("ns:GET:/pets", "GET", "/pets", "listPets")
+	op.Effect = domain.EffectDecision{Effect: domain.EffectRead, Source: domain.EffectSourceHTTPMethod, Confidence: domain.ConfidenceInferred}
+	op.Security = []domain.SecurityAlternative{
+		{},
+		{Requirements: []domain.SecurityRequirement{{Scheme: "bearerAuth", Type: "http", HTTP: "bearer", Satisfiable: true}}},
+	}
+
+	unpinned := Build("d", []domain.Operation{op}, Options{Auth: profiles}).Tools[0]
+	if len(unpinned.AuthProfiles) != 0 {
+		t.Errorf("unpinned = %v, want the anonymous alternative", unpinned.AuthProfiles)
+	}
+
+	pinned := Build("d", []domain.Operation{op}, Options{Auth: profiles, Overrides: []config.OperationOverride{
+		{Match: config.Match{OperationID: "listPets"}, AuthProfile: "bearerAuth"},
+	}}).Tools[0]
+	if !pinned.Executable || len(pinned.AuthProfiles) != 1 || pinned.AuthProfiles[0] != "bearerAuth" {
+		t.Errorf("pinned = %+v, want it to present the pinned profile", pinned)
+	}
+}

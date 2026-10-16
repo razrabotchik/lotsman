@@ -208,10 +208,14 @@ func Build(specDigest string, operations []domain.Operation, opts Options) Catal
 
 		verdict := opts.Policy.Evaluate(policy.SubjectOf(op))
 		profiles := opts.Auth
+		alternatives := op.Security
 		if pinned := overlaid.authProfiles[op.Key]; pinned != "" {
 			profiles = profiles.Only(pinned)
+			// A pin is the operator choosing to authenticate: an anonymous
+			// alternative beside it must not win by being cheaper.
+			alternatives = authenticated(op.Security)
 		}
-		credentials := auth.Select(op.Security, profiles)
+		credentials := auth.Select(alternatives, profiles)
 
 		tool := Tool{
 			Name:              toolName(op, seen),

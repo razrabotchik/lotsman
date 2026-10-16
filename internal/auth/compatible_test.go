@@ -43,6 +43,14 @@ func TestAnIncompatibleProfileSaysWhyInTermsOfTheDocument(t *testing.T) {
 			reason:      "names the key X-API-Key",
 		},
 		{
+			// A query parameter name is not a header: `Sig` and `sig` are two
+			// parameters, and the server reads one of them.
+			name:        "a query key named in another case",
+			profile:     config.Profile{Scheme: config.SchemeAPIKey, TokenRef: "env:KEY", In: config.InQuery, Name: "Sig"},
+			requirement: requirement("apiKeyAuth", "apiKey", "query", "sig", ""),
+			reason:      "names the key sig",
+		},
+		{
 			name:        "basic where the API wants bearer",
 			profile:     config.Profile{Scheme: config.SchemeBasic, UsernameRef: "env:U", PasswordRef: "env:P"},
 			requirement: requirement("bearerAuth", "http", "", "", "bearer"),
@@ -107,6 +115,14 @@ func TestACompatibleProfileOfEachKindIsBound(t *testing.T) {
 			name:        "api key in the place the API reads",
 			profile:     config.Profile{Scheme: config.SchemeAPIKey, TokenRef: "env:KEY", In: config.InQuery, Name: "sig"},
 			requirement: requirement("apiKeyAuth", "apiKey", "query", "sig", ""),
+		},
+		{
+			// Header names are case-insensitive (RFC 9110 §5.1): X-API-Key and
+			// X-API-KEY are one header, and the document's spelling is the one
+			// sent. Refusing here turned Portainer's 65 executable reads into 5.
+			name:        "api key header named in another case",
+			profile:     config.Profile{Scheme: config.SchemeAPIKey, TokenRef: "env:KEY", In: config.InHeader, Name: "X-API-Key"},
+			requirement: requirement("apiKeyAuth", "apiKey", "header", "X-API-KEY", ""),
 		},
 		{
 			name:        "basic",

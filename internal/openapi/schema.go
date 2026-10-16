@@ -67,6 +67,14 @@ func (b *bundle) normalizeProxy(proxy *base.SchemaProxy, target schemaTarget, de
 	if proxy == nil {
 		return nil, domain.ReasonInvalidSchema
 	}
+	if ref, annotations, ok := annotatedReference(proxy); ok {
+		out, reason := b.normalizeProxy(ref, target, depth, visiting)
+		if reason != "" {
+			return nil, reason
+		}
+		copyAnnotations(annotations, out)
+		return out, ""
+	}
 	schema := proxy.Schema()
 	if schema == nil {
 		return nil, domain.ReasonInvalidSchema
@@ -97,6 +105,67 @@ func (b *bundle) normalizeProxy(proxy *base.SchemaProxy, target schemaTarget, de
 		b.defs[name] = normalized
 	}
 	return domain.Schema{"$ref": defsPointer(name)}, ""
+}
+
+// siblingAnnotations are the keywords that may sit beside a `$ref` without
+// changing what validates. readOnly is not among them: it decides whether a
+// property is published at all (copyObject), and that decision is made before
+// this one.
+var siblingAnnotations = map[string]bool{
+	"description": true, "title": true, "default": true, "example": true,
+	"examples": true, "deprecated": true, "writeOnly": true, "externalDocs": true,
+	"xml": true, "$comment": true,
+}
+
+// annotatedReference recognizes a `$ref` whose siblings only annotate it --
+// `{$ref: Mode, default: fast}`, `{$ref: Owner, description: …}` -- and returns
+// the reference and the annotations apart.
+//
+// The parser rewrites any `$ref` with siblings into `allOf: [siblings, $ref]`,
+// and then presents it inconsistently: as that allOf under OAS 3.0, as the
+// siblings alone under 3.1. Either way the siblings arrive as a schema with no
+// type, which is what an unconstrained schema looks like, and the operation was
+// refused for an annotation. Read from the rewritten node, the two versions are
+// the same shape. Siblings that constrain (`nullable`, `maxLength`, …) are left
+// to the ordinary path: whether they apply is where 3.0 and 3.1 disagree.
+func annotatedReference(proxy *base.SchemaProxy) (*base.SchemaProxy, *base.Schema, bool) {
+	low := proxy.GoLow()
+	if low == nil || !low.IsTransformedRefWithSiblings() || !onlyAnnotations(low.GetTransformedRefSiblingSchema()) {
+		return nil, nil, false
+	}
+	composed := low.Schema()
+	if composed == nil {
+		return nil, nil, false
+	}
+	var ref *base.SchemaProxy
+	var annotations *base.Schema
+	for _, branch := range base.NewSchema(composed).AllOf {
+		switch {
+		case branch == nil:
+			return nil, nil, false
+		case branch.IsReference():
+			ref = branch
+		default:
+			annotations = branch.Schema()
+		}
+	}
+	if ref == nil || annotations == nil {
+		return nil, nil, false
+	}
+	return ref, annotations, true
+}
+
+func onlyAnnotations(siblings *yaml.Node) bool {
+	if siblings == nil || siblings.Kind != yaml.MappingNode || len(siblings.Content) == 0 {
+		return false
+	}
+	for i := 0; i+1 < len(siblings.Content); i += 2 {
+		key := siblings.Content[i].Value
+		if !siblingAnnotations[key] && !strings.HasPrefix(key, "x-") {
+			return false
+		}
+	}
+	return true
 }
 
 // shouldReference decides whether a `$ref` is worth keeping as one. A

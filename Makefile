@@ -83,11 +83,11 @@ bench: ## Run benchmarks (needs `make corpus` for the vendor documents)
 
 .PHONY: corpus
 corpus: ## Fetch the vendor corpus into test/testdata/corpus (verifies pinned digests)
-	@python3 scripts/fetch_corpus.py
+	@python3 test/fetch_corpus.py
 
 .PHONY: mutate
 mutate: ## Switch off each security control in turn and check a test notices
-	@bash scripts/mutate.sh
+	@bash test/mutate.sh
 
 .PHONY: tools
 tools: ## Install the pinned golangci-lint into bin/

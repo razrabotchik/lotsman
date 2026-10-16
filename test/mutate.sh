@@ -127,7 +127,10 @@ mutate() {
 		return
 	fi
 
-	if ! go build "$pkg" >/dev/null 2>&1; then
+	# -o /dev/null: for a main package go build writes the binary into the
+	# working directory, which is the repository root -- every run against
+	# cmd/api-gateway left one there.
+	if ! go build -o /dev/null "$pkg" >/dev/null 2>&1; then
 		printf '%-48s DOES NOT COMPILE — the mutation is wrong\n' "$name"
 		failures=$((failures + 1))
 		cp "$pristine/$file" "$file"
