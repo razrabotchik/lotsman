@@ -72,7 +72,7 @@ async function showReview(store, setDialog) {
   dlg.append(status, h("div", { class: "actions" }, save, h("button", { type: "button", onclick: close }, "Cancel")));
   save.addEventListener("click", async () => {
     try {
-      await store.apply(await api.save(ticks.map((t) => t.w.id)));
+      await store.apply(await api.save(ticks.filter((t) => t.box.checked).map((t) => t.w.id)));
       close();
       store.toast("Saved. A running `serve --watch` picks it up; stdio clients need a restart.");
     } catch (e) {
