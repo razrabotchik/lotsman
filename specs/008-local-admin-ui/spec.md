@@ -129,7 +129,8 @@ It replaces the choice in `selectMediaType`; it never makes an unsupported type 
   `--json`) and `explain-call`, the same way effect sources do today. Nobody is surprised that a
   call does not follow the vendor document.
 - Determinism (Constitution IV): the same spec + config yields the same catalog and digest; the
-  digest covers the corrections.
+  catalog digest moves whenever a correction changes what a client is shown; a `note` alone does not
+  move it (the digest identifies the published tools, FR-74).
 
 All new fields are optional; existing configurations parse unchanged and `apiVersion` stays.
 

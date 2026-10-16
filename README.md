@@ -244,6 +244,31 @@ An override that matches no operation is a startup error, not a smaller catalog:
 believe is in force has to be in force. An override cannot publish something lotsman refused to
 translate — it classifies, hides or binds, and support is not a matter of opinion.
 
+When the document itself is wrong — or offers a choice lotsman will not make for you — correct it
+in the same file, not in the vendor's:
+
+```yaml
+componentOverrides:
+  - match: { schema: io.k8s.apimachinery.pkg.apis.meta.v1.DeleteOptions }
+    patch: { properties: { gracePeriodSeconds: { type: string } } }   # JSON Merge Patch, JSON Schema 2020-12
+    note: "the API takes a string"
+operationOverrides:
+  - match: { operationId: patchAppsV1NamespacedDeployment }
+    mediaType: application/merge-patch+json      # one of the four the document offers
+  - match: { operationId: listItems }
+    parameters: [{ name: limit, in: query, schema: { type: string } }]
+spec:
+  overlays: [./vendor-fixes.overlay.yaml]        # standard OpenAPI Overlay, applied before parsing
+```
+
+Patches are JSON Merge Patch over the schema as lotsman publishes it (JSON Schema 2020-12); a key
+starting with `$` is refused. A patch that reaches through a `$ref` changes a copy for that
+operation, not the shared component. A correction that no longer matches the document stops `serve`
+and is named; the same goes for an overlay with no actions or whose target matches nothing.
+`inspect` and `explain-call` mark every corrected operation. `serve --watch` picks corrections up
+without a restart; a change to policy or credentials in the same file is refused, naming the field,
+and the running catalog stays until you restart.
+
 ### Serving it over HTTP
 
 `serve --transport=http` publishes the stateless Streamable HTTP profile of MCP `2026-07-28`. No

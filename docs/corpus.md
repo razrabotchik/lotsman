@@ -26,8 +26,11 @@ POST/PUT/PATCH, 10 destructive DELETE).
 All 12 rejections are `unsupported_media_type`, and all 12 are PATCH operations offering four
 competing patch media types at once (`application/apply-patch+yaml`, `application/json-patch+json`,
 `application/merge-patch+json`, `application/strategic-merge-patch+json`). Choosing one of four
-without being told which is exactly the guess FR-29 forbids; a media-type override in config lifts
-these.
+without being told which is exactly the guess FR-29 forbids.
+
+With one `mediaType: application/merge-patch+json` override per PATCH operation (twelve lines of
+configuration, feature 008) all 77 operations are supported; the test
+`TestKubernetesMediaTypeCorrectionsPublishEveryOperation` holds that number.
 
 **Found by this run:** Kubernetes declares its DELETE bodies as `*/*`, which lotsman refused
 outright — 27 operations lost to a wildcard nobody disputes. A sole wildcard range says "any media

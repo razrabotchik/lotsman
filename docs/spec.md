@@ -359,6 +359,20 @@ server:
 - Env substitution не использует Go templates. Разрешены только типизированные variables/secret references.
 - Export редактирует resolved secrets и локальные token values.
 - Config schema публикуется как JSON Schema и тестируется на backward compatibility.
+- Исправления спецификации (ADR-0021, feature 008): `operationOverrides[].mediaType` (FR-29),
+  `operationOverrides[].parameters`, `operationOverrides[].requestBody.patch`, `componentOverrides`
+  и `spec.overlays` (стандартный OpenAPI Overlay, применяется до разбора). Исправление, которое ни с
+  чем не совпало, — ошибка запуска; то же для overlay без `actions`, действия без `target` и
+  `target`, не нашедшего ничего. Патч — JSON Merge Patch поверх нормализованной JSON Schema 2020-12
+  и не содержит ключей на `$`. Патч, проходящий через `$ref`, правит копию для этой операции или
+  компонента; патч через ссылку на ещё строящийся компонент (цикл) отклоняется.
+  `componentOverrides` совпадает с `#/components/schemas` корневого документа: имя компонента,
+  который сам является `$ref`, отклоняется («patch the component it points to instead»), компоненты
+  из других файлов разделённой спецификации не совпадают. Исправленные операции помечаются
+  `local_override`.
+- Reload переприменяет `spec.overlays`, `componentOverrides`, `operationOverrides` и `catalog`;
+  любое другое изменение конфигурации отклоняется с названием изменённого поля, а работающий каталог
+  остаётся прежним до перезапуска.
 
 ---
 
