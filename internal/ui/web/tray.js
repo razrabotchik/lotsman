@@ -25,12 +25,16 @@ async function revertEntry(store, id) {
   try { await store.apply(await api.revert(id)); } catch (e) { store.toast(e.message, "error"); }
 }
 
+let reviewing = false;
+
 async function review(store) {
+  if (reviewing) return;
+  reviewing = true;
+  let diff = "", diffError = null;
+  try { diff = (await api.diff()).diff; } catch (e) { diffError = e.message; }
   const dlg = h("dialog");
-  document.body.append(dlg);
-  const close = () => { dlg.close(); dlg.remove(); };
-  let diff = "";
-  try { diff = (await api.diff()).diff; } catch (e) { diff = e.message; }
+  dlg.addEventListener("close", () => { dlg.remove(); reviewing = false; });
+  const close = () => dlg.close();
   const st = store.state;
   const pre = h("pre", { class: "diff" });
   for (const line of diff.split("\n")) {
@@ -41,7 +45,7 @@ async function review(store) {
   const ticks = widening.map((w) => ({ w, box: h("input", { type: "checkbox" }) }));
   const save = h("button", { class: "primary", type: "button" }, "Save");
   const status = h("div");
-  const sync = () => { save.disabled = ticks.some((t) => !t.box.checked); };
+  const sync = () => { save.disabled = diffError !== null || ticks.some((t) => !t.box.checked); };
   ticks.forEach((t) => t.box.addEventListener("change", sync));
   sync();
   dlg.append(h("h2", {}, "Review and save"), h("p", { class: "muted" }, st.configPath));
@@ -51,7 +55,9 @@ async function review(store) {
     dlg.append(box);
   }
   for (const p of st.draft.problems || []) dlg.append(h("div", { class: "banner warn" }, "serve will refuse this configuration: ", p.message));
-  dlg.append(pre, status, h("div", { class: "actions" }, save, h("button", { type: "button", onclick: close }, "Cancel")));
+  if (diffError !== null) dlg.append(h("div", { class: "banner error" }, "Could not load the diff: ", diffError));
+  else dlg.append(pre);
+  dlg.append(status, h("div", { class: "actions" }, save, h("button", { type: "button", onclick: close }, "Cancel")));
   save.addEventListener("click", async () => {
     try {
       await store.apply(await api.save(ticks.map((t) => t.w.id)));
@@ -59,8 +65,11 @@ async function review(store) {
       store.toast("Saved. A running `serve --watch` picks it up; stdio clients need a restart.");
     } catch (e) {
       clear(status).append(h("div", { class: "banner error" }, e.message));
-      if (e.status === 409) status.append(h("button", { type: "button", onclick: async () => { try { await store.apply(await api.reload()); close(); } catch (e2) { clear(status).append(h("div", { class: "banner error" }, e2.message)); } } }, "Reload from disk, keep my changes"));
+      if (e.status === 409) status.append(h("button", { type: "button", onclick: async () => {
+        try { await store.apply(await api.reload()); close(); } catch (e2) { clear(status).append(h("div", { class: "banner error" }, e2.message)); }
+      } }, "Reload from disk, keep my changes"));
     }
   });
+  document.body.append(dlg);
   dlg.showModal();
 }
