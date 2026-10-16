@@ -56,8 +56,12 @@ type State struct {
 
 // Workbench is a draft of one configuration file.
 type Workbench struct {
-	mu       sync.Mutex
-	path     string
+	mu   sync.Mutex
+	path string
+	// target is the file actually read and replaced: path with symbolic
+	// links resolved at start, so a save replaces the file a link points to
+	// rather than the link.
+	target   string
 	spec     string
 	pipe     Pipeline
 	disk     []byte
@@ -70,7 +74,10 @@ type Workbench struct {
 // New loads the configuration at path (which may not exist yet) and
 // evaluates it.
 func New(ctx context.Context, path, spec string, pipe Pipeline) (*Workbench, error) {
-	w := &Workbench{path: path, spec: spec, pipe: pipe, entries: map[string]Entry{}}
+	w := &Workbench{path: path, target: path, spec: spec, pipe: pipe, entries: map[string]Entry{}}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		w.target = resolved
+	}
 	if err := w.readDisk(ctx); err != nil {
 		return nil, err
 	}
@@ -78,7 +85,7 @@ func New(ctx context.Context, path, spec string, pipe Pipeline) (*Workbench, err
 }
 
 func (w *Workbench) readDisk(ctx context.Context) error {
-	data, err := os.ReadFile(w.path)
+	data, err := os.ReadFile(w.target)
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -459,7 +466,7 @@ func (w *Workbench) Save(ctx context.Context, acknowledged []string) (*State, er
 	if err := w.unchangedOnDisk(); err != nil {
 		return st, err
 	}
-	if err := writeAtomic(w.path, data); err != nil {
+	if err := writeAtomic(w.target, data); err != nil {
 		return nil, err
 	}
 	w.entries, w.order = map[string]Entry{}, nil
@@ -472,7 +479,7 @@ func (w *Workbench) Save(ctx context.Context, acknowledged []string) (*State, er
 // unchangedOnDisk refuses when the file is no longer the one the draft is
 // based on.
 func (w *Workbench) unchangedOnDisk() error {
-	current, err := os.ReadFile(w.path)
+	current, err := os.ReadFile(w.target)
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}

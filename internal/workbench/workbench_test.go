@@ -648,3 +648,34 @@ func TestStyleOf(t *testing.T) {
 		}
 	}
 }
+
+// A configuration reached through a symbolic link is saved into the file the
+// link points to; the link stays a link.
+func TestSaveThroughASymlinkKeepsTheLink(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	realFile := filepath.Join(dir, "realFile.yaml")
+	if err := os.WriteFile(realFile, []byte("apiVersion: lotsman.dev/v1alpha1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "lotsman.yaml")
+	if err := os.Symlink(realFile, link); err != nil {
+		t.Skip("no symlinks here:", err)
+	}
+	wb, err := New(t.Context(), link, "", fakePipeline())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wb.Apply(t.Context(), createPetEffect("write")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wb.Save(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the link was replaced: %v %v", info, err)
+	}
+	if !strings.Contains(readFile(t, realFile), "effect: write") {
+		t.Fatalf("the target was not written:\n%s", readFile(t, realFile))
+	}
+}
