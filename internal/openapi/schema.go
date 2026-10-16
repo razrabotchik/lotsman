@@ -54,6 +54,10 @@ type bundle struct {
 	// building guards the recursion while a component is still being built:
 	// its own members may reference it.
 	building map[string]bool
+	// fixes are the operator's component corrections; applied records which
+	// ones this operation's schemas used, for provenance.
+	fixes   *fixes
+	applied map[string]bool
 }
 
 func newBundle() *bundle {
@@ -80,7 +84,11 @@ func (b *bundle) normalizeProxy(proxy *base.SchemaProxy, target schemaTarget, de
 		return nil, domain.ReasonInvalidSchema
 	}
 	if !b.shouldReference(proxy, schema) {
-		return b.normalizeSchema(schema, target, depth, visiting)
+		normalized, reason := b.normalizeSchema(schema, target, depth, visiting)
+		if reason != "" || !proxy.IsReference() {
+			return normalized, reason
+		}
+		return b.patchComponent(proxy.GetReference(), normalized, target)
 	}
 
 	pointer := proxy.GetReference()
@@ -102,9 +110,36 @@ func (b *bundle) normalizeProxy(proxy *base.SchemaProxy, target schemaTarget, de
 		if reason != "" {
 			return nil, reason
 		}
+		normalized, reason = b.patchComponent(pointer, normalized, target)
+		if reason != "" {
+			return nil, reason
+		}
 		b.defs[name] = normalized
 	}
 	return domain.Schema{"$ref": defsPointer(name)}, ""
+}
+
+// patchComponent applies the operator's correction for the component a
+// reference points at, if there is one. The result must still have a shape the
+// target can carry; if it does not, the operation is refused for its usual
+// reason -- a correction can break an operation, and saying so is the point.
+func (b *bundle) patchComponent(pointer string, normalized domain.Schema, target schemaTarget) (domain.Schema, domain.ReasonCode) {
+	if b.fixes == nil {
+		return normalized, ""
+	}
+	fix, ok := b.fixes.components[pointer]
+	if !ok {
+		return normalized, ""
+	}
+	patched := mergePatch(normalized, fix.Patch)
+	if reason := checkCorrectedShape(patched, target); reason != "" {
+		return nil, reason
+	}
+	if b.applied == nil {
+		b.applied = map[string]bool{}
+	}
+	b.applied[fix.Schema] = true
+	return patched, ""
 }
 
 // siblingAnnotations are the keywords that may sit beside a `$ref` without
@@ -459,6 +494,15 @@ func (b *bundle) copyArray(schema *base.Schema, out domain.Schema, target schema
 	converted, reason := b.normalizeProxy(schema.Items.A, itemTarget, depth+1, visiting)
 	if reason != "" {
 		return reason
+	}
+	if target.scalarsOnly {
+		// Again on the result: a component correction applied to the item
+		// may have turned a scalar into an array.
+		for _, t := range schemaTypes(converted) {
+			if t == "array" || t == "object" {
+				return target.refusal
+			}
+		}
 	}
 	out["items"] = map[string]any(converted)
 	return ""

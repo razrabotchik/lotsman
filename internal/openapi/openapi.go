@@ -193,7 +193,7 @@ func Parse(ctx context.Context, specBytes []byte, opts Options) (*Document, erro
 				continue
 			}
 			out.Operations = append(out.Operations, buildOperation(m.name, op,
-				pathScope{template: path, params: item.Parameters, servers: item.Servers}, scope))
+				pathScope{template: path, params: item.Parameters, servers: item.Servers}, &scope))
 		}
 	}
 	attachRefDiagnostics(out.Operations, scan.diagnostics)
@@ -380,7 +380,7 @@ type pathScope struct {
 	servers []*v3.Server
 }
 
-func buildOperation(method string, op *v3.Operation, in pathScope, scope documentScope) domain.Operation {
+func buildOperation(method string, op *v3.Operation, in pathScope, scope *documentScope) domain.Operation {
 	path := in.template
 	result := domain.Operation{
 		Key:               domain.NewOperationKey(scope.namespace, method, path),
@@ -409,14 +409,24 @@ func buildOperation(method string, op *v3.Operation, in pathScope, scope documen
 	// components they both reference, and a tool's input schema is a
 	// standalone document that has to carry its own $defs.
 	defs := newBundle()
+	defs.fixes = scope.fixes
 	input := buildInput(merged, replaced, pointer, defs)
 	result.Input = input.model
 	result.Diagnostics = append(result.Diagnostics, input.diagnostics...)
 	result.ExecutionBlockers = append(result.ExecutionBlockers, input.blockers...)
 
-	body := buildBody(op.RequestBody, bodyFix{
-		mediaType: scope.fixes.pinnedMediaType(fix, op.RequestBody, &result),
-	}, pointer, defs)
+	bf := bodyFix{mediaType: scope.fixes.pinnedMediaType(fix, op.RequestBody, &result)}
+	if fix != nil {
+		bf.patch, bf.index = fix.BodyPatch, fix.Index
+		if bf.patch != nil && op.RequestBody == nil {
+			scope.fixes.problem("operationOverrides", fix.Index,
+				"requestBody.patch is set, but %s %s declares no request body", result.Method, result.PathTemplate)
+		}
+	}
+	body := buildBody(op.RequestBody, bf, pointer, defs)
+	if bf.patch != nil && body.spec != nil {
+		result.Corrections = append(result.Corrections, correction("requestBody", fix.Note))
+	}
 	result.Input.Body = body.spec
 	if len(defs.defs) > 0 {
 		result.Input.Defs = defs.defs
@@ -468,6 +478,10 @@ func buildOperation(method string, op *v3.Operation, in pathScope, scope documen
 		})
 	}
 
+	for _, name := range sortedKeys(defs.applied) {
+		result.Corrections = append(result.Corrections, correction("component "+name,
+			scope.fixes.components[componentPointer(name)].Note))
+	}
 	if len(rejections) > 0 {
 		result.Support = domain.SupportStatus{Level: domain.SupportRejected, Reasons: rejections}
 	} else {

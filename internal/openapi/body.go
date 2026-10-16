@@ -67,6 +67,17 @@ func buildBody(rb *v3.RequestBody, fix bodyFix, pointer string, defs *bundle) bo
 		Description: rb.Description,
 		Schema:      converted,
 	}
+	if fix.patch != nil {
+		patched := mergePatch(inlineTopRef(converted, defs), fix.patch)
+		if shapeReason := checkCorrectedShape(patched, bodyTarget); shapeReason != "" {
+			out.spec = nil
+			out.reject(shapeReason, bodyPointer, fmt.Sprintf(
+				"after operationOverrides[%d].requestBody.patch the body schema has no shape lotsman can validate",
+				fix.index))
+			return out
+		}
+		out.spec.Schema = patched
+	}
 	return out
 }
 

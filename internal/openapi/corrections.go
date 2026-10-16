@@ -3,6 +3,7 @@ package openapi
 import (
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 
 	"github.com/pb33f/libopenapi/datamodel/high/base"
@@ -221,6 +222,34 @@ func asObject(v any) (domain.Schema, bool) {
 	return nil, false
 }
 
+// inlineTopRef returns a copy of schema that a correction may change without
+// touching anything shared: a top-level reference into the bundle is replaced
+// by a copy of what it points at, its sibling annotations kept.
+func inlineTopRef(schema domain.Schema, defs *bundle) domain.Schema {
+	ref, _ := schema["$ref"].(string)
+	name, isDef := strings.CutPrefix(ref, "#/$defs/")
+	target, known := defs.defs[name]
+	if !isDef || !known {
+		return cloneSchema(schema)
+	}
+	out := cloneSchema(target)
+	for key, value := range schema {
+		if key != "$ref" {
+			out[key] = cloneValue(value)
+		}
+	}
+	return out
+}
+
+func sortedKeys(set map[string]bool) []string {
+	keys := make([]string, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // cloneSchema deep-copies a schema, so a correction never writes into a
 // schema another operation (or the bundle's $defs) still holds.
 func cloneSchema(s domain.Schema) domain.Schema {
@@ -322,15 +351,15 @@ func schemaTypes(s domain.Schema) []string {
 // written to: a path-level parameter is shared by every operation under its
 // path, and a correction names one.
 func (f *fixes) applyParameters(c *OperationCorrection, merged map[paramKey]*v3.Parameter,
-	result *domain.Operation) (map[paramKey]*v3.Parameter, map[paramKey]domain.Schema) {
+	result *domain.Operation) (out map[paramKey]*v3.Parameter, replaced map[paramKey]domain.Schema) {
 	if c == nil || len(c.Parameters) == 0 {
 		return merged, nil
 	}
-	out := make(map[paramKey]*v3.Parameter, len(merged))
+	out = make(map[paramKey]*v3.Parameter, len(merged))
 	for key, p := range merged {
 		out[key] = p
 	}
-	replaced := map[paramKey]domain.Schema{}
+	replaced = map[paramKey]domain.Schema{}
 	for i := range c.Parameters {
 		pc := &c.Parameters[i]
 		key := paramKey{pc.Name, pc.In}
