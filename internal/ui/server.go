@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/razrabotchik/lotsman/internal/workbench"
@@ -22,7 +23,23 @@ import (
 //go:embed web
 var web embed.FS
 
-const cookieName = "lotsman_ui"
+// cookiePrefix names the session cookie; the port follows, so two
+// workbenches on one machine do not overwrite each other's session (cookies
+// on loopback are not scoped by port).
+const cookiePrefix = "lotsman_ui_"
+
+// exchangePage moves the browser off the token address once the session
+// cookie is set. It is a 200 page, not a redirect, so the navigation to "/"
+// starts from this origin and the SameSite=Strict cookie goes with it even
+// when the token address was opened from a local file. No script: the CSP
+// allows none.
+const exchangePage = `<!doctype html><html><head><meta charset="utf-8">` +
+	`<meta http-equiv="refresh" content="0;url=/"><title>lotsman ui</title></head>` +
+	`<body><p><a href="/">Continue to lotsman ui</a></p></body></html>
+`
+
+// usedMessage is what a second use of the token address gets.
+const usedMessage = "this address was already used; restart lotsman ui for a new one"
 
 // maxBody bounds a request body; a correction is a few kilobytes.
 const maxBody = 1 << 20
@@ -34,8 +51,15 @@ const csp = "default-src 'none'; script-src 'self'; style-src 'self'; font-src '
 
 // Server serves one workbench on loopback.
 type Server struct {
-	wb       *workbench.Workbench
-	token    string
+	wb *workbench.Workbench
+	// token is in the address the terminal prints; it is good for one
+	// exchange, for session.
+	token string
+	// session is the cookie value: random, and never the token, so the
+	// printed address (in a terminal's scrollback, a shell history, a
+	// browser's history) cannot be replayed into a session.
+	session  string
+	used     atomic.Bool
 	listener net.Listener
 	port     int
 }
@@ -53,16 +77,32 @@ func Listen(ctx context.Context, wb *workbench.Workbench, port int) (*Server, er
 		_ = l.Close()
 		return nil, fmt.Errorf("unexpected listener address %v", l.Addr())
 	}
-	raw := make([]byte, 32)
-	if _, err := rand.Read(raw); err != nil {
+	token, err := random()
+	if err != nil {
 		_ = l.Close()
 		return nil, err
 	}
-	return &Server{wb: wb, token: hex.EncodeToString(raw), listener: l, port: addr.Port}, nil
+	session, err := random()
+	if err != nil {
+		_ = l.Close()
+		return nil, err
+	}
+	return &Server{wb: wb, token: token, session: session, listener: l, port: addr.Port}, nil
 }
 
-// URL is the address to open, token included. It is printed once; the token
-// then lives in an HttpOnly cookie.
+func random() (string, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(raw), nil
+}
+
+func (s *Server) cookieName() string { return cookiePrefix + strconv.Itoa(s.port) }
+
+// URL is the address to open, token included. It is good once: opening it
+// exchanges the token for a session cookie, and the address is refused
+// after that.
 func (s *Server) URL() string {
 	return fmt.Sprintf("http://127.0.0.1:%d/?token=%s", s.port, s.token)
 }
@@ -125,23 +165,33 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			http.Error(w, "forbidden origin", http.StatusForbidden)
 			return
 		}
-		// The token arrives once in the URL the terminal printed; it is
-		// accepted only if it is ours, so a page cannot fix a token of its own
-		// choosing into the cookie.
+		hasSession := false
+		if c, err := r.Cookie(s.cookieName()); err == nil && equal(c.Value, s.session) {
+			hasSession = true
+		}
+		// The token arrives once, in the address the terminal printed. It is
+		// accepted only if it is ours, so a page cannot fix a session of its
+		// own choosing into the cookie, and only once.
 		if q := r.URL.Query().Get("token"); q != "" && r.Method == http.MethodGet && r.URL.Path == "/" {
-			if !s.tokenMatches(q) {
+			switch {
+			case !equal(q, s.token):
 				http.Error(w, "forbidden", http.StatusForbidden)
-				return
+			case hasSession:
+				http.Redirect(w, r, "/", http.StatusSeeOther)
+			case !s.used.CompareAndSwap(false, true):
+				http.Error(w, usedMessage, http.StatusForbidden)
+			default:
+				// Not Secure: the server is plain HTTP on loopback by design.
+				//nolint:gosec // G124: HttpOnly and SameSite=Strict are set; Secure cannot be over http://127.0.0.1.
+				http.SetCookie(w, &http.Cookie{Name: s.cookieName(), Value: s.session, Path: "/",
+					HttpOnly: true, SameSite: http.SameSiteStrictMode})
+				h.Set("Content-Type", "text/html; charset=utf-8")
+				w.WriteHeader(http.StatusOK)
+				_, _ = io.WriteString(w, exchangePage)
 			}
-			// Not Secure: the server is plain HTTP on loopback by design.
-			//nolint:gosec // G124: HttpOnly and SameSite=Strict are set; Secure cannot be over http://127.0.0.1.
-			http.SetCookie(w, &http.Cookie{Name: cookieName, Value: s.token, Path: "/",
-				HttpOnly: true, SameSite: http.SameSiteStrictMode})
-			http.Redirect(w, r, "/", http.StatusSeeOther)
 			return
 		}
-		c, err := r.Cookie(cookieName)
-		if err != nil || !s.tokenMatches(c.Value) {
+		if !hasSession {
 			http.Error(w, "open the address lotsman ui printed in the terminal", http.StatusForbidden)
 			return
 		}
@@ -150,8 +200,8 @@ func (s *Server) guard(next http.Handler) http.Handler {
 	})
 }
 
-func (s *Server) tokenMatches(v string) bool {
-	return subtle.ConstantTimeCompare([]byte(v), []byte(s.token)) == 1
+func equal(a, b string) bool {
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
 // lighten drops per-operation schemas from a state: the tree needs status

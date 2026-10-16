@@ -61,12 +61,12 @@ func request(t *testing.T, srv *Server, method, target, host, origin string, coo
 		req.Header.Set("Origin", origin)
 	}
 	if cookie {
-		req.AddCookie(&http.Cookie{Name: cookieName, Value: srv.token})
+		req.AddCookie(&http.Cookie{Name: srv.cookieName(), Value: srv.session})
 	}
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
-	if strings.Contains(rec.Body.String(), srv.token) {
-		t.Fatalf("%s %s: the token appears in the response body", method, target)
+	if strings.Contains(rec.Body.String(), srv.token) || strings.Contains(rec.Body.String(), srv.session) {
+		t.Fatalf("%s %s: the token or the session appears in the response body", method, target)
 	}
 	return rec
 }
@@ -89,6 +89,12 @@ func TestListenBindsLoopbackOnly(t *testing.T) {
 	other, _ := testServer(t)
 	if other.token == srv.token {
 		t.Fatal("two servers share a token")
+	}
+	if len(srv.session) != 64 || srv.session == srv.token {
+		t.Fatal("the session is not a value of its own")
+	}
+	if srv.cookieName() != fmt.Sprintf("lotsman_ui_%d", srv.port) || other.cookieName() == srv.cookieName() {
+		t.Fatalf("cookie names %q, %q: one per port", srv.cookieName(), other.cookieName())
 	}
 }
 
@@ -114,7 +120,7 @@ func TestGuard(t *testing.T) {
 		{"preflight without origin", "OPTIONS", "/api/draft", host, "", true, 403},
 		{"preflight from another site", "OPTIONS", "/api/draft", host, "http://evil.example", true, 403},
 		{"someone else's token in the URL", "GET", "/?token=" + strings.Repeat("0", 64), host, "", false, 403},
-		{"our token sets the cookie", "GET", "/?token=" + srv.token, host, "", false, 303},
+		{"our token with a session already", "GET", "/?token=" + srv.token, host, "", true, 303},
 		{"read with cookie", "GET", "/api/state", host, "", true, 200},
 		{"page with cookie", "GET", "/", host, "", true, 200},
 		{"unknown path", "GET", "/nothing-here", host, "", true, 404},
@@ -137,18 +143,83 @@ func TestGuard(t *testing.T) {
 			if h.Get("X-Content-Type-Options") != "nosniff" || h.Get("Access-Control-Allow-Origin") != "" {
 				t.Fatalf("headers = %v", h)
 			}
-			cookies := rec.Result().Cookies()
-			if tc.want == 303 {
-				if len(cookies) != 1 || cookies[0].Value != srv.token || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteStrictMode {
-					t.Fatalf("cookie = %+v", cookies)
-				}
-				if rec.Header().Get("Location") != "/" {
-					t.Fatalf("redirect to %q: the token must leave the address bar", rec.Header().Get("Location"))
-				}
-			} else if len(cookies) != 0 {
+			if cookies := rec.Result().Cookies(); len(cookies) != 0 {
 				t.Fatalf("a cookie was set: %+v", cookies)
 			}
 		})
+	}
+}
+
+// The printed address is good once: it is exchanged for a session cookie of
+// its own value, named for the port, on a page that moves on without script.
+// After that it is refused, unless the browser already holds the session.
+func TestTheTokenIsExchangedOnce(t *testing.T) {
+	t.Parallel()
+	srv, _ := testServer(t)
+	host := own(srv)
+	rec := do(t, srv, "GET", "/?token="+srv.token, host, "", false)
+	if rec.Code != 200 {
+		t.Fatalf("exchange: %d %s", rec.Code, rec.Body.String())
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("cookies = %+v", cookies)
+	}
+	c := cookies[0]
+	if c.Name != srv.cookieName() || c.Value != srv.session || c.Value == srv.token || !c.HttpOnly ||
+		c.SameSite != http.SameSiteStrictMode || c.Path != "/" {
+		t.Fatalf("cookie = %+v", c)
+	}
+	page := rec.Body.String()
+	if !strings.Contains(page, `<meta http-equiv="refresh" content="0;url=/">`) || strings.Contains(strings.ToLower(page), "<script") ||
+		!strings.HasPrefix(rec.Header().Get("Content-Type"), "text/html") || rec.Header().Get("Location") != "" {
+		t.Fatalf("exchange page:\n%s\n%v", page, rec.Header())
+	}
+	if !strings.Contains(rec.Header().Get("Content-Security-Policy"), "script-src 'self'") {
+		t.Fatal("the exchange page is served without the CSP")
+	}
+
+	// A second use, from a browser without the session: refused.
+	rec = do(t, srv, "GET", "/?token="+srv.token, host, "", false)
+	if rec.Code != 403 || !strings.Contains(rec.Body.String(), "already used") || len(rec.Result().Cookies()) != 0 {
+		t.Fatalf("second use: %d %s", rec.Code, rec.Body.String())
+	}
+	// The same browser opening the address again: on to the page.
+	rec = do(t, srv, "GET", "/?token="+srv.token, host, "", true)
+	if rec.Code != 303 || rec.Header().Get("Location") != "/" {
+		t.Fatalf("reuse with the session: %d", rec.Code)
+	}
+	// The token itself is not a session.
+	req := httptest.NewRequest(http.MethodGet, "/api/state", http.NoBody)
+	req.Host = host
+	req.AddCookie(&http.Cookie{Name: srv.cookieName(), Value: srv.token})
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != 403 {
+		t.Fatalf("the token as a cookie: %d", rec.Code)
+	}
+}
+
+// The launcher file that carries the address to the browser is private and
+// forwards without script.
+func TestTheLauncherPage(t *testing.T) {
+	t.Parallel()
+	path, err := launcher("http://127.0.0.1:1/?token=abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(path)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		t.Fatalf("launcher mode %v", info.Mode())
+	}
+	page, _ := os.ReadFile(path)
+	if !strings.Contains(string(page), `<meta http-equiv="refresh" content="0;url=http://127.0.0.1:1/?token=abc">`) ||
+		strings.Contains(strings.ToLower(string(page)), "<script") {
+		t.Fatalf("launcher:\n%s", page)
 	}
 }
 
@@ -157,7 +228,7 @@ func TestAWrongCookieIsRefused(t *testing.T) {
 	srv, _ := testServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/state", http.NoBody)
 	req.Host = own(srv)
-	req.AddCookie(&http.Cookie{Name: cookieName, Value: strings.Repeat("0", 64)})
+	req.AddCookie(&http.Cookie{Name: srv.cookieName(), Value: strings.Repeat("0", 64)})
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != 403 {

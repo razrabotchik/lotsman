@@ -63,7 +63,8 @@ func uiCommand(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	}
 	fmt.Fprintf(stdout, "lotsman ui: editing %s\nopen %s\n(ctrl-c to stop)\n", path, srv.URL())
 	if !*noOpen {
-		ui.Open(ctx, srv.URL())
+		cleanup := ui.Open(ctx, srv.URL())
+		defer cleanup()
 	}
 	if err := srv.Serve(ctx); err != nil {
 		fmt.Fprintf(stderr, "lotsman: ui: %v\n", err)

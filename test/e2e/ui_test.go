@@ -170,9 +170,15 @@ func TestUIFixAnOperationAndSave(t *testing.T) {
 		t.Fatalf("state without the token: %d", code)
 	}
 
-	// 1. The printed address trades the token for a cookie.
+	// 1. The printed address trades the token for a session cookie, once.
+	if code, page := c.do("GET", address, ""); code != http.StatusOK || !strings.Contains(page, `http-equiv="refresh"`) {
+		t.Fatalf("GET printed address: %d %s", code, page)
+	}
 	if code, _ := c.do("GET", address, ""); code != http.StatusSeeOther {
-		t.Fatalf("GET printed address: %d", code)
+		t.Fatalf("the printed address again, with the session: %d", code)
+	}
+	if code, body := newUIClient(t, address).do("GET", address, ""); code != http.StatusForbidden || !strings.Contains(body, "already used") {
+		t.Fatalf("the printed address in another browser: %d %s", code, body)
 	}
 	if code, page := c.do("GET", "/", ""); code != http.StatusOK || !strings.Contains(page, "<html") {
 		t.Fatalf("page: %d", code)
@@ -286,7 +292,7 @@ func TestUIWideningIsEnforcedByTheServer(t *testing.T) {
 func loggedIn(t *testing.T, address string) *uiClient {
 	t.Helper()
 	c := newUIClient(t, address)
-	if code, _ := c.do("GET", address, ""); code != http.StatusSeeOther {
+	if code, _ := c.do("GET", address, ""); code != http.StatusOK {
 		t.Fatalf("GET printed address: %d", code)
 	}
 	return c
