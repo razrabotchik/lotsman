@@ -109,7 +109,7 @@ func buildInput(merged map[paramKey]*v3.Parameter, replaced map[paramKey]domain.
 		if correctedSchema, ok := replaced[key]; ok {
 			// The operator's schema replaces the document's; it still has to be
 			// something a URL or header value can carry.
-			schema, reason = correctedSchema, checkShape(schemaTypes(correctedSchema), correctedSchema, parameterTarget)
+			schema, reason = correctedSchema, checkCorrectedShape(correctedSchema, parameterTarget)
 		} else {
 			schema, reason = parameterSchema(source, defs)
 		}

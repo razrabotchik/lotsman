@@ -2,6 +2,7 @@ package openapi
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/pb33f/libopenapi/datamodel/high/base"
@@ -208,6 +209,15 @@ func asObject(v any) (domain.Schema, bool) {
 	case map[string]any:
 		return domain.Schema(m), true
 	}
+	// A config patch nests its own named map type (config.Patch); it is the
+	// same JSON object, and treating it as an opaque value would alias it.
+	if rv := reflect.ValueOf(v); rv.Kind() == reflect.Map && rv.Type().Key().Kind() == reflect.String {
+		out := make(domain.Schema, rv.Len())
+		for _, k := range rv.MapKeys() {
+			out[k.String()] = rv.MapIndex(k).Interface()
+		}
+		return out, true
+	}
 	return nil, false
 }
 
@@ -237,8 +247,55 @@ func cloneValue(v any) any {
 		}
 		return out
 	default:
+		if m, ok := asObject(v); ok {
+			return map[string]any(cloneSchema(m))
+		}
 		return v
 	}
+}
+
+// checkCorrectedShape applies to an already normalized schema the shape rules
+// normalizeProxy applies to a document's, for the same target, so a correction
+// cannot publish what the document could not. A body target keeps the
+// top-level check; a scalars-only target (a URL or header value) refuses
+// compositions, conditionals, typeless and object schemas, and arrays whose
+// items are missing or are not themselves scalars.
+func checkCorrectedShape(s domain.Schema, target schemaTarget) domain.ReasonCode {
+	types := schemaTypes(s)
+	if !target.scalarsOnly {
+		return checkShape(types, s, target)
+	}
+	for _, keyword := range []string{"allOf", "oneOf", "anyOf", "not", "if", "then", "else"} {
+		if _, ok := s[keyword]; ok {
+			return target.refusal
+		}
+	}
+	// Unlike a document schema, a corrected one is already normalized, so
+	// annotations are present: the typeless test is on the types alone.
+	if len(types) == 0 {
+		return target.refusal
+	}
+	if reason := checkShape(types, domain.Schema{}, target); reason != "" {
+		return reason
+	}
+	for _, t := range types {
+		if t != "array" {
+			continue
+		}
+		items, ok := asObject(s["items"])
+		if !ok {
+			return target.refusal
+		}
+		for _, it := range schemaTypes(items) {
+			if it == "array" || it == "object" {
+				return target.refusal
+			}
+		}
+		if reason := checkCorrectedShape(items, target); reason != "" {
+			return reason
+		}
+	}
+	return ""
 }
 
 // schemaTypes reads the declared types off a normalized schema.
