@@ -410,7 +410,8 @@ func buildOperation(method string, op *v3.Operation, in pathScope, scope *docume
 	// standalone document that has to carry its own $defs.
 	defs := newBundle()
 	defs.fixes = scope.fixes
-	input := buildInput(merged, replaced, pointer, defs)
+	input := buildInput(merged, replaced, pointer, defs, scope.fixes.componentOf)
+	result.DeclaredParameters = input.declared
 	result.Input = input.model
 	result.Diagnostics = append(result.Diagnostics, input.diagnostics...)
 	result.ExecutionBlockers = append(result.ExecutionBlockers, input.blockers...)
@@ -432,6 +433,15 @@ func buildOperation(method string, op *v3.Operation, in pathScope, scope *docume
 		result.Input.Defs = defs.defs
 	}
 	result.Diagnostics = append(result.Diagnostics, body.diagnostics...)
+	if op.RequestBody != nil && op.RequestBody.Content != nil {
+		for name := range op.RequestBody.Content.FromOldest() {
+			result.RequestMediaTypes = append(result.RequestMediaTypes, normalizeMediaType(name))
+		}
+		sort.Strings(result.RequestMediaTypes)
+		if content := firstContent(op.RequestBody, body.spec); content != nil {
+			result.BodyComponent = scope.fixes.componentOf(content.Schema)
+		}
+	}
 
 	// Whether the credentials an operation needs are *available* depends on
 	// configuration, not on the document, so that verdict belongs downstream

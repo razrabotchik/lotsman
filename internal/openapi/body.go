@@ -178,3 +178,21 @@ func describeMediaTypes(content *orderedmap.Map[string, *v3.MediaType]) string {
 	sort.Strings(names)
 	return strings.Join(names, ", ")
 }
+
+// firstContent is the media type entry the body was built from, so its
+// schema proxy can still be asked which component it names.
+func firstContent(rb *v3.RequestBody, spec *domain.BodySpec) *v3.MediaType {
+	if rb == nil || spec == nil || orderedmap.Len(rb.Content) == 0 {
+		return nil
+	}
+	for name, media := range rb.Content.FromOldest() {
+		if normalizeMediaType(name) == spec.MediaType {
+			return media
+		}
+	}
+	// A sole wildcard was sent as JSON.
+	for _, media := range rb.Content.FromOldest() {
+		return media
+	}
+	return nil
+}

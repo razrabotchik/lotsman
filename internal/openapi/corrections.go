@@ -87,7 +87,11 @@ type fixes struct {
 	// correction. A reference matches a correction by the node it resolves
 	// to, never by its text: "#/components/schemas/Pet" written inside an
 	// external file names that file's Pet, which no correction matches.
-	roots    map[*yaml.Node]*ComponentCorrection
+	roots map[*yaml.Node]*ComponentCorrection
+	// names maps the node every root-document component (aliases aside) was
+	// parsed from to its name, corrected or not, so the workbench can be told
+	// which component a schema references.
+	names    map[*yaml.Node]string
 	problems []CorrectionProblem
 }
 
@@ -96,6 +100,7 @@ func newFixes(c Corrections) *fixes {
 		corrections: c,
 		components:  make(map[string]*ComponentCorrection, len(c.Components)),
 		roots:       map[*yaml.Node]*ComponentCorrection{},
+		names:       map[*yaml.Node]string{},
 	}
 	// Copies, so normalizing never writes into the caller's Options.
 	f.corrections.Components = append([]ComponentCorrection(nil), c.Components...)
@@ -213,8 +218,22 @@ func (f *fixes) forOperation(method, path, operationID string) *OperationCorrect
 }
 
 // checkComponents reports component corrections that name nothing, and
-// records the node each one that does name something was parsed from.
+// records the node each one that does name something was parsed from. It
+// also records the node of every root component, corrected or not, for
+// componentOf.
 func (f *fixes) checkComponents(schemas *orderedmap.Map[string, *base.SchemaProxy]) {
+	if schemas != nil {
+		for name, proxy := range schemas.FromOldest() {
+			if _, isRef := authoredReference(proxy); isRef {
+				// An alias resolves through to its target, which carries its
+				// own name.
+				continue
+			}
+			if node := sourceNode(proxy); node != nil {
+				f.names[node] = name
+			}
+		}
+	}
 	for i := range f.corrections.Components {
 		c := &f.corrections.Components[i]
 		if schemas != nil {
@@ -249,6 +268,19 @@ func (f *fixes) forComponent(proxy *base.SchemaProxy) *ComponentCorrection {
 		return nil
 	}
 	return f.roots[node]
+}
+
+// componentOf names the root component a schema proxy resolves to, or "".
+// Identity is the parsed node, as for corrections: a same-named component in
+// another file of an exploded specification is a different component.
+func (f *fixes) componentOf(proxy *base.SchemaProxy) string {
+	if f == nil || len(f.names) == 0 || proxy == nil || !proxy.IsReference() {
+		return ""
+	}
+	if node := sourceNode(proxy); node != nil {
+		return f.names[node]
+	}
+	return ""
 }
 
 // authoredReference returns the $ref a schema was written as, siblings or

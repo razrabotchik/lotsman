@@ -48,12 +48,16 @@ type inputBuild struct {
 	diagnostics []domain.Diagnostic
 	rejections  []domain.ReasonCode
 	blockers    []domain.ReasonCode
+	// declared is every merged parameter, refused ones included, in IR order.
+	declared []domain.DeclaredParameter
 }
 
 // buildInput normalizes merged path+operation parameters into the IR's input
 // model, resolving the location-dependent style/explode defaults and refusing
-// everything it cannot serialize exactly.
-func buildInput(merged map[paramKey]*v3.Parameter, replaced map[paramKey]domain.Schema, pointer string, defs *bundle) inputBuild {
+// everything it cannot serialize exactly. componentOf (nil allowed) names the
+// root component a parameter's schema references, for the declared list.
+func buildInput(merged map[paramKey]*v3.Parameter, replaced map[paramKey]domain.Schema, pointer string,
+	defs *bundle, componentOf func(*base.SchemaProxy) string) inputBuild {
 	var out inputBuild
 
 	for _, key := range sortedParamKeys(merged) {
@@ -61,8 +65,24 @@ func buildInput(merged map[paramKey]*v3.Parameter, replaced map[paramKey]domain.
 		paramPointer := fmt.Sprintf("%s/parameters/%s/%s", pointer, key.in, key.name)
 
 		in := domain.ParameterLocation(source.In)
+		// Until the style is known it is declared as "" with explode false.
+		var style domain.ParameterStyle
+		var explode bool
+		declare := func(reason domain.ReasonCode) {
+			component := ""
+			if componentOf != nil {
+				component = componentOf(source.Schema)
+			}
+			out.declared = append(out.declared, domain.DeclaredParameter{
+				Name: source.Name, In: in, Style: style, Explode: explode,
+				Required:  source.Required != nil && *source.Required,
+				Component: component, Reason: reason,
+			})
+		}
+
 		_, knownLocation := locationOrder[in]
 		if key.name == "" || !knownLocation {
+			declare(domain.ReasonInvalidParameter)
 			out.reject(domain.ReasonInvalidParameter, paramPointer,
 				fmt.Sprintf("parameter %q has no name or an unknown location %q", key.name, key.in))
 			continue
@@ -75,30 +95,32 @@ func buildInput(merged map[paramKey]*v3.Parameter, replaced map[paramKey]domain.
 			// not describe the API. Every other string a document contributes
 			// to a model's context is sanitized and bounded; this is the one
 			// that cannot be, so the operation goes instead.
+			declare(domain.ReasonInvalidParameter)
 			out.reject(domain.ReasonInvalidParameter, paramPointer,
 				fmt.Sprintf("parameter name in %q %s and cannot be published", in, why))
 			continue
 		}
 
-		style := domain.ParameterStyle(source.Style)
+		style = domain.ParameterStyle(source.Style)
 		if style == "" {
 			style = domain.DefaultStyle(in)
 		}
+		explode = domain.DefaultExplode(style)
+		if source.Explode != nil {
+			explode = *source.Explode
+		}
 		if style != serializableStyle[in] {
+			declare(domain.ReasonUnsupportedParameterStyle)
 			out.reject(domain.ReasonUnsupportedParameterStyle, paramPointer,
 				fmt.Sprintf("style %q in %q is not serialized; only %q is", style, in, serializableStyle[in]))
 			continue
-		}
-
-		explode := domain.DefaultExplode(style)
-		if source.Explode != nil {
-			explode = *source.Explode
 		}
 
 		if in == domain.LocationHeader && domain.IsProtectedHeader(key.name) {
 			// A spec that parameterizes Authorization, Host or Content-Type is
 			// asking the model to control the transport or to supply its own
 			// credentials. That is not a translation lotsman makes.
+			declare(domain.ReasonInvalidParameter)
 			out.reject(domain.ReasonInvalidParameter, paramPointer, fmt.Sprintf(
 				"header parameter %q controls the transport or lotsman's own credentials and is never settable", key.name))
 			continue
@@ -114,6 +136,7 @@ func buildInput(merged map[paramKey]*v3.Parameter, replaced map[paramKey]domain.
 			schema, reason = parameterSchema(source, defs)
 		}
 		if reason != "" {
+			declare(reason)
 			out.reject(reason, paramPointer,
 				fmt.Sprintf("parameter %q in %q: %s", key.name, in, schemaReasonText(reason)))
 			continue
@@ -122,6 +145,7 @@ func buildInput(merged map[paramKey]*v3.Parameter, replaced map[paramKey]domain.
 		if !implementedLocations[in] {
 			out.block(domain.ReasonParametersNotImplemented)
 		}
+		declare("")
 
 		out.model.Parameters = append(out.model.Parameters, domain.Parameter{
 			Name:          source.Name,

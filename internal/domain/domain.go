@@ -65,6 +65,14 @@ type Operation struct {
 	// Corrections are the operator's changes to what the document says,
 	// in the order they were applied. Empty for an uncorrected operation.
 	Corrections []Correction `json:"corrections,omitempty"`
+	// RequestMediaTypes are the media types the request body declares,
+	// normalized and sorted, whether or not one could be chosen.
+	RequestMediaTypes []string `json:"requestMediaTypes,omitempty"`
+	// DeclaredParameters are all merged parameters, refused ones included.
+	DeclaredParameters []DeclaredParameter `json:"declaredParameters,omitempty"`
+	// BodyComponent is the root component the body schema references
+	// directly, or "".
+	BodyComponent string `json:"bodyComponent,omitempty"`
 	// Security is the effective security after operation->root inheritance:
 	// alternatives are OR, requirements inside one alternative are AND
 	// (FR-55/56). An empty slice means the operation is public, which an
@@ -395,6 +403,22 @@ type Parameter struct {
 	Description   string `json:"description,omitempty"` // untrusted, sanitized downstream
 	// Schema is the JSON Schema 2020-12 fragment describing the argument.
 	Schema Schema `json:"schema"`
+}
+
+// DeclaredParameter is a parameter as the document (and any correction)
+// declares it, whether or not lotsman could translate it. Input.Parameters
+// holds only the translatable ones; a workbench that is to offer a fix for a
+// refused parameter has to be able to see it.
+type DeclaredParameter struct {
+	Name     string            `json:"name"`
+	In       ParameterLocation `json:"in"`
+	Style    ParameterStyle    `json:"style"`
+	Explode  bool              `json:"explode"`
+	Required bool              `json:"required"`
+	// Component is the root component the schema references directly, or "".
+	Component string `json:"component,omitempty"`
+	// Reason is why the parameter was refused, or "" when it was translated.
+	Reason ReasonCode `json:"reason,omitempty"`
 }
 
 // protectedHeaders are header names a spec may not hand to a model.

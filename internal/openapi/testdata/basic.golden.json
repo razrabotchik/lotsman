@@ -39,6 +39,29 @@
         "source": "http_method",
         "confidence": "inferred"
       },
+      "declaredParameters": [
+        {
+          "name": "limit",
+          "in": "query",
+          "style": "form",
+          "explode": true,
+          "required": false
+        },
+        {
+          "name": "sort",
+          "in": "query",
+          "style": "form",
+          "explode": true,
+          "required": false
+        },
+        {
+          "name": "tags",
+          "in": "query",
+          "style": "form",
+          "explode": true,
+          "required": false
+        }
+      ],
       "input": {
         "parameters": [
           {
@@ -102,6 +125,9 @@
         "source": "http_method",
         "confidence": "inferred"
       },
+      "requestMediaTypes": [
+        "application/json"
+      ],
       "input": {
         "body": {
           "mediaType": "application/json",
@@ -134,6 +160,22 @@
         "source": "http_method",
         "confidence": "inferred"
       },
+      "declaredParameters": [
+        {
+          "name": "petId",
+          "in": "path",
+          "style": "simple",
+          "explode": false,
+          "required": true
+        },
+        {
+          "name": "verbose",
+          "in": "query",
+          "style": "form",
+          "explode": true,
+          "required": false
+        }
+      ],
       "input": {
         "parameters": [
           {
@@ -173,6 +215,15 @@
         "source": "http_method",
         "confidence": "inferred"
       },
+      "declaredParameters": [
+        {
+          "name": "petId",
+          "in": "path",
+          "style": "simple",
+          "explode": false,
+          "required": true
+        }
+      ],
       "input": {
         "parameters": [
           {
