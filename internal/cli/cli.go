@@ -56,6 +56,7 @@ const usage = `lotsman — security-first OpenAPI → MCP runtime. Lotsman doesn
 Usage:
   lotsman serve SPEC       Serve an OpenAPI document as MCP tools (stdio, or --transport=http)
   lotsman inspect SPEC     What lotsman makes of a document, and why (--json for CI)
+                           [--diff-against OLD.yaml]  compare --config with an older configuration
   lotsman validate SPEC    Is this document usable? The exit code is the answer
   lotsman operations SPEC  One line per operation: effect, support, executable
   lotsman explain-call OP  What a call would do — without making it

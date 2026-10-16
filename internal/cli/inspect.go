@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -16,6 +17,7 @@ import (
 	"github.com/razrabotchik/lotsman/internal/domain"
 	"github.com/razrabotchik/lotsman/internal/errs"
 	"github.com/razrabotchik/lotsman/internal/redact"
+	"github.com/razrabotchik/lotsman/internal/workbench"
 )
 
 // maxListedIssues bounds the human report's issue list.
@@ -89,9 +91,17 @@ func inspect(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	configPath := fs.String("config", "", "configuration file (auth profiles, execution settings)")
 	mode := fs.String("mode", "", "catalog mode: tools|search|auto (default auto)")
 	failOnRejected := fs.Bool("fail-on-rejected", false, "exit non-zero when any operation is rejected (CI helper)")
+	diffAgainst := fs.String("diff-against", "", "compare --config with an older configuration file and print what changes (CI)")
 	spec, err := parseWithTrailingSpec(fs, args)
 	if err != nil {
 		return exitUsage
+	}
+	if *diffAgainst != "" {
+		if *failOnRejected {
+			fmt.Fprintln(stderr, "lotsman: inspect --diff-against cannot be combined with --fail-on-rejected (the comparison does not gate on rejections)")
+			return exitUsage
+		}
+		return inspectDiff(ctx, spec, *configPath, *diffAgainst, *asJSON, stdout, stderr)
 	}
 	// The configuration is read first, because it may name the document and
 	// the directory references resolve against. `inspect` that disagreed with
@@ -454,4 +464,59 @@ func blockedWord(blocked bool) string {
 		return "blocked"
 	}
 	return "ALLOWED"
+}
+
+// inspectDiff is the workbench's comparison for CI: what a configuration
+// change fixes, breaks, alters and widens (spec §3).
+func inspectDiff(ctx context.Context, spec, newPath, oldPath string, asJSON bool, stdout, stderr io.Writer) int {
+	if newPath == "" {
+		fmt.Fprintln(stderr, "lotsman: inspect --diff-against needs --config (the new configuration)")
+		return exitUsage
+	}
+	read := func(path string) (*workbench.Snapshot, bool) {
+		// #nosec G304 -- operator-supplied CLI arguments.
+		data, err := os.ReadFile(path)
+		if err != nil {
+			fmt.Fprintf(stderr, "lotsman: [usage] cannot read %s\n", path)
+			return nil, false
+		}
+		snap, _, _ := evaluate(ctx, data, pipelineInputs{configPath: path, spec: spec})
+		if snap.SpecError != "" || snap.ConfigError != "" {
+			fmt.Fprintf(stderr, "lotsman: [usage] %s: %s\n", path, firstNonEmpty(snap.ConfigError, snap.SpecError))
+			return nil, false
+		}
+		return snap, true
+	}
+	before, ok := read(oldPath)
+	if !ok {
+		return exitUsage
+	}
+	after, ok := read(newPath)
+	if !ok {
+		return exitUsage
+	}
+	cmp := workbench.Compare(before, after)
+	workbench.SortWidening(cmp.Widening)
+	if asJSON {
+		if err := newJSONEncoder(stdout).Encode(cmp); err != nil {
+			fmt.Fprintf(stderr, "lotsman: %v\n", err)
+			return exitError
+		}
+		return exitOK
+	}
+	fmt.Fprintf(stdout, "changes   %d fixed, %d broken, %d altered\n",
+		cmp.Summary.Fixed, cmp.Summary.Broken, cmp.Summary.Altered)
+	for _, c := range cmp.Changes {
+		fmt.Fprintf(stdout, "%-8s  %s (%s → %s)\n", c.Kind, c.Key, c.Before, c.After)
+		for _, w := range c.Warnings {
+			fmt.Fprintf(stdout, "          %s: %s\n", w.Field, w.Message)
+		}
+	}
+	for _, w := range cmp.Widening {
+		fmt.Fprintf(stdout, "widening  %s\n", w.Message)
+	}
+	for _, p := range after.Problems {
+		fmt.Fprintf(stdout, "problem   %s[%d]: %s\n", p.Section, p.Index, p.Message)
+	}
+	return exitOK
 }
