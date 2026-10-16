@@ -395,7 +395,8 @@ func buildOperation(method string, op *v3.Operation, in pathScope, scope documen
 
 	pointer := operationPointer(method, path)
 	fix := scope.fixes.forOperation(method, path, op.OperationId)
-	merged := mergeParameters(in.params, op.Parameters)
+	merged, replaced := scope.fixes.applyParameters(fix,
+		mergeParameters(in.params, op.Parameters), &result)
 
 	result.Effect = policy.Decide(policy.Candidate{
 		Method:       method,
@@ -408,7 +409,7 @@ func buildOperation(method string, op *v3.Operation, in pathScope, scope documen
 	// components they both reference, and a tool's input schema is a
 	// standalone document that has to carry its own $defs.
 	defs := newBundle()
-	input := buildInput(merged, pointer, defs)
+	input := buildInput(merged, replaced, pointer, defs)
 	result.Input = input.model
 	result.Diagnostics = append(result.Diagnostics, input.diagnostics...)
 	result.ExecutionBlockers = append(result.ExecutionBlockers, input.blockers...)

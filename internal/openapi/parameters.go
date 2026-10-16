@@ -53,7 +53,7 @@ type inputBuild struct {
 // buildInput normalizes merged path+operation parameters into the IR's input
 // model, resolving the location-dependent style/explode defaults and refusing
 // everything it cannot serialize exactly.
-func buildInput(merged map[paramKey]*v3.Parameter, pointer string, defs *bundle) inputBuild {
+func buildInput(merged map[paramKey]*v3.Parameter, replaced map[paramKey]domain.Schema, pointer string, defs *bundle) inputBuild {
 	var out inputBuild
 
 	for _, key := range sortedParamKeys(merged) {
@@ -104,7 +104,15 @@ func buildInput(merged map[paramKey]*v3.Parameter, pointer string, defs *bundle)
 			continue
 		}
 
-		schema, reason := parameterSchema(source, defs)
+		var schema domain.Schema
+		var reason domain.ReasonCode
+		if correctedSchema, ok := replaced[key]; ok {
+			// The operator's schema replaces the document's; it still has to be
+			// something a URL or header value can carry.
+			schema, reason = correctedSchema, checkShape(schemaTypes(correctedSchema), correctedSchema, parameterTarget)
+		} else {
+			schema, reason = parameterSchema(source, defs)
+		}
 		if reason != "" {
 			out.reject(reason, paramPointer,
 				fmt.Sprintf("parameter %q in %q: %s", key.name, in, schemaReasonText(reason)))

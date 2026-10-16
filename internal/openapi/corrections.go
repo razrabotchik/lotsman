@@ -259,3 +259,45 @@ func schemaTypes(s domain.Schema) []string {
 	}
 	return nil
 }
+
+// applyParameters returns the operation's parameters as corrected, and the
+// schemas that replace the document's. The document's parameters are never
+// written to: a path-level parameter is shared by every operation under its
+// path, and a correction names one.
+func (f *fixes) applyParameters(c *OperationCorrection, merged map[paramKey]*v3.Parameter,
+	result *domain.Operation) (map[paramKey]*v3.Parameter, map[paramKey]domain.Schema) {
+	if c == nil || len(c.Parameters) == 0 {
+		return merged, nil
+	}
+	out := make(map[paramKey]*v3.Parameter, len(merged))
+	for key, p := range merged {
+		out[key] = p
+	}
+	replaced := map[paramKey]domain.Schema{}
+	for i := range c.Parameters {
+		pc := &c.Parameters[i]
+		key := paramKey{pc.Name, pc.In}
+		source, ok := out[key]
+		if !ok {
+			f.problem("operationOverrides", c.Index, "parameters[%d]: %s %s declares no parameter %q in %q",
+				i, result.Method, result.PathTemplate, pc.Name, pc.In)
+			continue
+		}
+		copied := *source
+		if pc.Required != nil {
+			copied.Required = pc.Required
+		}
+		if pc.Style != "" {
+			copied.Style = pc.Style
+		}
+		if pc.Explode != nil {
+			copied.Explode = pc.Explode
+		}
+		out[key] = &copied
+		if pc.Schema != nil {
+			replaced[key] = cloneSchema(pc.Schema)
+		}
+		result.Corrections = append(result.Corrections, correction("parameter "+pc.In+"/"+pc.Name, c.Note))
+	}
+	return out, replaced
+}
