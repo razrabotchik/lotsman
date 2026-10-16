@@ -14,8 +14,14 @@ import (
 // Comments live on the nodes, so everything the workbench does not touch is
 // written back as the person wrote it.
 func document(data []byte, spec string) (*yaml.Node, error) {
-	if len(bytes.TrimSpace(data)) == 0 {
-		root := &yaml.Node{Kind: yaml.MappingNode}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, err
+	}
+	if doc.Kind == 0 && len(doc.Content) == 0 {
+		// Empty, or only comments (the parser drops those): a new
+		// configuration that keeps what the person wrote at the top.
+		root := &yaml.Node{Kind: yaml.MappingNode, HeadComment: strings.TrimSpace(string(data))}
 		setKey(root, "apiVersion", scalar(config.APIVersion))
 		if spec != "" {
 			specNode := &yaml.Node{Kind: yaml.MappingNode}
@@ -23,10 +29,6 @@ func document(data []byte, spec string) (*yaml.Node, error) {
 			setKey(root, "spec", specNode)
 		}
 		return &yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{root}}, nil
-	}
-	var doc yaml.Node
-	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, err
 	}
 	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
 		return nil, errNotMapping

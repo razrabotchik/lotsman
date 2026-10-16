@@ -124,8 +124,83 @@ func EntryID(e Entry) string {
 	}
 }
 
+// resolve makes an entry name its target once: the entry's match and the
+// override's own match must agree (one fills the other when only one is
+// given), and an operation that already has an override in the draft is
+// matched the way that override is written, so editing it updates the entry
+// instead of appending a second one for the same operation.
+func resolve(e *Entry, draft *Snapshot) error {
+	switch e.Kind {
+	case "operation":
+		if e.Operation != nil {
+			op := *e.Operation
+			e.Operation = &op
+		}
+		if e.Match != nil && e.Operation != nil && e.Operation.Match != (config.Match{}) && !sameMatch(*e.Match, e.Operation.Match) {
+			return fmt.Errorf("%w: entry match and operation match disagree", ErrRejected)
+		}
+		var match *config.Match
+		switch {
+		case e.Match != nil:
+			m := *e.Match
+			match = &m
+		case e.Operation != nil && e.Operation.Match != (config.Match{}):
+			m := e.Operation.Match
+			match = &m
+		}
+		if existing := overrideOf(draft, e.OperationKey); existing != nil {
+			m := existing.Match
+			match = &m
+		}
+		if match == nil || *match == (config.Match{}) {
+			return fmt.Errorf("%w: an operation entry needs a match", ErrRejected)
+		}
+		e.Match = match
+		if e.Operation != nil {
+			e.Operation.Match = *match
+		}
+	case "component":
+		if e.Component != nil {
+			c := *e.Component
+			e.Component = &c
+		}
+		if e.Schema != "" && e.Component != nil && e.Component.Match.Schema != "" && e.Schema != e.Component.Match.Schema {
+			return fmt.Errorf("%w: entry schema and component match disagree", ErrRejected)
+		}
+		if e.Schema == "" && e.Component != nil {
+			e.Schema = e.Component.Match.Schema
+		}
+		if e.Schema == "" {
+			return fmt.Errorf("%w: a component entry needs a schema", ErrRejected)
+		}
+		if e.Component != nil {
+			e.Component.Match.Schema = e.Schema
+		}
+	}
+	return nil
+}
+
+// overrideOf is the operationOverrides entry the draft applies to the
+// operation with this key, if any.
+func overrideOf(draft *Snapshot, key string) *config.OperationOverride {
+	if draft == nil || key == "" {
+		return nil
+	}
+	for i := range draft.Operations {
+		if draft.Operations[i].Key == key {
+			return draft.Operations[i].Override
+		}
+	}
+	return nil
+}
+
 // draftBytes renders the disk configuration with every pending entry applied.
 func (w *Workbench) draftBytes(entries map[string]Entry, order []string) ([]byte, error) {
+	if len(order) == 0 && len(w.disk) > 0 {
+		// Nothing pending: the file as it is, even one the workbench could
+		// not edit (the snapshot reports why).
+		return w.disk, nil
+	}
 	doc, err := document(w.disk, w.spec)
 	if err != nil {
 		return nil, err
@@ -136,9 +211,6 @@ func (w *Workbench) draftBytes(entries map[string]Entry, order []string) ([]byte
 		if err := applyEntry(root, &e); err != nil {
 			return nil, err
 		}
-	}
-	if len(order) == 0 && len(w.disk) > 0 {
-		return w.disk, nil
 	}
 	return render(doc)
 }
@@ -156,8 +228,10 @@ func applyEntry(root *yaml.Node, e *Entry) error {
 			return errors.New("an operation entry needs the operation's override")
 		}
 		seq := sequence(root, "operationOverrides", !e.Remove)
-		err := upsert(seq, func(item *yaml.Node) bool { return sameMatch(matchOf(item), match) }, e.Remove, e.Operation)
-		dropEmpty(root, "operationOverrides", seq)
+		removed, err := upsert(seq, func(item *yaml.Node) bool { return sameMatch(matchOf(item), match) }, e.Remove, e.Operation)
+		if removed {
+			dropEmpty(root, "operationOverrides", seq)
+		}
 		return err
 	case "component":
 		name := e.Schema
@@ -168,12 +242,14 @@ func applyEntry(root *yaml.Node, e *Entry) error {
 			return errors.New("a component entry needs the component's override")
 		}
 		seq := sequence(root, "componentOverrides", !e.Remove)
-		err := upsert(seq, func(item *yaml.Node) bool {
+		removed, err := upsert(seq, func(item *yaml.Node) bool {
 			var c config.ComponentOverride
 			_ = item.Decode(&c)
 			return c.Match.Schema == name
 		}, e.Remove, e.Component)
-		dropEmpty(root, "componentOverrides", seq)
+		if removed {
+			dropEmpty(root, "componentOverrides", seq)
+		}
 		return err
 	case "overlays":
 		_, specNode := lookup(root, "spec")
@@ -203,9 +279,11 @@ func dropEmpty(root *yaml.Node, key string, seq *yaml.Node) {
 	}
 }
 
-func upsert(seq *yaml.Node, is func(*yaml.Node) bool, remove bool, desired any) error {
+// upsert replaces, removes or appends the item is picks; removed reports
+// whether an item was actually taken out.
+func upsert(seq *yaml.Node, is func(*yaml.Node) bool, remove bool, desired any) (removed bool, err error) {
 	if seq == nil {
-		return nil
+		return false, nil
 	}
 	for i, item := range seq.Content {
 		if !is(item) {
@@ -213,24 +291,24 @@ func upsert(seq *yaml.Node, is func(*yaml.Node) bool, remove bool, desired any) 
 		}
 		if remove {
 			seq.Content = append(seq.Content[:i], seq.Content[i+1:]...)
-			return nil
+			return true, nil
 		}
-		node, err := encode(desired)
-		if err != nil {
-			return err
+		node, encErr := encode(desired)
+		if encErr != nil {
+			return false, encErr
 		}
 		mergeInto(item, node)
-		return nil
+		return false, nil
 	}
 	if remove {
-		return nil
+		return false, nil
 	}
 	node, err := encode(desired)
 	if err != nil {
-		return err
+		return false, err
 	}
 	seq.Content = append(seq.Content, node)
-	return nil
+	return false, nil
 }
 
 // State evaluates the current draft.
@@ -241,13 +319,20 @@ func (w *Workbench) State(ctx context.Context) (*State, error) {
 }
 
 func (w *Workbench) state(ctx context.Context, entries map[string]Entry, order []string) (*State, error) {
+	st, _, err := w.evaluate(ctx, entries, order)
+	return st, err
+}
+
+// evaluate renders the draft and evaluates it, returning the bytes it
+// evaluated so a save writes exactly what was checked.
+func (w *Workbench) evaluate(ctx context.Context, entries map[string]Entry, order []string) (*State, []byte, error) {
 	data, err := w.draftBytes(entries, order)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	draft, err := w.pipe.Evaluate(ctx, data)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	cmp := Compare(w.base, draft)
 	SortWidening(cmp.Widening)
@@ -258,7 +343,7 @@ func (w *Workbench) state(ctx context.Context, entries map[string]Entry, order [
 	for _, id := range order {
 		st.Entries = append(st.Entries, entries[id])
 	}
-	return st, nil
+	return st, data, nil
 }
 
 // Apply adds or replaces one pending entry. An entry that makes the
@@ -269,12 +354,15 @@ func (w *Workbench) state(ctx context.Context, entries map[string]Entry, order [
 func (w *Workbench) Apply(ctx context.Context, e Entry) (*State, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	e.ID = EntryID(e)
-	entries, order := w.with(&e)
 	before, err := w.state(ctx, w.entries, w.order)
 	if err != nil {
 		return nil, err
 	}
+	if err = resolve(&e, before.Draft); err != nil {
+		return before, err
+	}
+	e.ID = EntryID(e)
+	entries, order := w.with(&e)
 	after, err := w.state(ctx, entries, order)
 	if err != nil {
 		return nil, err
@@ -348,14 +436,10 @@ func (w *Workbench) Diff() (string, error) {
 func (w *Workbench) Save(ctx context.Context, acknowledged []string) (*State, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	current, err := os.ReadFile(w.path)
-	if err != nil && !os.IsNotExist(err) {
+	if err := w.unchangedOnDisk(); err != nil {
 		return nil, err
 	}
-	if hashOf(current) != w.diskHash {
-		return nil, ErrChanged
-	}
-	st, err := w.state(ctx, w.entries, w.order)
+	st, data, err := w.evaluate(ctx, w.entries, w.order)
 	if err != nil {
 		return nil, err
 	}
@@ -371,9 +455,9 @@ func (w *Workbench) Save(ctx context.Context, acknowledged []string) (*State, er
 			return st, fmt.Errorf("%w: %s", ErrUnacknowledged, wd.Message)
 		}
 	}
-	data, err := w.draftBytes(w.entries, w.order)
-	if err != nil {
-		return nil, err
+	// The pipeline ran in between: look again right before replacing.
+	if err := w.unchangedOnDisk(); err != nil {
+		return st, err
 	}
 	if err := writeAtomic(w.path, data); err != nil {
 		return nil, err
@@ -383,6 +467,19 @@ func (w *Workbench) Save(ctx context.Context, acknowledged []string) (*State, er
 		return nil, err
 	}
 	return w.state(ctx, w.entries, w.order)
+}
+
+// unchangedOnDisk refuses when the file is no longer the one the draft is
+// based on.
+func (w *Workbench) unchangedOnDisk() error {
+	current, err := os.ReadFile(w.path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if hashOf(current) != w.diskHash {
+		return ErrChanged
+	}
+	return nil
 }
 
 // Reload re-reads the file on disk and re-applies the pending entries.
