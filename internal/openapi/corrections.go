@@ -150,6 +150,14 @@ func (f *fixes) checkComponents(schemas *orderedmap.Map[string, *base.SchemaProx
 		c := &f.corrections.Components[i]
 		if schemas != nil {
 			if proxy, ok := schemas.Get(c.Schema); ok {
+				if ref, isRef := authoredReference(proxy); isRef {
+					// An alias has no schema of its own to patch: references
+					// to it resolve through to the target, so a patch here
+					// would match nothing and say nothing.
+					f.problem("componentOverrides", c.Index,
+						"schema %q is a reference to %s; patch the component it points to instead", c.Schema, ref)
+					continue
+				}
 				if node := sourceNode(proxy); node != nil {
 					f.roots[node] = c
 				}
@@ -172,6 +180,21 @@ func (f *fixes) forComponent(proxy *base.SchemaProxy) *ComponentCorrection {
 		return nil
 	}
 	return f.roots[node]
+}
+
+// authoredReference returns the $ref a schema was written as, siblings or
+// not, whichever way the parser presents it.
+func authoredReference(proxy *base.SchemaProxy) (string, bool) {
+	if proxy == nil {
+		return "", false
+	}
+	if proxy.IsReference() {
+		return proxy.GetReference(), true
+	}
+	if low := proxy.GoLow(); low != nil && low.IsTransformedRefWithSiblings() {
+		return low.GetTransformedRefReference(), true
+	}
+	return "", false
 }
 
 // sourceNode is the YAML node a schema was parsed from: for a reference, the
