@@ -101,6 +101,16 @@ func inspect(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "lotsman: inspect --diff-against cannot be combined with --fail-on-rejected (the comparison does not gate on rejections)")
 			return exitUsage
 		}
+		// The comparison evaluates both files as written: a flag that would
+		// change one side of it is refused rather than silently ignored.
+		set := map[string]bool{}
+		fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+		for _, name := range []string{"allow-mutations", "mode"} {
+			if set[name] {
+				fmt.Fprintf(stderr, "lotsman: inspect --diff-against cannot be combined with --%s (the comparison evaluates both configuration files as written)\n", name)
+				return exitUsage
+			}
+		}
 		return inspectDiff(ctx, spec, *configPath, *diffAgainst, *asJSON, stdout, stderr)
 	}
 	// The configuration is read first, because it may name the document and

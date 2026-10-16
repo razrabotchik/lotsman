@@ -359,4 +359,22 @@ operationOverrides:
 	if _, stderr, code = runCLI(t, "inspect", "--diff-against", old); code == 0 {
 		t.Fatalf("--diff-against without --config succeeded: %s", stderr)
 	}
+	// Flags that would change one side of the comparison are refused, not
+	// ignored.
+	for _, extra := range [][]string{{"--allow-mutations"}, {"--mode", "tools"}, {"--fail-on-rejected"}} {
+		args := append([]string{"inspect", "--config", newer, "--diff-against", old}, extra...)
+		if _, stderr, code = runCLI(t, args...); code != 2 || !strings.Contains(stderr, "cannot be combined with "+extra[0]) {
+			t.Errorf("%v: exit %d, stderr %q", extra, code, stderr)
+		}
+	}
+}
+
+// The workbench re-reads the document on every change, which standard input
+// cannot give it.
+func TestUIRefusesStandardInput(t *testing.T) {
+	t.Parallel()
+	_, stderr, code := runCLI(t, "ui", "--no-open", "-")
+	if code != 2 || !strings.Contains(stderr, "standard input") {
+		t.Fatalf("exit %d, stderr %q", code, stderr)
+	}
 }

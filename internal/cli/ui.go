@@ -26,6 +26,10 @@ func uiCommand(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	if err != nil {
 		return exitUsage
 	}
+	if spec == "-" {
+		fmt.Fprintln(stderr, "lotsman: ui: the workbench re-reads the document on every change; pass a file or URL, not - (standard input)")
+		return exitUsage
+	}
 	path := *configPath
 	if path == "" {
 		path = "lotsman.yaml"
@@ -40,7 +44,7 @@ func uiCommand(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	// A new configuration names the document relative to itself, so it means
 	// the same thing from any directory.
 	sourceForNew := spec
-	if spec != "" && spec != "-" {
+	if spec != "" {
 		if abs, absErr := filepath.Abs(spec); absErr == nil {
 			if rel, relErr := filepath.Rel(filepath.Dir(path), abs); relErr == nil {
 				sourceForNew = rel
