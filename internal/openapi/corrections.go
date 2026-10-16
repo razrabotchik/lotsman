@@ -97,7 +97,8 @@ func newFixes(c Corrections) *fixes {
 		components:  make(map[string]*ComponentCorrection, len(c.Components)),
 		roots:       map[*yaml.Node]*ComponentCorrection{},
 	}
-	// A copy, so normalizing never writes into the caller's Options.
+	// Copies, so normalizing never writes into the caller's Options.
+	f.corrections.Components = append([]ComponentCorrection(nil), c.Components...)
 	f.corrections.Operations = append([]OperationCorrection(nil), c.Operations...)
 	for i := range f.corrections.Operations {
 		f.corrections.Operations[i].MediaType = normalizeMediaType(f.corrections.Operations[i].MediaType)
@@ -105,7 +106,75 @@ func newFixes(c Corrections) *fixes {
 	for i := range f.corrections.Components {
 		f.components[componentPointer(f.corrections.Components[i].Schema)] = &f.corrections.Components[i]
 	}
+	f.refuseUnreadablePatches()
 	return f
+}
+
+// refuseUnreadablePatches records a problem for, and drops, any patch holding
+// a mapping whose keys are not all strings or a key starting with `$`.
+//
+// Configuration refuses both before this package sees them; this is the same
+// refusal again, because a mapping the merge does not recognize as an object
+// would be copied into a published schema unread -- a `$ref` under it
+// included. A patch that cannot be read is not applied at all.
+func (f *fixes) refuseUnreadablePatches() {
+	for i := range f.corrections.Components {
+		c := &f.corrections.Components[i]
+		if at := unreadable(c.Patch, "patch"); at != "" {
+			f.problem("componentOverrides", c.Index, "%s", at)
+			c.Patch = domain.Schema{}
+		}
+	}
+	for i := range f.corrections.Operations {
+		c := &f.corrections.Operations[i]
+		if at := unreadable(c.BodyPatch, "requestBody.patch"); at != "" {
+			f.problem("operationOverrides", c.Index, "%s", at)
+			c.BodyPatch = nil
+		}
+		// A copy: the caller's parameter list is not ours to write.
+		c.Parameters = append([]ParameterCorrection(nil), c.Parameters...)
+		for j := range c.Parameters {
+			if at := unreadable(c.Parameters[j].Schema, fmt.Sprintf("parameters[%d].schema", j)); at != "" {
+				f.problem("operationOverrides", c.Index, "%s", at)
+				c.Parameters[j].Schema = nil
+			}
+		}
+	}
+}
+
+// unreadable describes the first key of v, in sorted order, that a patch may
+// not hold, or returns "" when there is none.
+func unreadable(v any, at string) string {
+	if m, ok := asObject(v); ok {
+		for _, key := range sortedKeys(m) {
+			if strings.HasPrefix(key, "$") {
+				return fmt.Sprintf("%s: %q is not allowed in a correction", at, key)
+			}
+			if problem := unreadable(m[key], at+"."+key); problem != "" {
+				return problem
+			}
+		}
+		return ""
+	}
+	if list, ok := v.([]any); ok {
+		for i := range list {
+			if problem := unreadable(list[i], fmt.Sprintf("%s[%d]", at, i)); problem != "" {
+				return problem
+			}
+		}
+		return ""
+	}
+	if isForeignMap(v) {
+		return fmt.Sprintf("%s: a mapping whose keys are not all strings is not a JSON Schema object", at)
+	}
+	return ""
+}
+
+// isForeignMap reports a map that is not a JSON object: one keyed by
+// anything other than strings.
+func isForeignMap(v any) bool {
+	rv := reflect.ValueOf(v)
+	return rv.Kind() == reflect.Map && rv.Type().Key().Kind() != reflect.String
 }
 
 func componentPointer(name string) string { return "#/components/schemas/" + name }
@@ -391,6 +460,13 @@ func cloneValue(v any) any {
 	default:
 		if m, ok := asObject(v); ok {
 			return map[string]any(cloneSchema(m))
+		}
+		if isForeignMap(v) {
+			// Never copied: nothing below it was read. newFixes has already
+			// refused the patch that carried it; this is the backstop, and
+			// it fails closed -- a null where a keyword's object was does
+			// not compile, so the tool cannot be published.
+			return nil
 		}
 		return v
 	}

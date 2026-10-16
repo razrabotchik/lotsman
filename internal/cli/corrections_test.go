@@ -295,3 +295,93 @@ operationOverrides:
 		})
 	}
 }
+
+const nestedComponentSpec = `openapi: 3.0.3
+info: { title: N, version: "1" }
+paths:
+  /pets:
+    post:
+      operationId: createPet
+      requestBody:
+        content: { application/json: { schema: { $ref: '#/components/schemas/Pet' } } }
+      responses: { "201": { description: ok } }
+components:
+  schemas:
+    Pet:
+      type: object
+      properties:
+        age: { type: integer }
+        owner:
+          type: object
+          properties:
+            name: { type: string }
+            phone: { type: integer }
+`
+
+// The whole path a component correction takes -- YAML, config.Parse,
+// correctionsFrom, openapi.Parse -- with a patch nested two objects deep: the
+// leaf changes, its siblings stay, and the published schema says so.
+func TestANestedComponentPatchReachesThePublishedSchema(t *testing.T) {
+	t.Parallel()
+	file, err := config.Parse([]byte(`apiVersion: lotsman.dev/v1alpha1
+componentOverrides:
+  - match: { schema: Pet }
+    patch:
+      properties:
+        owner:
+          properties:
+            phone: { type: string, pattern: "^[0-9+]+$" }
+          required: [name]
+    note: phones have a plus
+`))
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	runtime := config.Resolve(file, config.Environment{}, config.Overrides{})
+	doc, err := openapi.Parse(t.Context(), []byte(nestedComponentSpec), openapi.Options{Corrections: correctionsFrom(runtime)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.CorrectionProblems) != 0 {
+		t.Fatalf("problems = %v", doc.CorrectionProblems)
+	}
+	op := doc.Operations[0]
+	pet := op.Input.Defs["Pet"]
+	props, _ := pet["properties"].(map[string]any)
+	owner, _ := props["owner"].(map[string]any)
+	ownerProps, _ := owner["properties"].(map[string]any)
+	phone, _ := ownerProps["phone"].(map[string]any)
+	name, _ := ownerProps["name"].(map[string]any)
+	age, _ := props["age"].(map[string]any)
+	if phone["type"] != "string" || phone["pattern"] != "^[0-9+]+$" {
+		t.Fatalf("phone = %v (Pet = %v)", phone, pet)
+	}
+	if name["type"] != "string" || age["type"] != "integer" {
+		t.Fatalf("siblings were replaced rather than merged: Pet = %v", pet)
+	}
+	if req, _ := owner["required"].([]any); len(req) != 1 || req[0] != "name" {
+		t.Fatalf("owner.required = %v", owner["required"])
+	}
+	if len(op.Corrections) != 1 || op.Corrections[0].Target != "component Pet" || op.Corrections[0].Note != "phones have a plus" {
+		t.Fatalf("corrections = %v", op.Corrections)
+	}
+}
+
+// A mapping with a non-string key once hid a $ref from every check, and the
+// schema compiler then read the file it named. The configuration refuses it.
+func TestInspectRefusesAPatchWithANonStringKey(t *testing.T) {
+	t.Parallel()
+	secret := filepath.Join(t.TempDir(), "secret.json")
+	writeTestFile(t, secret, `{"type":"string"}`)
+	_, stderr, code := runInspect(t, listItemsSpec, `apiVersion: lotsman.dev/v1alpha1
+componentOverrides:
+  - match: { schema: Pet }
+    patch:
+      properties:
+        1: { type: string }
+        age: { $ref: 'file://`+secret+`' }
+`)
+	if code != exitUsage || !strings.Contains(stderr, "key 1 is not a string") {
+		t.Fatalf("exit %d, stderr %s", code, stderr)
+	}
+}

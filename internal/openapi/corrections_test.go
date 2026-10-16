@@ -885,3 +885,52 @@ func FuzzMergePatchNeverWritesItsTarget(f *testing.F) {
 		}
 	})
 }
+
+// Configuration refuses a patch with a non-string key or a `$` keyword; the
+// adapter refuses it again, and never copies what it could not read into a
+// published schema.
+func TestAnUnreadablePatchIsRefusedNotCopied(t *testing.T) {
+	t.Parallel()
+	secret := map[string]any{"$ref": "file:///tmp/x/secret.json"}
+	cases := []struct {
+		name string
+		c    Corrections
+		want string
+	}{
+		{"non-string key in a component patch", Corrections{Components: []ComponentCorrection{{
+			Schema: "Pet", Patch: domain.Schema{"properties": map[any]any{1: map[string]any{"type": "string"}, "age": secret}},
+		}}}, "patch.properties: a mapping whose keys are not all strings"},
+		{"ref in a body patch", Corrections{Operations: []OperationCorrection{{
+			OperationID: "createPet", BodyPatch: domain.Schema{"properties": map[string]any{"age": secret}},
+		}}}, `requestBody.patch.properties.age: "$ref" is not allowed`},
+		{"non-string key in a body patch list", Corrections{Operations: []OperationCorrection{{
+			OperationID: "createPet", BodyPatch: domain.Schema{"allOf": []any{map[any]any{true: secret}}},
+		}}}, "requestBody.patch.allOf[0]: a mapping"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			doc := parseCorrected(t, sharedBody, tc.c)
+			section := "componentOverrides"
+			if len(tc.c.Operations) > 0 {
+				section = "operationOverrides"
+			}
+			oneProblem(t, doc, section, 0, tc.want)
+			raw, err := json.Marshal(doc.Operations)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(raw), "secret.json") {
+				t.Fatalf("the unread $ref reached the catalog: %s", raw)
+			}
+		})
+	}
+}
+
+func TestCloneValueNeverCopiesAForeignMap(t *testing.T) {
+	t.Parallel()
+	got := cloneSchema(domain.Schema{"properties": map[any]any{1: map[string]any{"$ref": "file:///x"}}})
+	if got["properties"] != nil {
+		t.Fatalf("properties = %#v, want nil", got["properties"])
+	}
+}

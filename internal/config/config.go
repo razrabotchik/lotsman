@@ -1070,16 +1070,30 @@ func validateComponentOverride(index int, c *ComponentOverride) error {
 // validatePatch refuses `$` keywords anywhere in a patch: `$ref` would reach
 // another document or component, `$defs` would redefine one, and neither is a
 // correction of what this schema says.
+//
+// It also refuses a mapping with a key that is not a string (`1:`, `true:`,
+// `null:`). YAML decodes such a mapping into a map this walk -- and every
+// later one -- would not recognize as an object, so whatever sits under it
+// would pass unread, a `$ref` included. JSON Schema keys are strings; quoting
+// the key says the same thing.
+//
+// Keys are walked in sorted order, so a patch with two offending keys always
+// reports the same one.
 func validatePatch(field string, value any) error {
 	switch v := value.(type) {
 	case Patch:
 		return validatePatch(field, map[string]any(v))
 	case map[string]any:
-		for key, nested := range v {
+		keys := make([]string, 0, len(v))
+		for key := range v {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
 			if strings.HasPrefix(key, "$") {
 				return fmt.Errorf("%s: %q is not allowed in a correction", field, key)
 			}
-			if err := validatePatch(field+"."+key, nested); err != nil {
+			if err := validatePatch(field+"."+key, v[key]); err != nil {
 				return err
 			}
 		}
@@ -1089,8 +1103,29 @@ func validatePatch(field string, value any) error {
 				return err
 			}
 		}
+	case map[any]any:
+		return fmt.Errorf("%s: key %s is not a string; quote it", field, firstNonStringKey(v))
 	}
 	return nil
+}
+
+// firstNonStringKey names, deterministically, a key of m that is not a string.
+func firstNonStringKey(m map[any]any) string {
+	var names []string
+	for key := range m {
+		switch key.(type) {
+		case string:
+		case nil:
+			names = append(names, "null")
+		default:
+			names = append(names, fmt.Sprintf("%v", key))
+		}
+	}
+	if len(names) == 0 {
+		return "of this mapping" // every key a string, in a map not typed as one
+	}
+	sort.Strings(names)
+	return names[0]
 }
 
 // knownEffect reports whether s is one of the domain's effect classes. The

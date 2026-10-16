@@ -44,6 +44,25 @@ operationOverrides:
 componentOverrides:
   - match: { schema: Pet }
     patch: { properties: { a: { $ref: '#/x' } } }`, `"$ref" is not allowed`},
+		{"non-string key hides a ref", `
+componentOverrides:
+  - match: { schema: Pet }
+    patch:
+      properties:
+        1: { type: string }
+        name: { $ref: 'file:///tmp/x/secret.json' }`, "patch.properties: key 1 is not a string"},
+		{"boolean key", `
+operationOverrides:
+  - match: { operationId: x }
+    requestBody: { patch: { properties: { true: { type: string } } } }`, "requestBody.patch.properties: key true is not a string"},
+		{"null key in a parameter schema", `
+operationOverrides:
+  - match: { operationId: x }
+    parameters: [{ name: id, in: query, schema: { items: { null: { type: string } } } }]`, "schema.items: key null is not a string"},
+		{"first offending key in sorted order", `
+componentOverrides:
+  - match: { schema: Pet }
+    patch: { properties: { b: { $ref: '#/b' }, a: { $id: x } } }`, `patch.properties.a: "$id" is not allowed`},
 		{"defs in a body patch", `
 operationOverrides:
   - match: { operationId: x }
