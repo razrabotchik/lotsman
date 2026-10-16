@@ -513,6 +513,13 @@ func Load(path string) (*File, error) {
 	if err != nil {
 		return nil, errs.Errorf(errs.ClassUsage, "config: cannot read %s", path)
 	}
+	return LoadBytes(data, path)
+}
+
+// LoadBytes validates a configuration that may not be on disk yet, as if it
+// were the file at path: relative paths resolve against path's directory.
+// The workbench evaluates drafts this way before writing them.
+func LoadBytes(data []byte, path string) (*File, error) {
 	file, err := Parse(data)
 	if err != nil {
 		return nil, err

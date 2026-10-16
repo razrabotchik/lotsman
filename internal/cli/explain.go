@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"fmt"
@@ -117,9 +118,21 @@ func readArguments(path string) (requestbuild.Arguments, error) {
 	}
 	// Decoded the way serve decodes a call, so the request line shows the
 	// number that would be sent rather than its float64 neighbour.
-	arguments, err := argvalidate.Decode(data)
+	arguments, err := decodeArguments(data)
 	if err != nil {
 		return nil, errs.Errorf(errs.ClassUsage, "explain-call: %s is not a JSON object of argument groups", path)
+	}
+	return arguments, nil
+}
+
+// decodeArguments decodes grouped arguments the way serve decodes a call.
+func decodeArguments(data []byte) (requestbuild.Arguments, error) {
+	if len(bytes.TrimSpace(data)) == 0 {
+		return requestbuild.Arguments{}, nil
+	}
+	arguments, err := argvalidate.Decode(data)
+	if err != nil {
+		return nil, errs.Errorf(errs.ClassUsage, "arguments are not a JSON object of argument groups")
 	}
 	return requestbuild.Arguments(arguments), nil
 }

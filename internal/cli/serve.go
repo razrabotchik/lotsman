@@ -469,6 +469,22 @@ func (d *specDoc) manifestDigest() string {
 //
 //nolint:gocritic // hugeParam: Runtime is resolved configuration, copied per call so no callee holds a pointer to the decision its caller already made.
 func parseSpec(ctx context.Context, spec string, runtime config.Runtime, logger *slog.Logger) (*specDoc, error) {
+	doc, err := loadDocument(ctx, spec, runtime, logger)
+	if err != nil {
+		return nil, err
+	}
+	if err := correctionError(doc.CorrectionProblems); err != nil {
+		return nil, err
+	}
+	return doc, nil
+}
+
+// loadDocument runs pipeline stages 0-1 and returns the document with its
+// correction problems still inside it. parseSpec is the failing form every
+// serving command uses; the workbench wants the problems as data.
+//
+//nolint:gocritic // hugeParam: see parseSpec.
+func loadDocument(ctx context.Context, spec string, runtime config.Runtime, logger *slog.Logger) (*specDoc, error) {
 	src, err := specsource.Load(ctx, spec, specsource.Options{})
 	if err != nil {
 		return nil, err
@@ -501,9 +517,6 @@ func parseSpec(ctx context.Context, spec string, runtime config.Runtime, logger 
 		Logger: logger, RootPath: rootPath, Corrections: correctionsFrom(runtime),
 	})
 	if err != nil {
-		return nil, err
-	}
-	if err := correctionError(doc.CorrectionProblems); err != nil {
 		return nil, err
 	}
 	// One exploded specification can produce hundreds of identical-looking
