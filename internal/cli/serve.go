@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync/atomic"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -286,6 +287,22 @@ func (w *watchSet) record(root string, references []domain.RefDocument, overlays
 	w.paths.Store(&paths)
 }
 
+// addOverlays adds overlay paths the set does not hold yet, keeping the rest:
+// a load that failed before it read the document's references still knows
+// which overlays the configuration names.
+func (w *watchSet) addOverlays(overlays []string) {
+	paths := append([]string(nil), w.documents()...)
+	for _, overlay := range overlays {
+		if !slices.Contains(paths, overlay) {
+			paths = append(paths, overlay)
+		}
+	}
+	if w.config != "" && !slices.Contains(paths, w.config) {
+		paths = append(paths, w.config)
+	}
+	w.paths.Store(&paths)
+}
+
 // documents is what the watcher asks for on each interval.
 func (w *watchSet) documents() []string {
 	if current := w.paths.Load(); current != nil {
@@ -301,6 +318,12 @@ func (w *watchSet) documents() []string {
 func loadCatalog(ctx context.Context, spec string, logger *slog.Logger, runtime config.Runtime, mode catalog.Mode, watched *watchSet) (*catalog.Catalog, error) {
 	doc, err := parseSpec(ctx, spec, runtime, logger)
 	if err != nil {
+		if watched != nil {
+			// The configuration was read, and the overlays it names are files
+			// the operator may be fixing right now -- a new, broken one
+			// included. They join what is already watched.
+			watched.addOverlays(runtime.Overlays)
+		}
 		return nil, err
 	}
 	if watched != nil {

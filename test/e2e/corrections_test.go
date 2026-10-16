@@ -236,10 +236,10 @@ operationOverrides:
   - { match: { operationId: hidden }, enabled: false }
 `)
 	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) && !strings.Contains(stderr.String(), "AllowMutations") {
+	for time.Now().Before(deadline) && !strings.Contains(stderr.String(), "execution.allowMutations") {
 		time.Sleep(100 * time.Millisecond)
 	}
-	if !strings.Contains(stderr.String(), "reload refused") || !strings.Contains(stderr.String(), "AllowMutations") {
+	if !strings.Contains(stderr.String(), "reload refused") || !strings.Contains(stderr.String(), "execution.allowMutations") {
 		t.Fatalf("the policy change was not refused by name\nstderr:\n%s", stderr.String())
 	}
 	if got := toolNames(t, endpoint); !slices.Contains(got, "hidden") {

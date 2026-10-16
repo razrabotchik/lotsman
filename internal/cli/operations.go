@@ -66,6 +66,13 @@ func operations(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
 		return exitCode(err)
 	}
+	// A corrected schema that does not compile is the operator's error, and
+	// every command that reads the configuration says so the same way.
+	cat := catalog.Build(doc.digest, doc.Operations, opts)
+	if err := checkCorrectedSchemas(&cat); err != nil {
+		fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
+		return exitCode(err)
+	}
 	// The table reports on the operations as the operator's configuration
 	// leaves them, not as the document wrote them: an overridden effect that
 	// showed up here as the inferred one would describe a run nobody makes.

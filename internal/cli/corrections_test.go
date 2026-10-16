@@ -3,10 +3,13 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -34,8 +37,26 @@ func TestReloadAcceptsCatalogChangesAndRefusesPolicyChanges(t *testing.T) {
 	policy.AllowMutations = true
 	policy.BaseURL = "https://example.test"
 	_, _, err = reloadRuntime(running, "cfg.yaml", func() (config.Runtime, error) { return policy, nil })
-	if err == nil || !strings.Contains(err.Error(), "AllowMutations") || !strings.Contains(err.Error(), "BaseURL") {
+	if err == nil || !strings.Contains(err.Error(), "changed in execution.allowMutations, execution.baseURL;") {
 		t.Fatalf("policy change: err = %v", err)
+	}
+}
+
+// Every Runtime field outside the catalog sections has a configuration
+// spelling, so a refusal names a line the operator can find.
+func TestEveryNonCatalogRuntimeFieldHasAConfigurationSpelling(t *testing.T) {
+	t.Parallel()
+	fields := reflect.TypeOf(config.Runtime{})
+	catalogOnly := map[string]bool{
+		"Overrides": true, "ComponentOverrides": true, "Overlays": true, "IncludeTags": true,
+		"Mode": true, "MaxSerializedBytes": true, "DescriptionBytesPerTool": true,
+		"ConfigDir": true, // the same file is the same directory; it cannot change on reload
+	}
+	for i := range fields.NumField() {
+		name := fields.Field(i).Name
+		if !catalogOnly[name] && configSpelling(name) == name {
+			t.Errorf("Runtime.%s has no configuration spelling", name)
+		}
 	}
 }
 
@@ -442,5 +463,48 @@ actions:
 	}
 	if plain.Spec.Digest != one.Spec.Digest {
 		t.Fatal("the root document's own digest moved with an overlay")
+	}
+}
+
+// `operations` refuses a corrected schema that does not compile, as every
+// other command reading the configuration does.
+func TestOperationsRefusesACorrectedSchemaThatDoesNotCompile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	specPath, cfgPath := filepath.Join(dir, "openapi.yaml"), filepath.Join(dir, "lotsman.yaml")
+	writeTestFile(t, specPath, listItemsSpec)
+	writeTestFile(t, cfgPath, `apiVersion: lotsman.dev/v1alpha1
+operationOverrides:
+  - match: { operationId: listItems }
+    parameters: [{ name: limit, in: query, schema: { type: string, pattern: "(" } }]
+`)
+	var out, errOut strings.Builder
+	code := operations(context.Background(), []string{"--config", cfgPath, specPath}, &out, &errOut)
+	if code != exitUsage || !strings.Contains(errOut.String(), "does not compile") {
+		t.Fatalf("exit %d, stderr %s", code, errOut.String())
+	}
+}
+
+// A reload that fails on a new, broken overlay still watches it: fixing that
+// file is the edit --watch must notice.
+func TestAFailedLoadWatchesTheConfiguredOverlays(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	specPath, broken := filepath.Join(dir, "openapi.yaml"), filepath.Join(dir, "broken.yaml")
+	writeTestFile(t, specPath, listItemsSpec)
+	writeTestFile(t, broken, "overlay: 1.0.0\ninfo: { title: b, version: \"1\" }\nactions:\n  - target: $.paths['/gone'].get\n    update: { summary: x }\n")
+	watched := &watchSet{config: filepath.Join(dir, "lotsman.yaml")}
+	earlier := filepath.Join(dir, "earlier.yaml")
+	watched.paths.Store(&[]string{earlier})
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	_, err := loadCatalog(t.Context(), specPath, logger, config.Runtime{Overlays: []string{broken}}, "tools", watched)
+	if err == nil {
+		t.Fatal("a broken overlay loaded")
+	}
+	got := watched.documents()
+	for _, want := range []string{earlier, broken, watched.config} {
+		if !slices.Contains(got, want) {
+			t.Fatalf("watched = %v, want %s among them", got, want)
+		}
 	}
 }

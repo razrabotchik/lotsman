@@ -109,8 +109,8 @@ func reloadRuntime(running config.Runtime, configPath string,
 	return current, mode, nil
 }
 
-// changedOutsideCatalog names the Runtime fields that differ outside the
-// sections a reload may change.
+// changedOutsideCatalog names, as the configuration file spells them, the
+// settings that differ outside the sections a reload may change.
 //
 //nolint:gocritic // hugeParam: compared by value on purpose.
 func changedOutsideCatalog(before, after config.Runtime) []string {
@@ -118,10 +118,39 @@ func changedOutsideCatalog(before, after config.Runtime) []string {
 	var changed []string
 	for i := range b.NumField() {
 		if !reflect.DeepEqual(b.Field(i).Interface(), a.Field(i).Interface()) {
-			changed = append(changed, b.Type().Field(i).Name)
+			changed = append(changed, configSpelling(b.Type().Field(i).Name))
 		}
 	}
 	return changed
+}
+
+// runtimeSpelling maps a Runtime field to the setting an operator wrote. The
+// operator edited a YAML file, and "AllowMutations" is not a line in it.
+var runtimeSpelling = map[string]string{
+	"AllowMutations":       "execution.allowMutations",
+	"BaseURL":              "execution.baseURL",
+	"InteractiveApproval":  "execution.interactiveApproval",
+	"AllowRules":           "execution.allowRules",
+	"DenyRules":            "execution.denyRules",
+	"AllowedOrigins":       "execution.allowedOrigins",
+	"AllowPrivateNetworks": "execution.allowPrivateNetworks",
+	"Timeout":              "execution.timeout",
+	"MaxResponseBytes":     "execution.maxResponseBytes",
+	"MaxConcurrentCalls":   "execution.maxConcurrentCalls",
+	"Lax":                  "spec.strict",
+	"Source":               "spec.source",
+	"Root":                 "spec.root",
+	"AuthProfiles":         "authProfiles",
+	"Server":               "server",
+}
+
+// configSpelling is the configuration's name for a Runtime field, or the
+// field's own name when it has none.
+func configSpelling(field string) string {
+	if name, ok := runtimeSpelling[field]; ok {
+		return name
+	}
+	return field
 }
 
 //nolint:gocritic // hugeParam: returns a modified copy.
