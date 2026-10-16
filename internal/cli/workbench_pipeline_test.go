@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -110,8 +111,11 @@ func TestNoResponseCarriesTheSecret(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler := srv.Handler()
-	address := srv.URL()
-	host := strings.TrimPrefix(address[:strings.Index(address, "/?")], "http://")
+	address, err := url.Parse(srv.URL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := address.Host
 	origin := "http://" + host
 	var cookies []*http.Cookie
 	call := func(method, target, body string) (int, string) {
@@ -144,7 +148,7 @@ func TestNoResponseCarriesTheSecret(t *testing.T) {
 		}
 		return rec.Code, text
 	}
-	if code, _ := call("GET", address[strings.Index(address, "/?"):], ""); code != http.StatusOK {
+	if code, _ := call("GET", address.RequestURI(), ""); code != http.StatusOK {
 		t.Fatalf("exchange: %d", code)
 	}
 	key := ""
