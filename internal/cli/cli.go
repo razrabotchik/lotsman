@@ -60,6 +60,7 @@ Usage:
   lotsman validate SPEC    Is this document usable? The exit code is the answer
   lotsman operations SPEC  One line per operation: effect, support, executable
   lotsman explain-call OP  What a call would do — without making it
+  lotsman ui [SPEC]        Edit the configuration in a local browser workbench (loopback only)
   lotsman config check F   Is this configuration usable? The exit code is the answer
   lotsman config export F  The effective configuration, after every precedence layer
   lotsman version          Build, MCP SDK and protocol identity
@@ -124,6 +125,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return validate(ctx, rest, stdout, stderr)
 	case "explain-call":
 		return explainCall(ctx, rest, stdout, stderr)
+	case "ui":
+		return uiCommand(ctx, rest, stdout, stderr)
 	case "config":
 		return configCommand(args[1:], stdout, stderr)
 	case "version":
