@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
@@ -173,7 +174,13 @@ func TestAnOversizedBodyIsRefused(t *testing.T) {
 		t.Fatalf("status = %d, want 4xx", rec.Code)
 	}
 	st := do(t, srv, "GET", "/api/state", own(srv), "", true)
-	if strings.Contains(st.Body.String(), `"entries":[{`) {
+	var state struct {
+		Entries []json.RawMessage `json:"entries"`
+	}
+	if err := json.Unmarshal(st.Body.Bytes(), &state); err != nil {
+		t.Fatalf("decode state: %v", err)
+	}
+	if len(state.Entries) != 0 {
 		t.Fatalf("the oversized entry was taken: %s", st.Body.String())
 	}
 	if out, _ := os.ReadFile(path); strings.Contains(string(out), "xxxx") {

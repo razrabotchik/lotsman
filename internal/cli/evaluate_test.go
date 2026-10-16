@@ -160,3 +160,24 @@ func TestPipelineExplainUnderADraft(t *testing.T) {
 		t.Fatal("explained an operation that does not exist")
 	}
 }
+
+// Spec §5: a document that does not parse still opens the workbench, which
+// shows why instead of exiting.
+func TestTheWorkbenchOpensOnABrokenDocument(t *testing.T) {
+	t.Parallel()
+	_, cfg := evaluateDir(t, "swagger: \"2.0\"\n")
+	if err := os.WriteFile(cfg, []byte("apiVersion: lotsman.dev/v1alpha1\nspec: {source: ./openapi.yaml}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wb, err := workbench.New(t.Context(), cfg, "", newPipeline(pipelineInputs{configPath: cfg}))
+	if err != nil {
+		t.Fatalf("the workbench did not open: %v", err)
+	}
+	st, err := wb.State(t.Context())
+	if err != nil {
+		t.Fatalf("state: %v", err)
+	}
+	if st.Draft == nil || st.Draft.SpecError == "" || len(st.Draft.Operations) != 0 {
+		t.Fatalf("draft = %+v", st.Draft)
+	}
+}

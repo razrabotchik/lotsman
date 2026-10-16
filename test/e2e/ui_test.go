@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -238,10 +239,17 @@ func TestUIFixAnOperationAndSave(t *testing.T) {
 		t.Fatalf("inspect: %d\n%s", exit, stderr)
 	}
 	report := decodeReport(t, stdout)
+	found = false
 	for _, op := range report.Operations {
-		if op.Key == competingKey && op.Support != "supported" {
-			t.Fatalf("after save, %s is %s", competingKey, op.Support)
+		if op.Key == competingKey {
+			found = true
+			if op.Support != "supported" {
+				t.Fatalf("after save, %s is %s", competingKey, op.Support)
+			}
 		}
+	}
+	if !found {
+		t.Fatalf("inspect does not report %s", competingKey)
 	}
 }
 
@@ -287,9 +295,18 @@ func loggedIn(t *testing.T, address string) *uiClient {
 func TestUINeedsAnExistingConfigurationOrASpec(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	_, stderr, code := runCLI(t, "ui", "--no-open", "--port", "0", "--config", filepath.Join(dir, "missing.yaml"))
-	if code == 0 || !strings.Contains(stderr, "does not exist") {
-		t.Fatalf("exit %d, stderr %q", code, stderr)
+	// A regression that starts the server instead must fail, not hang.
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, buildBinary(t), "ui", "--no-open", "--port", "0", "--config", filepath.Join(dir, "missing.yaml"))
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if ctx.Err() != nil {
+		t.Fatal("lotsman ui started without a configuration or a spec")
+	}
+	if err == nil || !strings.Contains(stderr.String(), "does not exist") {
+		t.Fatalf("err %v, stderr %q", err, stderr.String())
 	}
 }
 

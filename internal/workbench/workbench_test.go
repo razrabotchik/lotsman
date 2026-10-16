@@ -171,8 +171,8 @@ func TestAListFileIsShownButNotEdited(t *testing.T) {
 	if st.Draft == nil || st.Draft.ConfigError == "" {
 		t.Fatalf("the snapshot does not report the broken configuration: %+v", st.Draft)
 	}
-	if _, err := wb.Apply(t.Context(), createPetEffect("write")); err == nil {
-		t.Fatal("an edit of a non-mapping file was taken")
+	if _, err := wb.Apply(t.Context(), createPetEffect("write")); !errors.Is(err, errNotMapping) {
+		t.Fatalf("err = %v, want errNotMapping", err)
 	}
 	if got := readFile(t, path); got != list {
 		t.Fatalf("file changed:\n%s", got)
