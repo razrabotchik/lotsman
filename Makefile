@@ -17,7 +17,7 @@ LDFLAGS         := -s -w \
 # is there: `make check` is the gate CI runs, and a gate that means a different
 # thing on a contributor's machine than in CI is not a gate.
 # Keep in sync with GOLANGCI_LINT_VERSION in .github/workflows/ci.yaml.
-GOLANGCI_VERSION ?= v2.13.2
+GOLANGCI_VERSION ?= v2.15.0
 GOLANGCI        ?= $(if $(wildcard bin/golangci-lint),bin/golangci-lint,golangci-lint)
 FUZZTIME        ?= 30s
 # SPEC/ARGS feed `make run`: make run SPEC=test/testdata/mini/basic.yaml

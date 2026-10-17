@@ -149,10 +149,13 @@ func stopGracefully(t *testing.T, cmd *exec.Cmd) {
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	select {
-	case <-done:
+	case err := <-done:
+		t.Logf("server exited: %v", err) // SIGTERM exit status varies by shell/platform
 	case <-time.After(gracefulStopBudget):
 		_ = cmd.Process.Kill()
-		<-done
+		if err := <-done; err != nil {
+			t.Logf("killed server exit: %v", err)
+		}
 		t.Errorf("the server did not exit within %s of SIGTERM", gracefulStopBudget)
 	}
 }

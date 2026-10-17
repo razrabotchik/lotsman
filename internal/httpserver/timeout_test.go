@@ -24,7 +24,9 @@ func startServing(t *testing.T, handler http.Handler, readTimeout time.Duration)
 	go func() { done <- serve(ctx, listener, handler, opts) }()
 	t.Cleanup(func() {
 		cancel()
-		<-done
+		if err := <-done; err != nil {
+			t.Logf("serve returned: %v", err)
+		}
 	})
 	return listener.Addr().String()
 }

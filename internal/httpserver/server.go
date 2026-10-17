@@ -271,7 +271,9 @@ func serve(ctx context.Context, listener net.Listener, handler http.Handler, opt
 			log.Warn("drain budget expired; closing connections", "timeout", drain.String(), "error", err)
 			_ = srv.Close()
 		}
-		<-served
+		if err := <-served; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Warn("serve ended with error", "error", err)
+		}
 		log.Info("shutdown complete")
 		return nil
 	}

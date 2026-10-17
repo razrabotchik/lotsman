@@ -832,10 +832,12 @@ func TestMergePatch(t *testing.T) {
 	if patched["type"] != "object" || !reflect.DeepEqual(patched["required"], []any{"a"}) {
 		t.Fatalf("patched = %v", patched)
 	}
-	if target["properties"].(map[string]any)["a"].(map[string]any)["type"] != "integer" {
+	targetProps, _ := target["properties"].(map[string]any)
+	targetA, _ := targetProps["a"].(map[string]any)
+	if targetA["type"] != "integer" {
 		t.Fatal("mergePatch wrote into its target")
 	}
-	if _, ok := target["properties"].(map[string]any)["b"]; !ok {
+	if _, ok := targetProps["b"]; !ok {
 		t.Fatal("mergePatch deleted from its target")
 	}
 	// Nested values must be plain maps: catalog walkers assert map[string]any.
