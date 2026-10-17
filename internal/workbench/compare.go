@@ -160,9 +160,14 @@ func widening(b, a *Operation) []Widening {
 	}
 	// Changing authProfile is the override's own field: the published tool's
 	// credentials appear and disappear with publication, which is not a
-	// change of credential.
-	if profile := overrideProfile(a); profile != "" && profile != overrideProfile(b) {
+	// change of credential. Dropping a pinned profile is a change too: the
+	// operation falls back to whatever credential the defaults select.
+	switch profile, prior := overrideProfile(a), overrideProfile(b); {
+	case profile != "" && profile != prior:
 		out = append(out, authProfile(a, profile))
+	case profile == "" && prior != "":
+		out = append(out, Widening{ID: a.Key + "#auth-profile", Key: a.Key, Kind: "auth-profile",
+			Message: fmt.Sprintf("%s %s is no longer pinned to credential %s: the default credential applies", a.Method, a.Path, prior)})
 	}
 	return out
 }

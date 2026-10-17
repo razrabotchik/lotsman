@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -204,7 +205,7 @@ func TestTheTokenIsExchangedOnce(t *testing.T) {
 // The launcher file that carries the address to the browser is private and
 // forwards without script.
 func TestTheLauncherPage(t *testing.T) {
-	t.Parallel()
+	t.Setenv("XDG_CACHE_HOME", t.TempDir()) // not the real cache
 	path, err := launcher("http://127.0.0.1:1/?token=abc")
 	if err != nil {
 		t.Fatal(err)
@@ -221,6 +222,35 @@ func TestTheLauncherPage(t *testing.T) {
 	if !strings.Contains(string(page), `<meta http-equiv="refresh" content="0;url=http://127.0.0.1:1/?token=abc">`) ||
 		strings.Contains(strings.ToLower(string(page)), "<script") {
 		t.Fatalf("launcher:\n%s", page)
+	}
+}
+
+// The launcher goes into <user cache>/lotsman (a snap browser cannot read
+// /tmp), private, its name free of the token; without a cache directory it
+// falls back to the temporary directory.
+func TestTheLauncherLocation(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the cache directory is read from XDG_CACHE_HOME on Linux")
+	}
+	cache := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cache)
+	path, err := launcher("http://127.0.0.1:1/?token=secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(path)
+	dir := filepath.Join(cache, "lotsman")
+	if filepath.Dir(path) != dir || strings.Contains(filepath.Base(path), "secret") {
+		t.Fatalf("launcher at %s, want in %s without the token", path, dir)
+	}
+	if info, err := os.Stat(dir); err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("cache dir: %v %v", info, err)
+	}
+
+	t.Setenv("XDG_CACHE_HOME", "")
+	t.Setenv("HOME", "")
+	if got := launcherDir(); got != os.TempDir() {
+		t.Fatalf("without a cache directory: %s, want %s", got, os.TempDir())
 	}
 }
 

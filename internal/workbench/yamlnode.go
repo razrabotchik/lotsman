@@ -14,6 +14,9 @@ import (
 // Comments live on the nodes, so everything the workbench does not touch is
 // written back as the person wrote it.
 func document(data []byte, spec string) (*yaml.Node, error) {
+	// Line endings are render's concern: the tree is always read as LF, so
+	// comments carry no stray CR.
+	data = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, err
@@ -40,6 +43,15 @@ func document(data []byte, spec string) (*yaml.Node, error) {
 // indentation they use, never folds a long line, and every line the edit did
 // not touch is written back byte for byte (see splice).
 func render(doc *yaml.Node, source []byte) ([]byte, error) {
+	// A file written with CRLF line endings is worked on as LF and written
+	// back with CRLF throughout, so new lines do not mix endings with old.
+	if crlf(source) {
+		out, err := render(doc, bytes.ReplaceAll(source, []byte("\r\n"), []byte("\n")))
+		if err != nil {
+			return nil, err
+		}
+		return bytes.ReplaceAll(out, []byte("\n"), []byte("\r\n")), nil
+	}
 	style := styleOf(source)
 	out, err := dump(doc, style)
 	if err != nil || len(bytes.TrimSpace(source)) == 0 {
@@ -61,6 +73,12 @@ func render(doc *yaml.Node, source []byte) ([]byte, error) {
 		return out, nil
 	}
 	return spliced, nil
+}
+
+// crlf says whether the file ends its lines with CRLF (its first line does).
+func crlf(source []byte) bool {
+	i := bytes.IndexByte(source, '\n')
+	return i > 0 && source[i-1] == '\r'
 }
 
 func sameYAML(x, y []byte) bool {
@@ -152,7 +170,12 @@ func splice(source, base, out []byte) []byte {
 		return out
 	}
 	for i, b := range baseLines {
+		// A blank rendered line (inside a block scalar) has no source line
+		// to pair with: blank source lines are not counted.
 		x, y := strings.TrimSpace(src[kept[i]]), strings.TrimSpace(b)
+		if x == "" || y == "" {
+			return out
+		}
 		if x[0] != y[0] && !isQuote(x[0]) && !isQuote(y[0]) {
 			return out
 		}

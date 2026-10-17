@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -503,7 +504,8 @@ func TestClassify(t *testing.T) {
 }
 
 // Fixing an operation publishes it, and a published tool lists the
-// credential it would use: that is not a change of authProfile.
+// credential it would use: that is not a change of authProfile. Repinning
+// or dropping a pinned profile is.
 func TestPublishingAnOperationIsNotAnAuthProfileChange(t *testing.T) {
 	t.Parallel()
 	pinned := &config.OperationOverride{AuthProfile: "main"}
@@ -511,11 +513,15 @@ func TestPublishingAnOperationIsNotAnAuthProfileChange(t *testing.T) {
 		{Key: "fixed", Method: "GET", Path: "/f", Effect: "read", Support: "rejected"},
 		{Key: "pinned", Method: "GET", Path: "/p", Effect: "read", Excluded: true, Override: pinned},
 		{Key: "repinned", Method: "GET", Path: "/r", Effect: "read", Override: pinned},
+		{Key: "unpinned", Method: "GET", Path: "/u", Effect: "read", Override: pinned},
+		{Key: "dropped", Method: "GET", Path: "/d", Effect: "read", Override: pinned},
 	}}
 	after := &Snapshot{Operations: []Operation{
 		{Key: "fixed", Method: "GET", Path: "/f", Effect: "read", Support: "supported", Published: true, AuthProfiles: []string{"main"}},
 		{Key: "pinned", Method: "GET", Path: "/p", Effect: "read", Published: true, AuthProfiles: []string{"main"}, Override: pinned},
 		{Key: "repinned", Method: "GET", Path: "/r", Effect: "read", Override: &config.OperationOverride{AuthProfile: "admin"}},
+		{Key: "unpinned", Method: "GET", Path: "/u", Effect: "read", Override: &config.OperationOverride{Effect: "read"}},
+		{Key: "dropped", Method: "GET", Path: "/d", Effect: "read"},
 	}}
 	cmp := Compare(before, after)
 	SortWidening(cmp.Widening)
@@ -523,7 +529,7 @@ func TestPublishingAnOperationIsNotAnAuthProfileChange(t *testing.T) {
 	for _, w := range cmp.Widening {
 		ids = append(ids, w.ID)
 	}
-	if strings.Join(ids, ",") != "pinned#enabled,repinned#auth-profile" {
+	if strings.Join(ids, ",") != "dropped#auth-profile,pinned#enabled,repinned#auth-profile,unpinned#auth-profile" {
 		t.Fatalf("widening = %v", ids)
 	}
 }
@@ -677,5 +683,89 @@ func TestSaveThroughASymlinkKeepsTheLink(t *testing.T) {
 	}
 	if !strings.Contains(readFile(t, realFile), "effect: write") {
 		t.Fatalf("the target was not written:\n%s", readFile(t, realFile))
+	}
+}
+
+// A block scalar with a blank line next to a multi-line flow mapping: the
+// encoder's lines and the source's do not line up, and the splice must not
+// index the empty line. The file as reported (no apiVersion) is shown and an
+// edit is answered without a panic; with apiVersion, State, Apply and Save
+// work and the saved file says what the workbench evaluated.
+func TestABlankLineInABlockScalarDoesNotBreakTheSplice(t *testing.T) {
+	t.Parallel()
+	source := "operationOverrides:\n" +
+		"  - note: |\n" +
+		"      one\n" +
+		"\n" +
+		"      two\n" +
+		"    match: {operationId: x,\n" +
+		"      method: GET}\n"
+	reported, _ := newBench(t, source)
+	if _, err := reported.State(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = reported.Apply(t.Context(), createPetEffect("write")) // refused: no apiVersion; must not panic
+
+	var last atomic.Value
+	inner := fakePipeline()
+	pipe := inner
+	pipe.Evaluate = func(ctx context.Context, data []byte) (*Snapshot, error) {
+		last.Store(append([]byte(nil), data...))
+		return inner.Evaluate(ctx, data)
+	}
+	// The reported match names both an operationId and a method, which the
+	// configuration refuses; the valid file keeps the same shape.
+	valid := "apiVersion: lotsman.dev/v1alpha1\n" +
+		strings.Replace(source, "{operationId: x,\n      method: GET}", "{method: GET,\n      path: /x}", 1) +
+		"    enabled: false\n"
+	wb, path := newBenchWith(t, valid, pipe)
+	if _, err := wb.State(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wb.Apply(t.Context(), createPetEffect("write")); err != nil {
+		t.Fatal(err)
+	}
+	evaluated, ok := last.Load().([]byte)
+	if !ok {
+		t.Fatal("nothing was evaluated")
+	}
+	if _, err := wb.Save(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := config.Parse([]byte(readFile(t, path)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := config.Parse(evaluated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(saved, want) {
+		t.Fatalf("saved %+v, evaluated %+v", saved, want)
+	}
+	if len(saved.OperationOverrides) != 2 || saved.OperationOverrides[0].Note != "one\n\ntwo\n" {
+		t.Fatalf("saved overrides = %+v", saved.OperationOverrides)
+	}
+}
+
+// A CRLF file stays CRLF: the lines the edit adds end the same way as the
+// lines it keeps.
+func TestACRLFFileKeepsItsLineEndings(t *testing.T) {
+	t.Parallel()
+	source := "# head\r\napiVersion: lotsman.dev/v1alpha1\r\noperationOverrides:\r\n" +
+		"  - match: {  operationId: other  }\r\n    enabled: false\r\n"
+	wb, path := newBench(t, source)
+	if _, err := wb.Apply(t.Context(), createPetEffect("write")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wb.Save(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+	out := readFile(t, path)
+	if strings.Count(out, "\n") != strings.Count(out, "\r\n") {
+		t.Fatalf("mixed line endings: %q", out)
+	}
+	if !strings.HasPrefix(out, source) || !strings.Contains(out, "effect: write\r\n") {
+		t.Fatalf("saved %q", out)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"html"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
@@ -16,8 +17,8 @@ const launcherLifetime = 60 * time.Second
 
 // Open asks the desktop to open url. The address carries the token, and a
 // command line is visible to every local user (ps, /proc), so the opener is
-// handed a private file that forwards to it instead: 0600, in the temporary
-// directory, removed after a minute or by the returned cleanup, whichever
+// handed a private file that forwards to it instead: 0600, in the user's
+// cache directory (a snap or flatpak browser cannot read /tmp), removed after a minute or by the returned cleanup, whichever
 // comes first. Failure is not an error: the address is printed either way.
 func Open(ctx context.Context, url string) (cleanup func()) {
 	page, err := launcher(url)
@@ -52,7 +53,7 @@ func Open(ctx context.Context, url string) (cleanup func()) {
 
 // launcher writes the forwarding page and returns its path.
 func launcher(url string) (string, error) {
-	f, err := os.CreateTemp("", "lotsman-ui-*.html") // created 0600
+	f, err := os.CreateTemp(launcherDir(), "lotsman-ui-*.html") // created 0600, O_EXCL
 	if err != nil {
 		return "", err
 	}
@@ -65,6 +66,21 @@ func launcher(url string) (string, error) {
 		return "", err
 	}
 	return f.Name(), nil
+}
+
+// launcherDir is where the launcher goes: <user cache>/lotsman, which a
+// confined browser can read, or the temporary directory when there is no
+// cache directory to use.
+func launcherDir() string {
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		return os.TempDir()
+	}
+	dir := filepath.Join(cache, "lotsman")
+	if os.MkdirAll(dir, 0o700) != nil {
+		return os.TempDir()
+	}
+	return dir
 }
 
 func launcherPage(url string) string {
