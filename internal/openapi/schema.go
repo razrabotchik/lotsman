@@ -48,9 +48,10 @@ var (
 // without any help from us (pipeline.md stage 2).
 type bundle struct {
 	defs domain.SchemaDefs
-	// names maps a source pointer ("#/components/schemas/Pet") to the name it
-	// was given in $defs, so the same component always lands in the same slot.
-	names map[string]string
+	// names maps a component to the name it was given in $defs, so the same
+	// component always lands in the same slot; owners is the inverse.
+	names  map[defKey]string
+	owners map[string]defKey
 	// building guards the recursion while a component is still being built:
 	// its own members may reference it.
 	building map[string]bool
@@ -60,8 +61,24 @@ type bundle struct {
 	applied map[string]bool
 }
 
+// defKey identifies a referenced component. The reference text alone is not
+// enough: in an exploded specification another file's own
+// "#/components/schemas/Pet" reads exactly like the root's and names a
+// different schema. The parsed node the reference resolves to tells them
+// apart, as it does for corrections (sourceNode). The text stays in the key so
+// that two spellings of one component (an alias) keep the slots they always had.
+type defKey struct {
+	node    *yaml.Node
+	pointer string
+}
+
 func newBundle() *bundle {
-	return &bundle{defs: domain.SchemaDefs{}, names: map[string]string{}, building: map[string]bool{}}
+	return &bundle{
+		defs:     domain.SchemaDefs{},
+		names:    map[defKey]string{},
+		owners:   map[string]defKey{},
+		building: map[string]bool{},
+	}
 }
 
 // normalizeProxy is the entry point for any schema that arrives through a
@@ -91,10 +108,10 @@ func (b *bundle) normalizeProxy(proxy *base.SchemaProxy, target schemaTarget, de
 		return b.patchComponent(proxy, normalized, target)
 	}
 
-	pointer := proxy.GetReference()
-	name, known := b.names[pointer]
+	key := defKey{node: sourceNode(proxy), pointer: proxy.GetReference()}
+	name, known := b.names[key]
 	if !known {
-		name = b.assign(pointer)
+		name = b.assign(key)
 	}
 	if b.building[name] {
 		// A cycle closed. The reference is the answer: the definition being
@@ -218,32 +235,25 @@ func (b *bundle) shouldReference(proxy *base.SchemaProxy, schema *base.Schema) b
 }
 
 // assign names a component after the last segment of its pointer, which is
-// what the author called it, and disambiguates a collision deterministically
-// rather than by processing order.
-func (b *bundle) assign(pointer string) string {
-	stem := sanitizeDefName(lastSegment(pointer))
+// what the author called it, and disambiguates a collision with a numeric
+// suffix (Pet, Pet_2, …) in the order components are first reached -- which is
+// the document's order, so the names are deterministic.
+func (b *bundle) assign(key defKey) string {
+	stem := sanitizeDefName(lastSegment(key.pointer))
 	if stem == "" {
 		stem = "schema"
 	}
 	name := stem
 	for suffix := 2; ; suffix++ {
-		taken, exists := b.takenBy(name)
-		if !exists || taken == pointer {
+		owner, taken := b.owners[name]
+		if !taken || owner == key {
 			break
 		}
 		name = stem + "_" + strconv.Itoa(suffix)
 	}
-	b.names[pointer] = name
+	b.names[key] = name
+	b.owners[name] = key
 	return name
-}
-
-func (b *bundle) takenBy(name string) (string, bool) {
-	for pointer, assigned := range b.names {
-		if assigned == name {
-			return pointer, true
-		}
-	}
-	return "", false
 }
 
 func isLocalRef(pointer string) bool {

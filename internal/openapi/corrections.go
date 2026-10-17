@@ -443,10 +443,8 @@ func (b *bundle) followRef(schema domain.Schema) (out domain.Schema, unavailable
 
 // componentName is the document's name for a $defs entry, for messages.
 func (b *bundle) componentName(def string) string {
-	for pointer, name := range b.names {
-		if name == def {
-			return lastSegment(pointer)
-		}
+	if owner, known := b.owners[def]; known {
+		return lastSegment(owner.pointer)
 	}
 	return def
 }
