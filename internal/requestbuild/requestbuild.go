@@ -11,6 +11,7 @@ import (
 
 	"github.com/razrabotchik/lotsman/internal/domain"
 	"github.com/razrabotchik/lotsman/internal/errs"
+	"github.com/razrabotchik/lotsman/internal/fileinput"
 )
 
 // Options configures request construction.
@@ -18,6 +19,13 @@ type Options struct {
 	// BaseURL, when set, overrides every operation's own servers (FR-30's
 	// --base-url). It must be an absolute http(s) URL.
 	BaseURL string
+	// Files opens the local files a multipart or single-file body is made of
+	// (feature 009). Nil is the ordinary case: without `execution.fileInputs`
+	// no operation with such a body is published, so none can be built.
+	Files *fileinput.Resolver
+	// Boundary pins the multipart boundary. Tests set it to compare bodies
+	// byte for byte; in a real call it is empty and the boundary is random.
+	Boundary string
 }
 
 // Operation is what the builder needs to know about the operation it is
@@ -73,15 +81,29 @@ func Build(ctx context.Context, op *Operation, args Arguments, opts Options) (*h
 	}
 	reqURL.RawQuery = rawQuery
 
-	body, contentType, err := encodeBody(op.Body, args)
+	body, err := encodeBody(op.Body, args, opts)
 	if err != nil {
 		return nil, err
 	}
-
-	req, err := http.NewRequestWithContext(ctx, op.Method, reqURL.String(), body)
+	// From here on the body may own open file descriptors, so every exit has
+	// to close it: a refused call must not leave one behind (ADR-0022).
+	req, err := http.NewRequestWithContext(ctx, op.Method, reqURL.String(), body.reader)
 	if err != nil {
+		body.close()
 		return nil, errs.Errorf(errs.ClassInternal, "requestbuild: %w", err)
 	}
+	if body.length >= 0 {
+		// A streamed body is not one http.NewRequest can measure, and a
+		// request without a Content-Length is sent chunked -- which the PHP
+		// backends this feature exists for receive as an empty upload.
+		req.ContentLength = body.length
+	}
+	if body.files != nil {
+		// Closing the request body closes the files with it, so the call path
+		// has one thing to close and not two.
+		req.Body = &sessionBody{ReadCloser: req.Body, body: body}
+	}
+	contentType := body.contentType
 	// Headers are applied after the body so that a spec-declared header
 	// cannot reach Content-Type first; applyHeaders refuses that name anyway,
 	// but order makes the guarantee independent of the check.
@@ -89,29 +111,69 @@ func Build(ctx context.Context, op *Operation, args Arguments, opts Options) (*h
 		req.Header.Set("Content-Type", contentType)
 	}
 	if err := applyHeaders(req, op.Parameters, group(args, domain.GroupHeaders)); err != nil {
+		CloseBody(req)
 		return nil, err
 	}
 	return req, nil
+}
+
+// CloseBody releases whatever a built request still holds -- the open files of
+// a multipart or single-file body -- for a call that will not be sent: an
+// egress refusal, a pending approval, a rebuild for the one allowed retry.
+// Sending the request closes the body itself, and Close is idempotent, so a
+// caller may always call this.
+func CloseBody(req *http.Request) {
+	if req == nil || req.Body == nil {
+		return
+	}
+	_ = req.Body.Close()
+}
+
+// sessionBody ties the open files to the request body: whoever closes the
+// body -- the transport after sending it, or a caller that decided not to --
+// closes the descriptors.
+type sessionBody struct {
+	io.ReadCloser
+	body encodedBody
+}
+
+func (s *sessionBody) Close() error {
+	err := s.ReadCloser.Close()
+	s.body.close()
+	return err
+}
+
+// Files reports the files a built request will send, in part order: what the
+// approval prompt describes and the audit event records.
+func Files(req *http.Request) []*fileinput.File {
+	body, ok := req.Body.(*sessionBody)
+	if !ok || body.body.files == nil {
+		return nil
+	}
+	return body.body.files.Files()
 }
 
 // encodeBody serializes the body argument for the operation's single declared
 // media type. An operation with no body never sends one, whatever the caller
 // put in the arguments: the schema rejects an unknown group first, and this is
 // the second line that keeps an invented body off the wire.
-func encodeBody(spec *domain.BodySpec, args Arguments) (io.Reader, string, error) {
+func encodeBody(spec *domain.BodySpec, args Arguments, opts Options) (encodedBody, error) {
 	value, present := args[domain.GroupBody]
 	if spec == nil {
 		if present {
-			return nil, "", errs.Errorf(errs.ClassUsage,
+			return encodedBody{}, errs.Errorf(errs.ClassUsage,
 				"requestbuild: this operation declares no request body")
 		}
-		return http.NoBody, "", nil
+		return emptyBody(), nil
 	}
 	if !present {
 		if spec.Required {
-			return nil, "", errs.Errorf(errs.ClassUsage, "requestbuild: a request body is required")
+			return encodedBody{}, errs.Errorf(errs.ClassUsage, "requestbuild: a request body is required")
 		}
-		return http.NoBody, "", nil
+		return emptyBody(), nil
+	}
+	if spec.CarriesFiles() {
+		return fileBody(spec, value, opts)
 	}
 	// An explicit null is a body, and it is sent as one. Whether null is
 	// allowed is the schema's question, answered before this runs: a body
@@ -122,9 +184,39 @@ func encodeBody(spec *domain.BodySpec, args Arguments) (io.Reader, string, error
 
 	encoded, err := json.Marshal(value)
 	if err != nil {
-		return nil, "", errs.Errorf(errs.ClassUsage, "requestbuild: request body is not JSON-encodable: %w", err)
+		return encodedBody{}, errs.Errorf(errs.ClassUsage, "requestbuild: request body is not JSON-encodable: %w", err)
 	}
-	return bytes.NewReader(encoded), spec.MediaType, nil
+	// length -1 leaves the measuring to http.NewRequest, which also gives a
+	// *bytes.Reader body a GetBody -- exactly today's behaviour for JSON.
+	return encodedBody{reader: bytes.NewReader(encoded), contentType: spec.MediaType, length: -1}, nil
+}
+
+// encodedBody is a serialized request body: what to read, what to call it,
+// how long it is, and what to release afterwards.
+type encodedBody struct {
+	reader      io.Reader
+	contentType string
+	// length is the exact body length, or -1 when the reader is one
+	// http.NewRequest measures itself.
+	length int64
+	// closer is the stream side of a piped body; files are the descriptors it
+	// reads from. Both are nil for a JSON body.
+	closer io.Closer
+	files  *fileinput.Session
+}
+
+func emptyBody() encodedBody {
+	return encodedBody{reader: http.NoBody, length: -1}
+}
+
+// close releases a body nobody will read. It is idempotent.
+func (b *encodedBody) close() {
+	if b.closer != nil {
+		_ = b.closer.Close()
+	}
+	if b.files != nil {
+		_ = b.files.Close()
+	}
 }
 
 // group returns one argument group, or an empty map when the caller omitted
