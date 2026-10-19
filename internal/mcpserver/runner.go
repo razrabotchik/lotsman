@@ -22,6 +22,7 @@ import (
 	"github.com/razrabotchik/lotsman/internal/domain"
 	"github.com/razrabotchik/lotsman/internal/egress"
 	"github.com/razrabotchik/lotsman/internal/errs"
+	"github.com/razrabotchik/lotsman/internal/fileinput"
 	"github.com/razrabotchik/lotsman/internal/redact"
 	"github.com/razrabotchik/lotsman/internal/requestbuild"
 	"github.com/razrabotchik/lotsman/internal/response"
@@ -55,6 +56,12 @@ type runner struct {
 
 	// calls bounds the calls in flight across the process.
 	calls *CallLimit
+
+	// files opens the local files this operation's body is made of, and
+	// uploadBudget is the extra time such a call gets (feature 009). Both are
+	// zero for an operation whose body carries no file.
+	files        *fileinput.Resolver
+	uploadBudget time.Duration
 
 	// maxResponseBytes bounds what a response may spend of this process's
 	// memory (FR-36). Zero means the response package's documented default.
@@ -177,7 +184,10 @@ func (r *runner) execute(ctx context.Context, invocation *mcp.CallToolRequest, a
 	// One budget for the whole call. The requests below are built on this
 	// context, and a mint runs on the request's, so a mint, a 401 and a retry
 	// share one execution.timeout instead of spending one each.
-	ctx, cancel := context.WithTimeout(ctx, r.egress.CallBudget())
+	// A call carrying files gets the upload budget on top: 20 MiB on a slow
+	// uplink does not fit in the ordinary one, and a deadline that cannot be
+	// met is a refusal wearing a timeout's clothes (ADR-0022).
+	ctx, cancel := context.WithTimeout(ctx, r.egress.CallBudget()+r.uploadBudget)
 	defer cancel()
 	ctx, presented := auth.TrackPresented(ctx)
 
@@ -193,17 +203,22 @@ func (r *runner) execute(ctx context.Context, invocation *mcp.CallToolRequest, a
 	// a sent request has been read, and an unrepeatable request is not a
 	// request lotsman should try to repeat.
 	build := func() (*http.Request, error) {
-		req, err := requestbuild.Build(ctx, &op, requestbuild.Arguments(args), requestbuild.Options{BaseURL: r.baseURL})
+		req, err := requestbuild.Build(ctx, &op, requestbuild.Arguments(args),
+			requestbuild.Options{BaseURL: r.baseURL, Files: r.files})
 		if err != nil {
 			return nil, redact.Error(err)
 		}
 		// Defence in depth: an unexpanded template would mean a placeholder
 		// reached the wire as a literal, which is a guess about the API.
 		if strings.ContainsAny(req.URL.EscapedPath(), "{}") {
+			// The body may hold open descriptors, and this request is not
+			// going anywhere (ADR-0022).
+			requestbuild.CloseBody(req)
 			return nil, errs.Errorf(errs.ClassInternal,
 				"lotsman: %s %s: unexpanded path template", r.tool.Method, r.tool.SafePath())
 		}
 		if denied := r.egress.CheckTarget(req.URL); denied != nil {
+			requestbuild.CloseBody(req)
 			return nil, denied
 		}
 		return req, nil
@@ -217,11 +232,16 @@ func (r *runner) execute(ctx context.Context, invocation *mcp.CallToolRequest, a
 	// Last: everything that could refuse this call without troubling a human
 	// already has, so a prompt is only ever shown for a call that would
 	// otherwise happen -- and the only thing a yes does is send it.
-	ask, err := r.approval.check(invocation, r.tool, r.base(), args)
+	ask, err := r.approval.check(invocation, r.tool, r.base(), args, requestbuild.Files(req))
 	if err != nil {
+		requestbuild.CloseBody(req)
 		return response.Result{}, how, err
 	}
 	if ask != nil {
+		// The client will ask again with an answer, and the call is rebuilt
+		// from scratch then: a file held open across a human's decision is a
+		// file that may have changed by the time it is sent.
+		requestbuild.CloseBody(req)
 		return response.Result{}, how, &pending{result: ask}
 	}
 
@@ -449,6 +469,10 @@ func newRunners(opts *Options, outbound *egress.Policy) []runner {
 			audit:            opts.auditSink(),
 			maxResponseBytes: opts.MaxResponseBytes,
 			calls:            calls,
+		}
+		if tool.Input.Body.CarriesFiles() {
+			prepared.files = opts.Files
+			prepared.uploadBudget = opts.UploadTimeout
 		}
 
 		switch {

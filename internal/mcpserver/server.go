@@ -19,6 +19,7 @@ import (
 	"github.com/razrabotchik/lotsman/internal/config"
 	"github.com/razrabotchik/lotsman/internal/domain"
 	"github.com/razrabotchik/lotsman/internal/egress"
+	"github.com/razrabotchik/lotsman/internal/fileinput"
 	"github.com/razrabotchik/lotsman/internal/policy"
 	"github.com/razrabotchik/lotsman/internal/response"
 )
@@ -75,6 +76,16 @@ type Options struct {
 	// built from these options, which is what keeps a reload from resetting
 	// it; nil gives each server the default limit of its own.
 	Calls *CallLimit
+
+	// Files opens the local files a multipart or single-file body is made of
+	// (feature 009). Nil is the ordinary case and nothing can be read: no
+	// operation with a file body is executable without it.
+	Files *fileinput.Resolver
+
+	// UploadTimeout is the extra budget a call carrying files gets, on top of
+	// the egress call budget. Zero means no extra time, which is right for a
+	// server with no file inputs configured.
+	UploadTimeout time.Duration
 
 	// Audit receives one event per completed call (§7.5). Nil records
 	// nothing, which is what a one-off `explain-call` wants and what a

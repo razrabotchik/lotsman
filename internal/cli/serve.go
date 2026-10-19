@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync/atomic"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -143,6 +144,23 @@ func serve(ctx context.Context, args []string, stderr io.Writer) int {
 		// Through the logger, so an event inherits redaction and the stdout
 		// ban instead of re-deriving both (FR-61, FR-68).
 		Audit: audit.Log(logger),
+	}
+	files, err := fileResolver(runtime)
+	if err != nil {
+		logger.Error("file inputs cannot be configured", "class", string(errs.ClassOf(err)), "error", err)
+		return exitCode(err)
+	}
+	opts.Files = files
+	opts.UploadTimeout = runtime.FileInputs.UploadTimeout
+	if warning := fileInputsWarning(runtime); warning != "" {
+		logger.Warn(warning)
+	}
+	if files != nil {
+		logger.Info("file inputs enabled",
+			"roots", strings.Join(files.Roots(), ", "),
+			"max_file_bytes", files.MaxFileBytes(),
+			"max_total_bytes", files.MaxTotalBytes(),
+			"content_types", strings.Join(files.AllowedContentTypes(), ", "))
 	}
 	if spec != "" {
 		cat, err := loadCatalog(ctx, spec, logger, runtime, catalogMode, watched)
@@ -406,6 +424,7 @@ func catalogOptions(runtime config.Runtime, mode catalog.Mode, operations []doma
 		DescriptionBytesPerTool: runtime.DescriptionBytesPerTool,
 		IncludeTags:             runtime.IncludeTags,
 		Overrides:               runtime.Overrides,
+		FileInputs:              fileInputsAllowed(runtime),
 	}, nil
 }
 

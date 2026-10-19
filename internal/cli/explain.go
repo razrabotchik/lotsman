@@ -216,12 +216,30 @@ func requestLine(tool *catalog.Tool, arguments requestbuild.Arguments, runtime c
 		Parameters:   tool.Input.Parameters,
 		Body:         tool.Input.Body,
 	}
-	req, err := requestbuild.Build(context.Background(), &op, arguments, requestbuild.Options{BaseURL: runtime.BaseURL})
+	// The files are resolved here too, which is the point of asking before
+	// calling: a path outside the roots, a file over the limit or a type the
+	// allowlist refuses is answered without touching the API.
+	files, resolverErr := fileResolver(runtime)
+	if resolverErr != nil {
+		return fmt.Sprintf("%s %s — cannot be built: %v", tool.Method, tool.PathTemplate, resolverErr)
+	}
+	req, err := requestbuild.Build(context.Background(), &op, arguments,
+		requestbuild.Options{BaseURL: runtime.BaseURL, Files: files})
 	if err != nil {
 		return fmt.Sprintf("%s %s — cannot be built: %v", tool.Method, tool.PathTemplate, redact.Error(err))
 	}
+	// Nothing is sent from here, so the descriptors are released before the
+	// line is printed.
+	defer requestbuild.CloseBody(req)
 
 	line := fmt.Sprintf("%s %s", req.Method, redact.String(req.URL.String()))
+	if length := req.ContentLength; length > 0 && tool.Input.Body.CarriesFiles() {
+		line += fmt.Sprintf("\n            body:   %s, %d bytes", req.Header.Get("Content-Type"), length)
+	}
+	for _, file := range requestbuild.Files(req) {
+		line += fmt.Sprintf("\n            file:   %s, %d bytes, %s",
+			file.Name(), file.Size(), file.ContentType())
+	}
 	if outbound, err := egress.PolicyFromBaseURL(runtime.BaseURL, egress.Budget{}, runtime.AllowPrivateNetworks); err == nil {
 		outbound.AllowedOrigins = append(outbound.AllowedOrigins, runtime.AllowedOrigins...)
 		if denied := outbound.CheckTarget(req.URL); denied != nil {

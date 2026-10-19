@@ -134,6 +134,12 @@ type Options struct {
 	// IncludeTags publishes only the operations carrying at least one of
 	// these tags (docs/spec.md 5.1). Empty publishes everything.
 	IncludeTags []string
+	// FileInputs says whether this process may read local files for a request
+	// body (feature 009). The decision is made by the caller, which is the
+	// only layer that knows both the configuration and the transport; the
+	// catalog records the consequence.
+	FileInputs FileInputs
+
 	// Overrides are the operator's per-operation statements. Validate them
 	// against the document with ValidateOverrides before building: Build
 	// ignores one that matches nothing, and an unnoticed override is a
@@ -245,6 +251,18 @@ func Build(specDigest string, operations []domain.Operation, opts Options) Catal
 			tool.AuthBinding = credentials.Binding
 			for i := range credentials.Binding.Credentials {
 				tool.AuthProfiles = append(tool.AuthProfiles, credentials.Binding.Credentials[i].Name)
+			}
+		}
+		if tool.Input.Body.CarriesFiles() && !opts.FileInputs.Available {
+			// Published, never executable, like an operation nothing can
+			// authenticate: the document is translated, and the ability to
+			// read the file it needs has not been granted. A model that can
+			// read the reason is better off than one guessing why an upload
+			// endpoint it can see is missing.
+			tool.ExecutionBlockers = append(tool.ExecutionBlockers, opts.FileInputs.reason())
+			tool.Executable = false
+			if tool.AuthMessage == "" {
+				tool.AuthMessage = opts.FileInputs.message()
 			}
 		}
 		if !verdict.Allowed {
@@ -496,3 +514,31 @@ func sanitizeTags(tags []string) []string {
 // maxTagBytes bounds one tag. A tag is a label; anything longer is prose that
 // belongs in the description.
 const maxTagBytes = 64
+
+// FileInputs is whether a body made of local file content can be sent at all
+// (feature 009).
+type FileInputs struct {
+	// Available is `execution.fileInputs` enabled *and* permitted for this
+	// transport. Both questions are the caller's; one answer reaches here.
+	Available bool
+	// Reason and Message say why not, for the report and for the refusal a
+	// call gets. Empty Reason with Available false means the configuration
+	// does not enable file inputs at all.
+	Reason  domain.ReasonCode
+	Message string
+}
+
+func (f FileInputs) reason() domain.ReasonCode {
+	if f.Reason != "" {
+		return f.Reason
+	}
+	return domain.ReasonFileInputsDisabled
+}
+
+func (f FileInputs) message() string {
+	if f.Message != "" {
+		return f.Message
+	}
+	return "this operation sends a file; enable execution.fileInputs with the directories " +
+		"the files may be read from"
+}

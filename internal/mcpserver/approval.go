@@ -11,6 +11,7 @@ import (
 	"github.com/razrabotchik/lotsman/internal/config"
 	"github.com/razrabotchik/lotsman/internal/domain"
 	"github.com/razrabotchik/lotsman/internal/errs"
+	"github.com/razrabotchik/lotsman/internal/fileinput"
 	"github.com/razrabotchik/lotsman/internal/redact"
 )
 
@@ -74,7 +75,7 @@ func (p *pending) Error() string { return "approval required" }
 //
 // target is the base URL the request was built against (runner.base), so the
 // prompt names the place a yes would send the call to.
-func (a approver) check(req *mcp.CallToolRequest, tool *catalog.Tool, target string, args map[string]any) (*mcp.CallToolResult, error) {
+func (a approver) check(req *mcp.CallToolRequest, tool *catalog.Tool, target string, args map[string]any, files []*fileinput.File) (*mcp.CallToolResult, error) {
 	if !a.required(tool) {
 		return nil, nil
 	}
@@ -111,7 +112,7 @@ func (a approver) check(req *mcp.CallToolRequest, tool *catalog.Tool, target str
 	return &mcp.CallToolResult{
 		InputRequests: mcp.InputRequestMap{approvalRequestID: &mcp.ElicitParams{
 			Mode:    "form",
-			Message: approvalMessage(tool, target, args),
+			Message: approvalMessage(tool, target, args, files),
 			// The answer lotsman needs is the action itself -- accept,
 			// decline or cancel -- so the form asks for no fields. A prompt
 			// that also collected data would be a second way to influence a
@@ -157,7 +158,7 @@ func clientCanBeAsked(session *mcp.ServerSession) bool {
 // approvalMessage is the FR-46 payload: what the call is, what it does, where
 // it goes, and a redacted summary of its arguments. It is deliberately not
 // the request: a full URL and a full body are what a human stops reading.
-func approvalMessage(tool *catalog.Tool, target string, args map[string]any) string {
+func approvalMessage(tool *catalog.Tool, target string, args map[string]any, files []*fileinput.File) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Allow %s?\n", tool.Name)
 	if tool.Description != "" {
@@ -169,7 +170,29 @@ func approvalMessage(tool *catalog.Tool, target string, args map[string]any) str
 	if summary := argumentSummary(args); summary != "" {
 		fmt.Fprintf(&b, "arguments %s\n", summary)
 	}
+	// A file is the one argument a human cannot check by its name: it is read
+	// from this machine, and what matters is which bytes leave it. Basename,
+	// size and the type detected from the content -- not the full path, which
+	// describes the host, and not a hash, which would have to be computed from
+	// a second read that may differ from what is sent (ADR-0022 decision 7).
+	for _, file := range files {
+		fmt.Fprintf(&b, "file      %s, %s, %s\n",
+			file.Name(), humanBytes(file.Size()), file.ContentType())
+	}
 	return b.String()
+}
+
+// humanBytes is a size a person reads at a glance. Binary units, because the
+// limits it is compared against are written that way.
+func humanBytes(n int64) string {
+	switch {
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MiB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.1f KiB", float64(n)/(1<<10))
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
 }
 
 // argumentSummary lists what was passed, with values shown only where a human

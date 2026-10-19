@@ -48,7 +48,23 @@ func configCheck(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 
-	if _, err := config.Load(path); err != nil {
+	file, err := config.Load(path)
+	if err != nil {
+		if !*quiet {
+			fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
+		}
+		return exitCode(err)
+	}
+	// Resolution is what fills in the defaults a warning has to describe, and
+	// it cannot fail for a configuration that loaded.
+	runtime := config.Resolve(file, config.Environment{}, config.Overrides{})
+	// A usable configuration can still grant more than its author meant to.
+	// The exit code stays zero -- it answers "is this usable" -- and the
+	// warning goes to stderr, where it is read by a person and not by a script.
+	if warning := fileInputsWarning(runtime); warning != "" && !*quiet {
+		fmt.Fprintf(stderr, "lotsman: warning: %s\n", warning)
+	}
+	if _, err := fileResolver(runtime); err != nil {
 		if !*quiet {
 			fmt.Fprintf(stderr, "lotsman: [%s] %v\n", errs.ClassOf(err), err)
 		}
