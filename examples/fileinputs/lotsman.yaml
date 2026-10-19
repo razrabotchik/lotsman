@@ -1,0 +1,22 @@
+# The configuration examples/fileinputs/openapi.yaml needs to be executable
+# (feature 009). Without `execution.fileInputs` the two upload operations are
+# published and refused with `file_inputs_disabled`.
+#
+#   lotsman inspect examples/fileinputs/openapi.yaml --config examples/fileinputs/lotsman.yaml
+#
+# `roots` is the one line that decides what lotsman may read. Point it at the
+# folder the photographs are in, not at a home directory.
+apiVersion: lotsman.dev/v1alpha1
+spec:
+  source: ./openapi.yaml
+execution:
+  allowMutations: true
+  baseURL: http://127.0.0.1:18080
+  fileInputs:
+    enabled: true
+    roots:
+      - /home/user/catalog-photos
+    allowedContentTypes:
+      - image/jpeg
+      - image/png
+      - image/webp

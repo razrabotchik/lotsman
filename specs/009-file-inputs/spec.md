@@ -220,8 +220,12 @@ execution:
   retry re-resolves the files and rebuilds the body from scratch.
 - **Timeouts.** The body-phase budget of FR-32 gains `uploadTimeout` (default 2m) for a call that
   carries file inputs; 20 MiB does not fit in a 30 s total budget on a slow uplink.
-- **`inspect` / capability report.** An operation with a binary body reports `supported` with a
-  `file_inputs` note when enabled, and `rejected` with `file_inputs_disabled` when not.
+- **`inspect` / capability report.** An operation with a binary body is supported either way. When
+  file inputs are not available it is **published and never executable**, carrying
+  `file_inputs_disabled` (or `file_inputs_transport_not_allowed`) and the line of configuration that
+  would fix it. *Decided during implementation (2026-10-19), replacing "rejected" above:* this is
+  what lotsman already does for an operation no configured credential can authenticate, and a
+  translation that succeeded should not be reported as a translation that failed.
 - **Workbench (`lotsman ui`).** Shows the roots and the limits for an operation with file inputs,
   and names `file_inputs_disabled` as a thing the configuration fixes. It never reads a file and
   accepts no path from the browser (feature 008, §4).
@@ -264,8 +268,11 @@ The suite stage 1 ends with:
   `maxTotalBytes`, file grown after `fstat`, detected type outside the allowlist, detected type
   outside `encoding.contentType`, filename with a separator, missing file, unreadable file,
   `fileInputs` disabled, HTTP transport without the opt-in.
-- Canary-secret suite over stdout, logs, audit events and tool output with a file whose content is
-  the canary and whose path contains one too: neither appears.
+- Canary-secret suite over logs, audit events and tool output with a file whose content is the
+  canary and whose path contains one too: neither appears. *Narrowed during implementation
+  (2026-10-19):* `explain-call` does echo the arguments the operator typed on their own terminal,
+  including the path, as it did before this feature; what must never appear anywhere is the file's
+  content, and what must never reach a log or an audit event is the path.
 - Memory: sending a 20 MiB file allocates no proportional buffer (`testing.AllocsPerRun`-style
   bound on peak heap over the send).
 - Determinism golden: the same arguments produce a byte-identical body modulo the boundary, and the

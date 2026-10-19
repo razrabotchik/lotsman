@@ -43,7 +43,9 @@
 
 - универсальная поддержка любого корректного или некорректного OpenAPI без ограничений;
 - GraphQL, gRPC, AsyncAPI и Arazzo execution;
-- multipart и произвольные binary uploads;
+- бинарные **ответы** (скачивание файлов из API), `application/x-www-form-urlencoded`, массивы файлов
+  в одном вызове и скачивание файла самим lotsman по URL; `multipart/form-data` и однофайловое тело
+  запроса входят в релиз (ADR-0022, feature 009);
 - генерация исходного кода;
 - собственный OAuth authorization server;
 - полноценная enterprise admin platform;
@@ -159,14 +161,22 @@ M1 поддерживает:
 - query: `form`, primitives и arrays, `explode=true|false`;
 - header: `simple`, primitives и arrays;
 - cookie: `form`, primitives;
-- body: `application/json`.
+- body: `application/json`;
+- body: `multipart/form-data` — одно бинарное поле плюс примитивные текстовые части, и
+  `application/octet-stream` (а также конкретные `image/*`, `audio/*`, `video/*`, `font/*`,
+  `application/pdf|zip|gzip`) — всё тело как один файл. Бинарное поле публикуется как **ссылка на
+  локальный файл** (`{path, filename?, contentType?}`); содержимое через модель не проходит
+  (ADR-0022). Тело стримится с диска с точным `Content-Length`, chunked не используется.
+  `encoding.contentType` (включая список через запятую) учитывается; `encoding.style`, `explode`,
+  `allowReserved` и `headers` отклоняют операцию.
 
 Следующие конструкции добавляются только с отдельными тестами:
 
 - query `spaceDelimited`, `pipeDelimited`, `deepObject`;
 - path `label`, `matrix`;
 - form urlencoded;
-- multipart и binary.
+- массив файлов, несколько бинарных частей, объект или массив как часть multipart,
+  бинарные ответы.
 
 - **FR-26.** `allowReserved`, percent encoding и duplicate query keys реализуются в соответствии с OAS, а не через простое `url.Values.Encode` для всех случаев.
 - **FR-27.** Path parameters всегда required; противоречащая спека отклоняется или нормализуется с warning.
@@ -177,7 +187,7 @@ M1 поддерживает:
 
 - **FR-30.** Base URL выбирается из operation/path/root servers с соблюдением наследования и server variables; `baseUrl` override валидируется egress policy.
 - **FR-31.** До сети возможен `lotsman explain-call <operationKey> --args ...`, показывающий method, redacted origin/path template, выбранный auth profile, media type и policy decision.
-- **FR-32.** HTTP timeout включает connect/TLS/header/body budgets; context cancellation останавливает чтение ответа.
+- **FR-32.** HTTP timeout включает connect/TLS/header/body budgets; context cancellation останавливает чтение ответа. Вызов, несущий файлы, получает сверх общего бюджета `execution.fileInputs.uploadTimeout` (по умолчанию 2m): 20 МиБ по медленному каналу не укладываются в 30s, а недостижимый дедлайн — это отказ, переодетый таймаутом.
 - **FR-33.** Redirects по умолчанию отключены. При включении каждый hop повторно проходит egress policy; sensitive headers никогда не переходят на другой origin.
 - **FR-33a.** До появления полной `allowedOrigins` policy ранний tracer-bullet runtime требует явный `--base-url` для любого реального HTTP-вызова; spec-authored server сам по себе не является полномочием на egress. Разрешение проверяется до `RoundTrip`.
 - **FR-34.** Retry выключен по умолчанию. При включении он разрешён только для idempotent операций/явного override, ограниченных transient failures и `Retry-After`. Для mutation без idempotency key retry запрещён.
@@ -333,6 +343,15 @@ execution:
   redirects: deny
   allowedOrigins:
     - https://api.example.com
+  fileInputs:                      # по умолчанию выключено; без него операция с файловым телом
+    enabled: true                  # публикуется, но никогда не исполняется (file_inputs_disabled)
+    roots:                          # единственные каталоги, откуда читаются файлы
+      - /home/user/catalog-photos
+    maxFileBytes: 20971520          # на файл
+    maxTotalBytes: 104857600        # на вызов
+    allowedContentTypes: [image/jpeg, image/png, image/webp]
+    allowHTTPTransport: false       # по умолчанию файлы доступны только на stdio
+    uploadTimeout: 2m
 authProfiles:
   example:
     scheme: bearer
@@ -375,6 +394,16 @@ server:
 - Reload переприменяет `spec.overlays`, `componentOverrides`, `operationOverrides` и `catalog`;
   любое другое изменение конфигурации отклоняется с названием изменённого поля, а работающий каталог
   остаётся прежним до перезапуска.
+- `execution.fileInputs` (ADR-0022) — право читать локальные файлы по аргументу вызова. По умолчанию
+  отсутствует; `enabled: true` без `roots` или без `allowedContentTypes` — ошибка конфигурации, а не
+  разрешительный дефолт. Корни канонизируются при загрузке (`EvalSymlinks` + `Abs`); `/`,
+  относительный путь и несуществующий каталог отклоняются. Аргумент-путь обязан быть абсолютным и
+  каноническим; `~` не раскрывается, каталоги не перечисляются, globов нет. Проверки делаются на
+  открытом файловом дескрипторе (`O_NOFOLLOW` + `fstat`), размер ограничивается дважды, тип
+  определяется по содержимому (расширению веры нет). На транспорте `http` файлы требуют отдельного
+  `allowHTTPTransport: true`, о котором `config check` предупреждает. В логи и аудит попадают
+  basename, размер, тип и sha256 отправленного; путь из аргумента возвращается только клиенту,
+  который его и написал.
 - Локальный верстак (`lotsman ui`, ADR-0021) правит только локальную конфигурацию: слушает только
   loopback (127.0.0.1) за одноразовым токеном (токен один раз обменивается на отдельный сессионный
   cookie `lotsman_ui_<port>`, повторное открытие адреса отклоняется; проверка Host и Origin, строгий
@@ -392,7 +421,8 @@ server:
 - root spec и все `$ref` documents;
 - descriptions/examples/vendor extensions;
 - recipes и обновления recipes;
-- tool arguments от MCP-клиента;
+- tool arguments от MCP-клиента, включая пути к локальным файлам: границу задаёт
+  `execution.fileInputs.roots`, а не рассуждение модели (ADR-0022);
 - upstream responses, headers и redirects;
 - inbound bearer tokens до полной validation;
 - proxy headers без явно настроенного trusted proxy.

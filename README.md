@@ -223,9 +223,46 @@ media       application/json (required)
 NO network request was made.
 ```
 
+### Uploading a file the agent cannot read
+
+An endpoint that takes `multipart/form-data` needs the bytes of a file that is on *your* disk. The
+model never sees them: lotsman publishes the file field as a path, opens that file itself at call
+time, and streams it.
+
+```yaml
+execution:
+  allowMutations: true
+  fileInputs:
+    enabled: true
+    roots:
+      - /home/user/catalog-photos    # the only directories a path may point into
+    allowedContentTypes:             # matched against the type detected from the content
+      - image/jpeg
+      - image/png
+      - image/webp
+    maxFileBytes: 20971520           # 20 MiB per file; 100 MiB per call by default
+```
+
+```text
+you:  upload every photo in /home/user/catalog-photos/AB-123/ to product 512
+tool: upload_product_image {"path": {"id": 512},
+        "body": {"file": {"path": "/home/user/catalog-photos/AB-123/front.jpg"},
+                 "is_main": true}}
+```
+
+Nothing is readable until that block exists: an operation with a file body is published with
+`file_inputs_disabled` and the line that would fix it. A path is checked on the open file
+descriptor, not as a string — symlinks out of a root, directories, FIFOs, a file over the limit and
+a type the allowlist refuses are all answered before the network, each with its own reason code.
+`lotsman explain-call` resolves the files and shows the parts without sending them, and the
+approval prompt names the file by basename, size and detected type. Over `--transport=http` file
+inputs need a second, explicit `allowHTTPTransport: true`: a remote client naming a path would be
+reading this machine's disk. On Windows the final path component is checked without the atomic
+`O_NOFOLLOW` the Unix build uses ([ADR-0022](docs/adr/0022-file-inputs-and-binary-bodies.md)).
+
 ### Narrowing the catalog, and correcting it
 
-An API with 631 operations rarely has 631 you need, and a heuristic that refuses to guess will
+An API with 632 operations rarely has 632 you need, and a heuristic that refuses to guess will
 sometimes refuse something you know is safe. Both are configuration, and both are reported.
 
 ```yaml
@@ -372,12 +409,13 @@ executed — not that it silently misbehaves.
 | Document | OpenAPI 3.0, 3.1; YAML and JSON; file or stdin | Swagger 2.0 (`swagger: "2.0"` is named as out of scope) |
 | References | local `$ref`, published as `$defs`; file `$ref` confined to the document's directory | remote `$ref` (never fetched); anything escaping the root |
 | Parameters | path (`simple`), query (`form`, exploded or not), header (`simple`) — scalars and arrays of scalars | `deepObject`, `spaceDelimited`, `pipeDelimited`, `label`, `matrix`; objects and unions in a URL slot; cookie parameters (not serialized yet) |
-| Bodies | `application/json` (and a sole `*/*`), objects, arrays, `allOf`/`oneOf`/`anyOf`, recursion | `application/x-www-form-urlencoded`, multipart, several competing media types, conditional subschemas |
+| Bodies | `application/json` (and a sole `*/*`), objects, arrays, `allOf`/`oneOf`/`anyOf`, recursion | `application/x-www-form-urlencoded`, several competing media types, conditional subschemas |
+| File bodies | `multipart/form-data` (one file plus primitive text fields) and a single-file body (`application/octet-stream`, `image/*`, `audio/*`, `video/*`, `font/*`, `application/pdf\|zip\|gzip`) — the model passes a **path**, lotsman streams the file; off until `execution.fileInputs` is configured | arrays of files, two file parts, an object or array part, `encoding.style`/`explode`/`headers`, binary **responses** |
 | Auth | API key (header/query/cookie), HTTP basic, HTTP bearer — via `env:`/`file:` references; OAuth2 `clientCredentials` (the token is minted and cached) | OAuth2 `authorizationCode`/`implicit`/`password` (they need a person — delegated mode), OpenID Connect discovery, mutual TLS |
 | Effects | `read` executes by default; `write`/`destructive`/`unknown` need `--allow-mutations` | — |
 
 Measured against real documents ([docs/corpus.md](docs/corpus.md)): Kubernetes `apps/v1` 65 of 77
-operations, DigitalOcean 631 of 659, Stripe 0 of 559 (form-urlencoded bodies and `deepObject`
+operations, DigitalOcean 632 of 659, Stripe 0 of 559 (form-urlencoded bodies and `deepObject`
 parameters throughout — both named above).
 
 ## What it refuses on purpose
@@ -435,7 +473,7 @@ resolved.
 ## What is not here yet
 
 Delegated OAuth2 — the flows that need a person (M4b) — recipes, multi-API namespaces, cookie
-parameters, form-urlencoded bodies, Swagger 2.0. No container image is published to a registry:
+parameters, form-urlencoded bodies, binary responses, Swagger 2.0. No container image is published to a registry:
 one is built and tested, but publishing needs a registry, a signing story and a retention policy.
 
 `tools/list_changed` is not sent. Reload swaps the server a transport resolves per request, which
