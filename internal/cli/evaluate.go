@@ -108,6 +108,16 @@ func evaluate(ctx context.Context, data []byte, in pipelineInputs) (*workbench.S
 		opts, _ = catalogOptions(stripped, catalog.ModeTools, doc.Operations)
 	}
 	cat := catalog.Build(doc.digest, doc.Operations, opts)
+	// An upload that cannot run because a permission is missing is a
+	// configuration problem the workbench can point at, once, naming the
+	// operations it affects rather than repeating itself per tool.
+	if blocked := blockedUploads(&cat); len(blocked) > 0 {
+		snap.Problems = append(snap.Problems, workbench.Problem{
+			Section: "execution.fileInputs", Index: -1,
+			Message: fmt.Sprintf("%s (%d operation(s): %s)",
+				blocked[0].message, len(blocked), joinKeys(blocked)),
+		})
+	}
 	for i := range cat.Tools {
 		tool := &cat.Tools[i]
 		if len(tool.Corrections) == 0 {
@@ -263,4 +273,33 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// blockedUpload is one operation whose file body cannot be sent.
+type blockedUpload struct {
+	key     domain.OperationKey
+	message string
+}
+
+// blockedUploads collects the operations a missing file-input permission
+// stops (feature 009). The workbench edits the configuration, so it is the
+// right place to say which line would fix them.
+func blockedUploads(cat *catalog.Catalog) []blockedUpload {
+	var out []blockedUpload
+	for i := range cat.Tools {
+		tool := &cat.Tools[i]
+		if tool.FileInputsBlocker == nil {
+			continue
+		}
+		out = append(out, blockedUpload{key: tool.OperationKey, message: tool.FileInputsBlocker.Message})
+	}
+	return out
+}
+
+func joinKeys(blocked []blockedUpload) string {
+	keys := make([]string, 0, len(blocked))
+	for _, item := range blocked {
+		keys = append(keys, string(item.key))
+	}
+	return strings.Join(keys, ", ")
 }

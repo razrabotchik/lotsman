@@ -75,6 +75,11 @@ type Tool struct {
 	// problem is in; this says which line of the configuration to change, and
 	// the two are different questions. It used to be computed and dropped here.
 	AuthMessage string `json:"authMessage,omitempty"`
+
+	// FileInputsBlocker says why a body made of local file content cannot be
+	// sent: the code a client branches on, and the remedy a person reads
+	// (feature 009). Nil for every tool that sends no file.
+	FileInputsBlocker *FileInputsBlocker `json:"fileInputsBlocker,omitempty"`
 }
 
 // Catalog is the deterministic, immutable snapshot built from parsed
@@ -261,8 +266,9 @@ func Build(specDigest string, operations []domain.Operation, opts Options) Catal
 			// endpoint it can see is missing.
 			tool.ExecutionBlockers = append(tool.ExecutionBlockers, opts.FileInputs.reason())
 			tool.Executable = false
-			if tool.AuthMessage == "" {
-				tool.AuthMessage = opts.FileInputs.message()
+			tool.FileInputsBlocker = &FileInputsBlocker{
+				Reason:  opts.FileInputs.reason(),
+				Message: opts.FileInputs.message(),
 			}
 		}
 		if !verdict.Allowed {
@@ -526,6 +532,12 @@ type FileInputs struct {
 	// does not enable file inputs at all.
 	Reason  domain.ReasonCode
 	Message string
+}
+
+// FileInputsBlocker is the published form of a refused file body.
+type FileInputsBlocker struct {
+	Reason  domain.ReasonCode `json:"reason"`
+	Message string            `json:"message"`
 }
 
 func (f FileInputs) reason() domain.ReasonCode {

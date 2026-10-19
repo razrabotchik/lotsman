@@ -499,6 +499,9 @@ func newRunners(opts *Options, outbound *egress.Policy) []runner {
 			if len(tool.ExecutionBlockers) > 0 {
 				prepared.refusal += ": " + reasonCodes(tool.ExecutionBlockers)
 			}
+			if blocked := tool.FileInputsBlocker; blocked != nil {
+				prepared.refusal += " (" + blocked.Message + ")"
+			}
 			if tool.AuthMessage != "" {
 				// A credential problem is the one blocker an operator can fix
 				// today, so it is the one worth spelling out rather than coding.

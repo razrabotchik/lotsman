@@ -195,6 +195,14 @@ func buildReport(operations []domain.Operation, tools []Tool, excluded map[domai
 			// only be decided with the configuration in hand (auth), which is
 			// what a reader needs to see.
 			verdict.ExecutionBlockers = append([]domain.ReasonCode(nil), tool.ExecutionBlockers...)
+			if blocked := tool.FileInputsBlocker; blocked != nil {
+				// The code says which permission is missing; the detail says
+				// which line of the configuration grants it.
+				verdict.Reasons = append(verdict.Reasons, Reason{
+					Code:   blocked.Reason,
+					Detail: blocked.Message,
+				})
+			}
 			if tool.AuthMessage != "" {
 				// The credential blocker arrives as a code alone, and the code
 				// is the category rather than the answer: a reader with a
@@ -230,14 +238,24 @@ func buildReport(operations []domain.Operation, tools []Tool, excluded map[domai
 			report.Totals.CapabilityBlocked++
 		}
 
+		// Counted once per operation per code. A blocker that also carries a
+		// detail -- a credential that is configured in the wrong place, a file
+		// body whose permission is missing -- appears in both lists, and an
+		// operation counted twice for one reason misreports the catalog.
+		counted := make(map[domain.ReasonCode]bool, len(verdict.Reasons))
+		for _, group := range [][]domain.ReasonCode{verdict.ExecutionBlockers, verdict.PolicyBlockers} {
+			for _, code := range group {
+				if !counted[code] {
+					counted[code] = true
+					report.ByReason[code]++
+				}
+			}
+		}
 		for _, reason := range verdict.Reasons {
-			report.ByReason[reason.Code]++
-		}
-		for _, code := range verdict.ExecutionBlockers {
-			report.ByReason[code]++
-		}
-		for _, code := range verdict.PolicyBlockers {
-			report.ByReason[code]++
+			if !counted[reason.Code] {
+				counted[reason.Code] = true
+				report.ByReason[reason.Code]++
+			}
 		}
 
 		report.Operations = append(report.Operations, verdict)

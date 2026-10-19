@@ -263,9 +263,7 @@ execution:
 	}
 	// Nothing was sent: the fixture logs no request for it, and the audit
 	// record says refused.
-	if !mentions(stderr.String(), "decision=refused") {
-		t.Errorf("audit did not record a refusal:\n%s", stderr.String())
-	}
+	awaitLog(t, &stderr, "decision=refused")
 }
 
 // mentions is the e2e way of asking whether output leaked something.
