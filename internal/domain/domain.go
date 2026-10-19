@@ -580,6 +580,29 @@ type BodySpec struct {
 	Parts []BodyPart `json:"parts,omitempty"`
 }
 
+// BodyKindOf is the body's kind with the empty value read as JSON, so a
+// caller never has to know that "unset" and "json" are the same thing.
+func (b *BodySpec) BodyKindOf() BodyKind {
+	if b == nil || b.Kind == "" {
+		return BodyJSON
+	}
+	return b.Kind
+}
+
+// CarriesFiles reports whether sending this body reads local files: the
+// question the call path asks when it decides on a budget, a prompt and a
+// descriptor to close.
+func (b *BodySpec) CarriesFiles() bool {
+	switch b.BodyKindOf() {
+	case BodyMultipart, BodyBinary:
+		return true
+	case BodyJSON:
+		return false
+	default:
+		return false
+	}
+}
+
 // BodyKind is how a request body is put on the wire (feature 009).
 type BodyKind string
 

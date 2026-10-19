@@ -44,6 +44,7 @@ func (r Runtime) Export() File {
 			DenyRules:            append([]Rule(nil), r.DenyRules...),
 			MaxResponseBytes:     r.MaxResponseBytes,
 			MaxConcurrentCalls:   r.MaxConcurrentCalls,
+			FileInputs:           r.FileInputs.export(),
 		},
 		Server:             r.Server.export(),
 		OperationOverrides: append([]OperationOverride(nil), r.Overrides...),
@@ -92,3 +93,27 @@ func postureOf(allowMutations bool) DefaultPolicy {
 }
 
 func boolField(b bool) *bool { return &b }
+
+// export renders the resolved file-input settings. The defaults that were
+// filled in on resolve are written out as values: an exported configuration
+// says what the process is actually doing, which for an ability this size is
+// the point of exporting it.
+//
+//nolint:gocritic // hugeParam: the exporter reads one resolved section; a pointer would let it edit the running configuration.
+func (f FileInputsRuntime) export() FileInputs {
+	if !f.Enabled {
+		return FileInputs{}
+	}
+	out := FileInputs{
+		Enabled:             true,
+		Roots:               append([]string(nil), f.Roots...),
+		MaxFileBytes:        f.MaxFileBytes,
+		MaxTotalBytes:       f.MaxTotalBytes,
+		AllowedContentTypes: append([]string(nil), f.AllowedContentTypes...),
+		AllowHTTPTransport:  f.AllowHTTPTransport,
+	}
+	if f.UploadTimeout > 0 {
+		out.UploadTimeout = f.UploadTimeout.String()
+	}
+	return out
+}

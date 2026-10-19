@@ -142,12 +142,34 @@ func TestRequestBodyRejections(t *testing.T) {
 		mention string
 	}{
 		{
-			name: "no json media type",
+			// A multipart body is sent since feature 009, but a form with no
+			// file part is a urlencoded form in multipart clothing, and that
+			// serialization does not exist yet.
+			name: "multipart form without a file part",
+			body: `        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                caption: { type: string }`,
+			reason:  domain.ReasonUnsupportedBodySchema,
+			mention: "no part of this multipart/form-data body is a file",
+		},
+		{
+			name: "multipart body that is not an object",
 			body: `        content:
           multipart/form-data:
             schema: { type: object }`,
+			reason:  domain.ReasonUnsupportedBodySchema,
+			mention: "not an object with properties",
+		},
+		{
+			name: "a media type lotsman neither reads nor sends",
+			body: `        content:
+          application/xml:
+            schema: { type: object }`,
 			reason:  domain.ReasonUnsupportedMediaType,
-			mention: "multipart/form-data",
+			mention: "application/xml",
 		},
 		{
 			name: "two competing +json types",

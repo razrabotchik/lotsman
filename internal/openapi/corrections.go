@@ -334,8 +334,9 @@ func (f *fixes) pinnedMediaType(c *OperationCorrection, rb *v3.RequestBody, resu
 		}
 		if !sendable(c.MediaType) {
 			f.problem("operationOverrides", c.Index,
-				"mediaType %q is declared, but lotsman sends JSON bodies only (application/json or a +json type)",
-				c.MediaType)
+				"mediaType %q is declared, but lotsman sends a JSON body (application/json or a +json type), "+
+					"%s, or a single-file body",
+				c.MediaType, multipartMediaType)
 			return ""
 		}
 		result.Corrections = append(result.Corrections, correction("mediaType "+c.MediaType, c.Note))
@@ -348,7 +349,12 @@ func (f *fixes) pinnedMediaType(c *OperationCorrection, rb *v3.RequestBody, resu
 
 // sendable reports whether lotsman can send a body of this media type.
 func sendable(mediaType string) bool {
-	return mediaType == jsonMediaType || strings.HasSuffix(mediaType, "+json")
+	if mediaType == jsonMediaType || strings.HasSuffix(mediaType, "+json") {
+		return true
+	}
+	// A pin is how an operator chooses multipart over a JSON body the same
+	// operation declares -- the case FR-29 leaves to them (feature 009).
+	return bodyKindOf(mediaType) != domain.BodyJSON
 }
 
 func correction(target, note string) domain.Correction {

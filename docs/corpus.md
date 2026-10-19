@@ -10,7 +10,7 @@ refuses, is the reason a design flaw or a feature that has not been written yet?
 | Document | Operations | Supported | Executable (default policy) | Catalog (tools) | Catalog (search) | Verdict |
 |---|---|---|---|---|---|---|
 | Kubernetes `apps/v1` (v1.31.0) | 77 | 65 | 38 | 2.23 MB | **4.7 KB** | translated |
-| DigitalOcean, exploded (pinned commit) | 659 | 631 | 0 (all need auth) | 737 KB | **4.7 KB** | translated |
+| DigitalOcean, exploded (pinned commit) | 659 | 632 | 0 (all need auth) | 737 KB | **4.7 KB** | translated |
 | Stripe (v1301) | 559 | 0 | 0 | — | — | refused per matrix |
 | DigitalOcean, root only | 0 | 0 | 0 | — | — | 661 references refused by name |
 | GitLab (v17.5.0-ee) | — | — | — | — | — | refused before parsing |
@@ -64,14 +64,16 @@ Parsing the 5.2 MB document, normalizing it and producing the full report takes 
 
 ## DigitalOcean — the exploded-spec case
 
-**659 operations, 631 supported, in 0.3 s.** The root is a 112 KB index whose `$ref`s point at 661
+**659 operations, 632 supported, in 0.3 s.** The root is a 112 KB index whose `$ref`s point at 661
 sibling documents; the transitive closure is about 2,900 files and 14 MB, every one of them
 resolved relative to the document that referenced it, expanded through symlinks and checked to be
 inside the spec root before being read (ADR-0009). The parser receives the verified list as an
 allowlist, so the secrets file sitting next to a spec is never opened.
 
-The 28 rejections are precise: 21 request bodies using conditional subschemas, 6 path parameters
-declared as unions, one unsupported media type and one invalid parameter. All 631 published tools
+The 27 rejections are precise: 21 request bodies using conditional subschemas, 6 path parameters
+declared as unions, and one invalid parameter. The 632nd operation arrived with feature 009:
+`inference_upload_batch_file` PUTs raw JSONL to a presigned URL as `application/octet-stream`, and
+before file inputs existed that was the document's one `unsupported_media_type`. All 632 published tools
 need a bearer credential, so none is executable until the auth stage — which is the honest
 statement about an API that authenticates everything.
 
@@ -109,7 +111,7 @@ and says it is not part of this release.
 
 Search mode publishes the meta-tools regardless of catalog size, so `tools/list` is a constant
 **4 656 bytes** — **5 644** when the mutating call tool is published too — for both Kubernetes (65
-operations) and DigitalOcean (631). Measured on the wire, from a sessionless `2026-07-28` POST,
+operations) and DigitalOcean (632). Measured on the wire, from a sessionless `2026-07-28` POST,
 because that is what a client receives and a live session is the only place the published list
 exists: `inspect` reports the tools-mode size in either mode, that being the measurement the mode
 decision is made against, and its wording says which of the two it prints.

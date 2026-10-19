@@ -164,6 +164,7 @@ func newHandler(logger *slog.Logger) http.Handler {
 	s.registerWrites(mux)
 	registerMirror(mux)
 	registerShapes(mux)
+	registerUploads(mux)
 	registerRefused(mux)
 	newTokens().register(mux)
 	(&charges{}).register(mux)

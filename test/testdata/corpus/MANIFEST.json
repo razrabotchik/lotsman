@@ -83,8 +83,8 @@
       "expect": {
         "outcome": "reported",
         "found": 659,
-        "supported": 631,
-        "rejected": 28,
+        "supported": 632,
+        "rejected": 27,
         "byReason": [
           "unsupported_body_schema",
           "unsupported_parameter_schema",

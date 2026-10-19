@@ -55,7 +55,7 @@ Demo credentials are intentionally public and valid only for this fixture:
 
 ## What each endpoint is for
 
-The document declares 43 operations. Lotsman supports 38 of them, refuses 5,
+The document declares 44 operations. Lotsman supports 40 of them, refuses 4,
 and blocks more by policy (a test holds these numbers to what `inspect` reports) — so `lotsman inspect cmd/api-gateway/openapi.yaml`
 prints a support matrix against a real API rather than against prose.
 
@@ -73,6 +73,8 @@ prints a support matrix against a real API rather than against prose.
 | `POST /v1/pets/{petId}/actions/rename` | A POST whose effect the method cannot reveal: unknown, and refused until the configuration says otherwise |
 | `GET /v1/secure/profile` | Bearer authentication from an `env:` reference |
 | `GET /v1/echo` | Arrays, query and header serialization |
+| `POST /v1/forms/multipart` | A multipart body: a text field and a file read from local disk, answered with the sha256 of what arrived |
+| `PUT /v1/uploads/raw` | An `application/octet-stream` body: one file, nothing else |
 | `GET /v1/status/{code}` | Caller-selected 4xx/5xx handling |
 | `GET /v1/slow` | Request timeout and cancellation — and, with `execution.maxConcurrentCalls: 1`, a second call refused at once while the first waits |
 | `GET /v1/ping` | An operation named like lotsman's built-in `ping`: published as `ping_<hash>`, and the built-in still answers |
@@ -183,7 +185,6 @@ operations move from rejected to executable.
 | Endpoint | Reason code |
 | --- | --- |
 | `POST /v1/forms/urlencoded` | `unsupported_media_type` — the Stripe shape |
-| `POST /v1/forms/multipart` | `unsupported_media_type` |
 | `PATCH /v1/pets/{petId}/competing` | `unsupported_media_type` — four patch types at once, the Kubernetes shape |
 | `GET /v1/filters` | `unsupported_parameter_style` ×3 — `deepObject`, `spaceDelimited`, `pipeDelimited` |
 | `POST /v1/conditional` | `unsupported_body_schema` — `if`/`then`/`else`, what 21 DigitalOcean operations are refused for |

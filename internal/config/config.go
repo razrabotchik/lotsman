@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"mime"
 	"net"
 	"net/url"
 	"os"
@@ -168,6 +169,42 @@ type Execution struct {
 	// whole process. A call over the limit is refused before the network
 	// rather than queued. Zero means the documented default.
 	MaxConcurrentCalls int `yaml:"maxConcurrentCalls,omitempty"`
+	// FileInputs is the ability to read a local file named by a tool argument
+	// and send it as a request body (feature 009). Absent means no operation
+	// with a file body is published at all.
+	FileInputs FileInputs `yaml:"fileInputs,omitempty"`
+}
+
+// FileInputs is what an operator allows lotsman to read from this machine and
+// send to an API (docs/spec.md §5.1, ADR-0022).
+//
+// Off by default, and there is no enabled-but-unconstrained state: `enabled`
+// without `roots` or without `allowedContentTypes` is refused rather than
+// resolved to something permissive. A path arrives in untrusted tool
+// arguments, so this section -- and not the model's judgement -- is the
+// boundary.
+type FileInputs struct {
+	Enabled bool `yaml:"enabled,omitempty"`
+	// Roots are the only directories a file may be read from, after symlinks
+	// are resolved. Absolute paths: a relative one would mean something
+	// different depending on where the process was started.
+	Roots []string `yaml:"roots,omitempty"`
+	// MaxFileBytes bounds one file and MaxTotalBytes one call. Zero means the
+	// documented default (20 MiB and 100 MiB).
+	MaxFileBytes  int64 `yaml:"maxFileBytes,omitempty"`
+	MaxTotalBytes int64 `yaml:"maxTotalBytes,omitempty"`
+	// AllowedContentTypes is the set a file's *detected* type must be in. The
+	// extension is never consulted: it is part of the same untrusted argument
+	// as the path.
+	AllowedContentTypes []string `yaml:"allowedContentTypes,omitempty"`
+	// AllowHTTPTransport lets a client reached over HTTP name a file on this
+	// machine. Off by default, because over stdio the client and the files are
+	// the same person's and over HTTP they are not.
+	AllowHTTPTransport bool `yaml:"allowHTTPTransport,omitempty"`
+	// UploadTimeout is the extra body-phase budget a call carrying files gets,
+	// as a Go duration. Empty means the documented default (2m): 20 MiB does
+	// not fit in a 30-second call budget on a slow uplink.
+	UploadTimeout string `yaml:"uploadTimeout,omitempty"`
 }
 
 // Transport is how a client reaches lotsman (docs/spec.md 5.1).
@@ -730,6 +767,95 @@ func validateExecution(execution *Execution) error {
 				"config: execution.timeout %q is not positive; a call needs some time to happen in",
 				execution.Timeout)
 		}
+	}
+	return validateFileInputs(&execution.FileInputs)
+}
+
+// validateFileInputs refuses a file-input section that would read more than
+// the operator meant to allow.
+//
+// A section left disabled is checked as far as it can be and then left inert:
+// an operator who keeps a prepared block in the file is doing the right thing,
+// and a typo in it should still be found before it is switched on.
+func validateFileInputs(files *FileInputs) error {
+	if files.Enabled && len(files.Roots) == 0 {
+		return errs.Errorf(errs.ClassUsage,
+			"config: execution.fileInputs.enabled is true with no roots; name the directories "+
+				"files may be read from -- there is no default, because the default would be this "+
+				"whole machine")
+	}
+	if files.Enabled && len(files.AllowedContentTypes) == 0 {
+		return errs.Errorf(errs.ClassUsage,
+			"config: execution.fileInputs.enabled is true with no allowedContentTypes; name the "+
+				"types a file may be, as detected from its content")
+	}
+	for _, root := range files.Roots {
+		switch {
+		case strings.TrimSpace(root) == "":
+			return errs.Errorf(errs.ClassUsage, "config: execution.fileInputs.roots has an empty entry")
+		case !filepath.IsAbs(root):
+			return errs.Errorf(errs.ClassUsage,
+				"config: execution.fileInputs.roots %q is not an absolute path; a relative root "+
+					"would mean a different directory depending on where lotsman was started", root)
+		case filepath.Clean(root) == string(filepath.Separator):
+			return errs.Errorf(errs.ClassUsage,
+				"config: execution.fileInputs.roots %q is the whole filesystem; name the directory "+
+					"the files live in", root)
+		}
+	}
+	for _, name := range files.AllowedContentTypes {
+		parsed, params, err := mime.ParseMediaType(strings.TrimSpace(name))
+		if err != nil {
+			return errs.Errorf(errs.ClassUsage,
+				"config: execution.fileInputs.allowedContentTypes %q is not a media type", name)
+		}
+		if len(params) > 0 {
+			return errs.Errorf(errs.ClassUsage,
+				"config: execution.fileInputs.allowedContentTypes %q carries parameters; name the "+
+					"type alone (%q)", name, parsed)
+		}
+		if strings.Contains(parsed, "*") {
+			return errs.Errorf(errs.ClassUsage,
+				"config: execution.fileInputs.allowedContentTypes %q is a range; a detected type is "+
+					"always concrete, so name the types you allow", name)
+		}
+	}
+	for _, limit := range []struct {
+		field string
+		value int64
+	}{
+		{"maxFileBytes", files.MaxFileBytes},
+		{"maxTotalBytes", files.MaxTotalBytes},
+	} {
+		if limit.value < 0 {
+			return errs.Errorf(errs.ClassUsage,
+				"config: execution.fileInputs.%s is %d; a limit may be omitted but not negative",
+				limit.field, limit.value)
+		}
+	}
+	if files.MaxFileBytes > 0 && files.MaxTotalBytes > 0 && files.MaxFileBytes > files.MaxTotalBytes {
+		return errs.Errorf(errs.ClassUsage,
+			"config: execution.fileInputs.maxFileBytes (%d) is above maxTotalBytes (%d); one file "+
+				"cannot be allowed more than a whole call", files.MaxFileBytes, files.MaxTotalBytes)
+	}
+	if files.UploadTimeout != "" {
+		budget, err := time.ParseDuration(files.UploadTimeout)
+		if err != nil {
+			return errs.Errorf(errs.ClassUsage,
+				"config: execution.fileInputs.uploadTimeout %q is not a duration (for example \"2m\")",
+				files.UploadTimeout)
+		}
+		if budget <= 0 {
+			return errs.Errorf(errs.ClassUsage,
+				"config: execution.fileInputs.uploadTimeout %q is not positive; an upload needs time "+
+					"to happen in", files.UploadTimeout)
+		}
+	}
+	if !files.Enabled && files.AllowHTTPTransport {
+		return errs.Errorf(errs.ClassUsage,
+			"config: execution.fileInputs.allowHTTPTransport is true while fileInputs is disabled; "+
+				"the permission says nothing on its own, and reading it as an intention to enable "+
+				"file inputs is exactly the guess lotsman does not make")
 	}
 	return nil
 }

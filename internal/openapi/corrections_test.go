@@ -90,7 +90,7 @@ func TestMediaTypePin(t *testing.T) {
 		{"declared json type is used", "application/merge-patch+json", "application/merge-patch+json", "", domain.SupportSupported},
 		{"pin is normalized like the document", "Application/Merge-Patch+JSON; charset=utf-8", "application/merge-patch+json", "", domain.SupportSupported},
 		{"undeclared type is a problem", "application/json-patch+json", "", "is not one", domain.SupportRejected},
-		{"declared non-json type is a problem", "application/apply-patch+yaml", "", "sends JSON bodies only", domain.SupportRejected},
+		{"declared non-json type is a problem", "application/apply-patch+yaml", "", "lotsman sends a JSON body", domain.SupportRejected},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

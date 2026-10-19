@@ -46,9 +46,19 @@ func buildBody(rb *v3.RequestBody, fix bodyFix, pointer string, defs *bundle) bo
 	mediaType, content, reason := selectMediaType(rb.Content, fix.mediaType)
 	if reason != "" {
 		out.reject(reason, bodyPointer, fmt.Sprintf(
-			"request body offers %s; lotsman sends %s only",
-			describeMediaTypes(rb.Content), jsonMediaType))
+			"request body offers %s; lotsman sends %s, %s and a single-file body only",
+			describeMediaTypes(rb.Content), jsonMediaType, multipartMediaType))
 		return out
+	}
+	// A body made of file content is published as a file reference and
+	// serialized by a different writer (feature 009), so it leaves the JSON
+	// path here rather than threading a kind through it.
+	switch bodyKindOf(mediaType) {
+	case domain.BodyMultipart:
+		return buildMultipartBody(rb, content, mediaType, bodyPointer, fix, defs)
+	case domain.BodyBinary:
+		return buildBinaryBody(rb, content, mediaType, bodyPointer, fix, defs)
+	case domain.BodyJSON:
 	}
 	if content.Schema == nil {
 		out.reject(domain.ReasonUnsupportedBodySchema, bodyPointer,
@@ -106,10 +116,214 @@ func bodyReasonText(code domain.ReasonCode) string {
 	}
 }
 
+// buildBinaryBody translates a body that is one file: the schema the caller
+// is published is the file reference, whatever the document says the bytes
+// look like, because "a path to a local file" is the only way content reaches
+// lotsman (ADR-0022 decision 1).
+func buildBinaryBody(rb *v3.RequestBody, content *v3.MediaType, mediaType, bodyPointer string, fix bodyFix, defs *bundle) bodyBuild {
+	var out bodyBuild
+	if patchRefused(fix, defs, mediaType) {
+		out.reject(domain.ReasonUnsupportedBodySchema, bodyPointer, fmt.Sprintf(
+			"the %s body is published as a file input, which operationOverrides[%d].requestBody.patch cannot change",
+			mediaType, fix.index))
+		return out
+	}
+	if content.Schema != nil {
+		schema := content.Schema.Schema()
+		if !isBinarySchema(schema) && !isEmptySchema(schema) {
+			out.reject(domain.ReasonUnsupportedBodySchema, bodyPointer, fmt.Sprintf(
+				"a %s body is sent as one file, but this one declares a schema with its own shape; "+
+					"lotsman will not guess which part of it is the content", mediaType))
+			return out
+		}
+	}
+	out.spec = &domain.BodySpec{
+		MediaType:   mediaType,
+		Required:    rb.Required != nil && *rb.Required,
+		Description: rb.Description,
+		Schema:      fileInputSchema(),
+		Kind:        domain.BodyBinary,
+	}
+	return out
+}
+
+// buildMultipartBody translates the one multipart shape feature 009 carries:
+// an object with exactly one binary property and primitive properties beside
+// it. Everything else is refused with the shape named -- a part serialization
+// lotsman is not sure of would put bytes on the wire that the document did not
+// describe (Constitution I).
+func buildMultipartBody(rb *v3.RequestBody, content *v3.MediaType, mediaType, bodyPointer string, fix bodyFix, defs *bundle) bodyBuild {
+	var out bodyBuild
+	if patchRefused(fix, defs, mediaType) {
+		out.reject(domain.ReasonUnsupportedBodySchema, bodyPointer, fmt.Sprintf(
+			"the %s body is published with a file input, which operationOverrides[%d].requestBody.patch cannot change",
+			mediaType, fix.index))
+		return out
+	}
+	if content.Schema == nil {
+		out.reject(domain.ReasonUnsupportedBodySchema, bodyPointer,
+			"request body declares no schema, so no argument can be validated against it")
+		return out
+	}
+	document := content.Schema.Schema()
+	if document == nil {
+		out.reject(domain.ReasonInvalidSchema, bodyPointer, bodyReasonText(domain.ReasonInvalidSchema))
+		return out
+	}
+
+	converted, convertReason := defs.normalizeProxy(content.Schema, bodyTarget, 0, map[*base.Schema]bool{})
+	if convertReason != "" {
+		out.reject(convertReason, bodyPointer, bodyReasonText(convertReason))
+		return out
+	}
+	// The published object is edited below, so a reference is inlined for this
+	// body: a $defs entry is shared, and the file property is this
+	// operation's business only.
+	published, unavailable := defs.followRef(converted)
+	if unavailable != "" {
+		out.reject(domain.ReasonUnsupportedBodySchema, bodyPointer, fmt.Sprintf(
+			"the %s body references %s, which is not available to publish as a form",
+			mediaType, defs.componentName(unavailable)))
+		return out
+	}
+	properties, _ := published["properties"].(map[string]any)
+	if typeOf, _ := published["type"].(string); typeOf != "object" || len(properties) == 0 {
+		out.reject(domain.ReasonUnsupportedBodySchema, bodyPointer, fmt.Sprintf(
+			"a %s body is a set of named parts, and this one is not an object with properties", mediaType))
+		return out
+	}
+
+	// Document order, not map order: part order decides the bytes on the wire
+	// (Constitution IV), and the document is the only place an order is
+	// written down.
+	parts := make([]domain.BodyPart, 0, len(properties))
+	fileField := ""
+	for name, proxy := range document.Properties.FromOldest() {
+		if proxy == nil {
+			out.reject(domain.ReasonInvalidSchema, bodyPointer, bodyReasonText(domain.ReasonInvalidSchema))
+			return out
+		}
+		property := proxy.Schema()
+		if _, published := properties[name]; !published {
+			// Normalization dropped it (a readOnly property); a part lotsman
+			// does not publish is a part it must not send.
+			continue
+		}
+		encoding := encodingOf(content, name)
+		if keyword := unsupportedEncoding(encoding); keyword != "" {
+			out.reject(domain.ReasonUnsupportedBodySchema, bodyPointer, fmt.Sprintf(
+				"part %q declares encoding.%s, which lotsman does not serialize for %s",
+				name, keyword, mediaType))
+			return out
+		}
+		contentTypes := encodingContentTypes(encoding)
+
+		binary := isBinarySchema(property) ||
+			(isEmptySchema(property) && len(contentTypes) > 0 && !onlyTextTypes(contentTypes))
+		if binary {
+			if fileField != "" {
+				out.reject(domain.ReasonUnsupportedBodySchema, bodyPointer, fmt.Sprintf(
+					"parts %q and %q are both files; lotsman sends one file per call in this release",
+					fileField, name))
+				return out
+			}
+			fileField = name
+			properties[name] = map[string]any(fileInputSchema())
+			parts = append(parts, domain.BodyPart{Name: name, Binary: true, ContentTypes: contentTypes})
+			continue
+		}
+		if reason := primitivePartRefusal(properties[name]); reason != "" {
+			out.reject(domain.ReasonUnsupportedBodySchema, bodyPointer, fmt.Sprintf(
+				"part %q is %s; a %s part lotsman sends is a file or a single primitive value",
+				name, reason, mediaType))
+			return out
+		}
+		parts = append(parts, domain.BodyPart{Name: name, ContentTypes: contentTypes})
+	}
+	if fileField == "" {
+		out.reject(domain.ReasonUnsupportedBodySchema, bodyPointer, fmt.Sprintf(
+			"no part of this %s body is a file; a form of text fields is form-urlencoded, which lotsman does not send yet",
+			mediaType))
+		return out
+	}
+	if len(parts) != len(properties) {
+		// A correction added a property the document does not have, so the
+		// part list and the published object would disagree about what is sent.
+		out.reject(domain.ReasonUnsupportedBodySchema, bodyPointer, fmt.Sprintf(
+			"the published %s body has %d properties and the document describes %d parts; "+
+				"a corrected multipart body is not supported in this release",
+			mediaType, len(properties), len(parts)))
+		return out
+	}
+
+	out.spec = &domain.BodySpec{
+		MediaType:   mediaType,
+		Required:    rb.Required != nil && *rb.Required,
+		Description: rb.Description,
+		Schema:      published,
+		Kind:        domain.BodyMultipart,
+		Parts:       parts,
+	}
+	return out
+}
+
+// patchRefused reports a requestBody.patch on a body published as a file
+// input. The patch language is JSON Merge Patch over the published schema, and
+// the published schema here is lotsman's own file reference rather than the
+// document's: a patch would be editing our wording, not the API's contract.
+func patchRefused(fix bodyFix, defs *bundle, mediaType string) bool {
+	if fix.patch == nil {
+		return false
+	}
+	defs.fixes.problem("operationOverrides", fix.index,
+		"requestBody.patch is set, but the %s body is published as a file input, which a patch cannot change",
+		mediaType)
+	return true
+}
+
+// primitivePartRefusal names why a published part schema is not a single
+// primitive value, or "".
+func primitivePartRefusal(published any) string {
+	schema, ok := published.(map[string]any)
+	if !ok {
+		return "not a schema lotsman can read"
+	}
+	switch typed := schema["type"].(type) {
+	case string:
+		switch typed {
+		case "string", "number", "integer", "boolean":
+			return ""
+		case "object":
+			return "an object"
+		case "array":
+			return "an array"
+		default:
+			return "of type " + typed
+		}
+	case []any:
+		return "of several types"
+	default:
+		return "without a single declared type"
+	}
+}
+
+// onlyTextTypes reports whether every type in the set is text, which makes an
+// empty-schema part a text part rather than a file.
+func onlyTextTypes(types []string) bool {
+	for _, name := range types {
+		if !strings.HasPrefix(name, "text/") && name != jsonMediaType {
+			return false
+		}
+	}
+	return len(types) > 0
+}
+
 // selectMediaType picks the request media type deterministically (FR-29):
 // exact application/json wins, then a single JSON-structured type such as
-// application/merge-patch+json. Anything else is refused -- "pick the first
-// one" is how a converter ends up sending a JSON body to a multipart endpoint.
+// application/merge-patch+json, then -- when it is the only thing offered or
+// the operator pinned it -- a multipart or single-file body (feature 009).
+// Anything else is refused: "pick the first one" is how a converter ends up
+// sending a JSON body to a multipart endpoint.
 func selectMediaType(content *orderedmap.Map[string, *v3.MediaType], pinned string) (string, *v3.MediaType, domain.ReasonCode) {
 	if orderedmap.Len(content) == 0 {
 		return "", nil, domain.ReasonUnsupportedMediaType
@@ -152,8 +366,17 @@ func selectMediaType(content *orderedmap.Map[string, *v3.MediaType], pinned stri
 	// schemas in play, and picking one would be the guess this avoids.
 	if orderedmap.Len(content) == 1 {
 		for name, media := range content.FromOldest() {
-			if normalized := normalizeMediaType(name); normalized == "*/*" || normalized == "application/*" {
+			normalized := normalizeMediaType(name)
+			if normalized == "*/*" || normalized == "application/*" {
 				return jsonMediaType, media, ""
+			}
+			// A body made of file content, offered on its own: there is no
+			// JSON alternative to prefer and nothing to choose between, which
+			// is the only situation feature 009 picks one without being told.
+			// Two file-ish types, or one beside an XML body, stay a refusal an
+			// operator resolves with `mediaType`.
+			if bodyKindOf(normalized) != domain.BodyJSON {
+				return normalized, media, ""
 			}
 		}
 	}

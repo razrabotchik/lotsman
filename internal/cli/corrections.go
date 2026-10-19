@@ -137,6 +137,7 @@ var runtimeSpelling = map[string]string{
 	"Timeout":              "execution.timeout",
 	"MaxResponseBytes":     "execution.maxResponseBytes",
 	"MaxConcurrentCalls":   "execution.maxConcurrentCalls",
+	"FileInputs":           "execution.fileInputs",
 	"Lax":                  "spec.strict",
 	"Source":               "spec.source",
 	"Root":                 "spec.root",

@@ -519,18 +519,33 @@ paths:
   /v1/forms/multipart:
     post:
       operationId: postMultipartForm
-      summary: A multipart body (refused - unsupported_media_type)
+      summary: A multipart body - a text field and a file read from local disk
       requestBody:
         required: true
         content:
           multipart/form-data:
             schema:
               type: object
+              required: [attachment]
               properties:
                 name: {type: string}
                 attachment: {type: string, format: binary}
+            encoding:
+              attachment: {contentType: "image/png, text/plain"}
       responses:
-        "200": {description: Field and file}
+        "200": {description: Field and file, with the sha256 of what arrived}
+
+  /v1/uploads/raw:
+    put:
+      operationId: putRawUpload
+      summary: A whole body of bytes - the application/octet-stream shape
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: {type: string, format: binary}
+      responses:
+        "200": {description: Length and sha256 of what arrived}
 
   /v1/filters:
     get:

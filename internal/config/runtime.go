@@ -48,6 +48,10 @@ type Runtime struct {
 	// MaxConcurrentCalls bounds the tool calls in flight. Zero means the
 	// runtime's documented default.
 	MaxConcurrentCalls int
+	// FileInputs is the file-reading ability of feature 009, with its defaults
+	// applied: zero-valued when the operator said nothing, in which case no
+	// operation with a file body is published.
+	FileInputs FileInputsRuntime
 	// Lax serves the supported subset instead of refusing a document that has
 	// any unsupported operation. It is `spec.strict: false` and `--lax`, which
 	// are the same request in two places.
@@ -157,6 +161,7 @@ func Resolve(file *File, env Environment, flags Overrides) Runtime {
 		runtime.AllowPrivateNetworks = file.Execution.AllowPrivateNetworks
 		runtime.MaxResponseBytes = file.Execution.MaxResponseBytes
 		runtime.MaxConcurrentCalls = file.Execution.MaxConcurrentCalls
+		runtime.FileInputs = resolveFileInputs(&file.Execution.FileInputs)
 		if file.Spec.Strict != nil {
 			runtime.Lax = !*file.Spec.Strict
 		}
@@ -258,4 +263,49 @@ func applyServerFlags(resolved *ServerRuntime, flags Overrides) {
 type Environment struct {
 	BaseURL  string
 	LogLevel string
+}
+
+// FileInputsRuntime is the file-input configuration with its defaults
+// applied, which is what every caller downstream reads: a package deciding
+// whether to publish an upload must not also be deciding what an unset limit
+// meant.
+type FileInputsRuntime struct {
+	Enabled             bool
+	Roots               []string
+	MaxFileBytes        int64
+	MaxTotalBytes       int64
+	AllowedContentTypes []string
+	AllowHTTPTransport  bool
+	UploadTimeout       time.Duration
+}
+
+// DefaultUploadTimeout is the extra body-phase budget a call carrying files
+// gets when the operator states none. A 20 MiB file on a slow uplink does not
+// fit in the ordinary call budget, and a timeout that cannot be met is a
+// refusal dressed as a deadline.
+const DefaultUploadTimeout = 2 * time.Minute
+
+// resolveFileInputs copies the section and fills in the documented defaults.
+// A disabled section resolves to the zero value: an operator keeping a
+// prepared block in the file has not enabled anything.
+func resolveFileInputs(files *FileInputs) FileInputsRuntime {
+	if !files.Enabled {
+		return FileInputsRuntime{}
+	}
+	out := FileInputsRuntime{
+		Enabled:             true,
+		Roots:               append([]string(nil), files.Roots...),
+		MaxFileBytes:        files.MaxFileBytes,
+		MaxTotalBytes:       files.MaxTotalBytes,
+		AllowedContentTypes: append([]string(nil), files.AllowedContentTypes...),
+		AllowHTTPTransport:  files.AllowHTTPTransport,
+		UploadTimeout:       DefaultUploadTimeout,
+	}
+	if files.UploadTimeout != "" {
+		// Validated at load; an unparseable value never reaches here.
+		if budget, err := time.ParseDuration(files.UploadTimeout); err == nil {
+			out.UploadTimeout = budget
+		}
+	}
+	return out
 }

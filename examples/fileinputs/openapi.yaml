@@ -1,0 +1,139 @@
+# The file-input fixture (feature 009): every body shape lotsman sends as a
+# file, and the shapes it refuses with the reason named. The granitstones
+# catalog operation this feature exists for is `uploadProductImage`.
+#
+# Nothing here is published until `execution.fileInputs.enabled` is set, with
+# roots and allowed content types -- see lotsman.yaml beside this file.
+openapi: 3.1.0
+info:
+  title: Lotsman file inputs
+  version: 1.0.0
+servers:
+  - url: http://127.0.0.1:18080
+paths:
+  /api/products/{id}/images:
+    post:
+      operationId: uploadProductImage
+      summary: Add a photo to a product
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+                is_main: { type: boolean }
+                alt: { type: string }
+                title: { type: string }
+            encoding:
+              file: { contentType: "image/jpeg, image/png, image/webp" }
+      responses:
+        "201": { description: Photo added }
+  /api/products/{id}/thumbnail:
+    put:
+      operationId: replaceProductThumbnail
+      summary: Replace a product thumbnail with a raw image body
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        "204": { description: Thumbnail replaced }
+  /api/products/{id}/attachments:
+    post:
+      operationId: uploadProductAttachments
+      summary: Several files in one call -- refused in this release
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                files:
+                  type: array
+                  items: { type: string, format: binary }
+      responses:
+        "201": { description: Attachments added }
+  /api/products/{id}/metadata:
+    post:
+      operationId: uploadProductMetadata
+      summary: A file beside a JSON object part -- refused in this release
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+                meta:
+                  type: object
+                  properties:
+                    locale: { type: string }
+            encoding:
+              meta: { contentType: application/json }
+      responses:
+        "201": { description: Metadata added }
+  /api/products/{id}/notes:
+    post:
+      operationId: addProductNote
+      summary: A multipart form with no file part -- form-urlencoded in disguise
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                note: { type: string }
+      responses:
+        "201": { description: Note added }
+  /api/products/{id}/base64:
+    post:
+      operationId: uploadProductImageBase64
+      summary: "A base64 string stays a string: `format: byte` is not a file"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [image]
+              properties:
+                image: { type: string, format: byte }
+      responses:
+        "201": { description: Photo added }
