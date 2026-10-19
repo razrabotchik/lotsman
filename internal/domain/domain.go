@@ -298,6 +298,28 @@ const (
 	ReasonApprovalUnavailable ReasonCode = "approval_unavailable"
 	// ReasonApprovalDeclined marks a call refused because the approval prompt was declined or dismissed.
 	ReasonApprovalDeclined ReasonCode = "approval_declined"
+	// ReasonFileInputsDisabled marks an operation whose body carries a file while `execution.fileInputs` is off: reading local files is an ability an operator grants, not a default (feature 009, ADR-0022).
+	ReasonFileInputsDisabled ReasonCode = "file_inputs_disabled"
+	// ReasonFileInputsTransportNotAllowed marks a file body refused because the transport is HTTP and `allowHTTPTransport` is unset: a remote client would be reading this machine's disk.
+	ReasonFileInputsTransportNotAllowed ReasonCode = "file_inputs_transport_not_allowed"
+	// ReasonFileInputOutsideRoots marks a path that resolves outside every configured root. Refused before the file is opened and before the network.
+	ReasonFileInputOutsideRoots ReasonCode = "file_input_outside_roots"
+	// ReasonFileInputInvalidPath marks a path argument that is not an absolute, clean, NUL-free path, refused without touching the filesystem.
+	ReasonFileInputInvalidPath ReasonCode = "file_input_invalid_path"
+	// ReasonFileInputNotRegularFile marks a path that is a directory, symlink, device, FIFO or socket rather than a regular file, as decided on the open descriptor.
+	ReasonFileInputNotRegularFile ReasonCode = "file_input_not_regular_file"
+	// ReasonFileInputUnreadable marks a file inside a root that could not be opened or read.
+	ReasonFileInputUnreadable ReasonCode = "file_input_unreadable"
+	// ReasonFileInputTooLarge marks a file over `maxFileBytes`, as measured on the open descriptor.
+	ReasonFileInputTooLarge ReasonCode = "file_input_too_large"
+	// ReasonFileInputTotalTooLarge marks one call whose files together exceed `maxTotalBytes`.
+	ReasonFileInputTotalTooLarge ReasonCode = "file_input_total_too_large"
+	// ReasonFileInputTypeNotAllowed marks a file whose detected content type is outside `allowedContentTypes` or outside the operation's `encoding.contentType`. The extension is never consulted.
+	ReasonFileInputTypeNotAllowed ReasonCode = "file_input_type_not_allowed"
+	// ReasonFileInputInvalidFilename marks a `filename` argument that is not a bare name: a separator, `..`, a control character or a NUL.
+	ReasonFileInputInvalidFilename ReasonCode = "file_input_invalid_filename"
+	// ReasonFileInputChanged marks a file whose length stopped matching the size the request was built around, so the body no longer matches its Content-Length.
+	ReasonFileInputChanged ReasonCode = "file_input_changed"
 )
 
 // Executable reports whether the operation is both semantically supported
@@ -548,4 +570,41 @@ type BodySpec struct {
 	Required    bool   `json:"required"`
 	Description string `json:"description,omitempty"` // untrusted, sanitized downstream
 	Schema      Schema `json:"schema"`
+	// Kind is how the body is serialized. Empty means BodyJSON, so a body
+	// translated before file inputs existed means exactly what it did then.
+	Kind BodyKind `json:"kind,omitempty"`
+	// Parts is the multipart part list in published property order, and the
+	// reason the builder never looks at the OpenAPI document again: part order
+	// decides the bytes on the wire, and a map would decide them differently
+	// on every run (Constitution IV). Empty for every other kind.
+	Parts []BodyPart `json:"parts,omitempty"`
+}
+
+// BodyKind is how a request body is put on the wire (feature 009).
+type BodyKind string
+
+// Body kinds. Each is a serialization lotsman implements in full; a body shape
+// whose serialization is uncertain is refused rather than approximated, so
+// there is no "other" (Constitution I).
+const (
+	// BodyJSON is a JSON document, the only kind until feature 009.
+	BodyJSON BodyKind = "json"
+	// BodyMultipart is `multipart/form-data`: one file part plus primitive
+	// text parts.
+	BodyMultipart BodyKind = "multipart"
+	// BodyBinary is a single file as the whole body
+	// (`application/octet-stream` and the concrete types beside it).
+	BodyBinary BodyKind = "binary"
+)
+
+// BodyPart is one part of a multipart body.
+type BodyPart struct {
+	Name string `json:"name"`
+	// Binary says this part's content comes from a local file named by the
+	// caller rather than from the argument itself.
+	Binary bool `json:"binary,omitempty"`
+	// ContentTypes is the set `encoding[name].contentType` declared, parsed
+	// from its comma-separated form. For a binary part it is what the detected
+	// type must match; for a text part, the single type its header carries.
+	ContentTypes []string `json:"contentTypes,omitempty"`
 }
