@@ -108,6 +108,10 @@ type outcome struct {
 	// refreshed reports that a credential was re-minted and the request made
 	// again (FR-35).
 	refreshed bool
+	// files are the local files the call sent, for the record (feature 009).
+	// A refused call records what it had resolved, with no hash, because
+	// nothing was streamed.
+	files []audit.FileRecord
 }
 
 // record writes what happened (§7.4). It never fails a call: a runtime that
@@ -134,6 +138,7 @@ func (r *runner) record(ctx context.Context, started time.Time, result response.
 		ResponseBytes: result.ReceivedBytes,
 		Truncated:     result.Truncated,
 		Refreshed:     how.refreshed,
+		Files:         how.files,
 	}
 	var ask *pending
 	var lost *sendFailure
@@ -168,8 +173,13 @@ func (r *runner) record(ctx context.Context, started time.Time, result response.
 }
 
 // execute runs the runtime order for validated arguments.
-func (r *runner) execute(ctx context.Context, invocation *mcp.CallToolRequest, args map[string]any) (response.Result, outcome, error) {
-	var how outcome
+func (r *runner) execute(ctx context.Context, invocation *mcp.CallToolRequest, args map[string]any) (result response.Result, how outcome, err error) {
+	// The files are read off the last request this call built, on the way out,
+	// so that every return -- a refusal, a pending approval, a send -- records
+	// what had been opened without each one having to remember to.
+	var opened []*fileinput.File
+	defer func() { how.files = fileRecords(opened) }()
+
 	if !r.callable() {
 		return response.Result{}, how, errs.Errorf(r.refusalClass, "lotsman: %s %s %s",
 			r.tool.Method, r.tool.SafePath(), r.refusal)
@@ -177,8 +187,8 @@ func (r *runner) execute(ctx context.Context, invocation *mcp.CallToolRequest, a
 
 	// Every error leaving a call passes through redaction: an argument, a URL
 	// or an upstream message may quote a credential.
-	if err := r.validator.Validate(args); err != nil {
-		return response.Result{}, how, redact.Error(err)
+	if invalid := r.validator.Validate(args); invalid != nil {
+		return response.Result{}, how, redact.Error(invalid)
 	}
 
 	// One budget for the whole call. The requests below are built on this
@@ -203,10 +213,10 @@ func (r *runner) execute(ctx context.Context, invocation *mcp.CallToolRequest, a
 	// a sent request has been read, and an unrepeatable request is not a
 	// request lotsman should try to repeat.
 	build := func() (*http.Request, error) {
-		req, err := requestbuild.Build(ctx, &op, requestbuild.Arguments(args),
+		req, buildErr := requestbuild.Build(ctx, &op, requestbuild.Arguments(args),
 			requestbuild.Options{BaseURL: r.baseURL, Files: r.files})
-		if err != nil {
-			return nil, redact.Error(err)
+		if buildErr != nil {
+			return nil, redact.Error(buildErr)
 		}
 		// Defence in depth: an unexpanded template would mean a placeholder
 		// reached the wire as a literal, which is a guess about the API.
@@ -221,6 +231,7 @@ func (r *runner) execute(ctx context.Context, invocation *mcp.CallToolRequest, a
 			requestbuild.CloseBody(req)
 			return nil, denied
 		}
+		opened = requestbuild.Files(req)
 		return req, nil
 	}
 
@@ -275,7 +286,7 @@ func (r *runner) execute(ctx context.Context, invocation *mcp.CallToolRequest, a
 	}
 
 	status := resp.StatusCode
-	result, err := response.FromHTTP(resp, r.maxResponseBytes)
+	result, err = response.FromHTTP(resp, r.maxResponseBytes)
 	if err != nil {
 		return response.Result{}, how, &unreadBody{status: status, err: redact.Error(errs.Errorf(errs.ClassUpstream,
 			"lotsman: %s %s: the API answered %d and its body could not be read: %w",
@@ -534,4 +545,21 @@ func find(runners []runner, id string) *runner {
 		}
 	}
 	return nil
+}
+
+// fileRecords is what the audit event says about the files a call sent.
+func fileRecords(files []*fileinput.File) []audit.FileRecord {
+	if len(files) == 0 {
+		return nil
+	}
+	out := make([]audit.FileRecord, 0, len(files))
+	for _, file := range files {
+		out = append(out, audit.FileRecord{
+			Name:        file.Name(),
+			Bytes:       file.Size(),
+			ContentType: file.ContentType(),
+			SHA256:      file.SHA256(),
+		})
+	}
+	return out
 }

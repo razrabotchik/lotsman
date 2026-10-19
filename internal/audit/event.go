@@ -11,7 +11,11 @@ import "time"
 // Version 2 narrowed `refused` to what its name says and added `failed` and
 // `outcome_unknown` for the calls version 1 wrongly recorded as refused: a
 // request that left the process and never came back (ADR-0019).
-const SchemaVersion = 2
+//
+// Version 3 added `files`: what a call read from this machine's disk and sent
+// to the API (feature 009). A record of an upload that does not say which
+// bytes left is not a record of the upload.
+const SchemaVersion = 3
 
 // Decision is how a call ended.
 type Decision string
@@ -87,6 +91,25 @@ type Event struct {
 	DurationMs    int64 `json:"durationMs"`
 	ResponseBytes int   `json:"responseBytes,omitempty"`
 	Truncated     bool  `json:"truncated,omitempty"`
+
+	// Files are the local files this call sent (feature 009), in part order.
+	// Empty for every call that sent none.
+	Files []FileRecord `json:"files,omitempty"`
+}
+
+// FileRecord is one file a call read from this machine and sent.
+//
+// The name, never the path: a path describes the host and the operator's
+// directory layout, and the basename is what identifies the thing that left.
+// The hash is of the bytes actually streamed, which is why it is here and not
+// in the approval prompt -- it is known afterwards, and a hash computed from a
+// second read would describe a different file (ADR-0022 decision 7). It is
+// empty for a call that was refused before anything was sent.
+type FileRecord struct {
+	Name        string `json:"name"`
+	Bytes       int64  `json:"bytes"`
+	ContentType string `json:"contentType,omitempty"`
+	SHA256      string `json:"sha256,omitempty"`
 }
 
 // Sink receives events. Recording must never fail a call: a runtime that

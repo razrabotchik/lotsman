@@ -32,7 +32,7 @@ func Log(log *slog.Logger) Sink {
 //
 //nolint:gocritic // hugeParam: an Event travels by value so that a sink cannot edit the record the next sink in a Multi is about to write.
 func (s LogSink) Record(event Event) {
-	s.log.Info("audit",
+	attrs := []any{
 		"schemaVersion", event.SchemaVersion,
 		"operation", event.Operation,
 		"tool", event.Tool,
@@ -47,5 +47,29 @@ func (s LogSink) Record(event Event) {
 		"status", event.Status,
 		"durationMs", event.DurationMs,
 		"responseBytes", event.ResponseBytes,
-		"truncated", event.Truncated)
+		"truncated", event.Truncated,
+	}
+	// One attribute per file, so a line stays greppable: the name that left,
+	// its size, its type and the hash of the bytes that were streamed. Never
+	// the path (ADR-0022 decision 8).
+	for i := range event.Files {
+		file := &event.Files[i]
+		attrs = append(attrs, "file", fileAttr(file))
+	}
+	s.log.Info("audit", attrs...)
+}
+
+// fileAttr renders one file record for a log line.
+func fileAttr(file *FileRecord) slog.Value {
+	values := []slog.Attr{
+		slog.String("name", file.Name),
+		slog.Int64("bytes", file.Bytes),
+	}
+	if file.ContentType != "" {
+		values = append(values, slog.String("contentType", file.ContentType))
+	}
+	if file.SHA256 != "" {
+		values = append(values, slog.String("sha256", file.SHA256))
+	}
+	return slog.GroupValue(values...)
 }

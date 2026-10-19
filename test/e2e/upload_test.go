@@ -135,6 +135,72 @@ execution:
 	}
 }
 
+// TestARawBodyIsTheFileAndTheAuditRecordSaysWhatLeft covers the
+// application/octet-stream shape and the audit record: a hash of the bytes
+// that were streamed, a basename, and no path (ADR-0022 decisions 7 and 8).
+func TestARawBodyIsTheFileAndTheAuditRecordSaysWhatLeft(t *testing.T) {
+	t.Parallel()
+	bin := buildBinary(t)
+	ctx := t.Context()
+
+	api := startDevelopmentAPI(t)
+	photos := t.TempDir()
+	path := filepath.Join(photos, "thumb.png")
+	if err := os.WriteFile(path, png, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	configPath := filepath.Join(t.TempDir(), "lotsman.yaml")
+	config := fmt.Sprintf(`apiVersion: lotsman.dev/v1alpha1
+execution:
+  allowMutations: true
+  baseURL: %s
+  fileInputs:
+    enabled: true
+    roots: [%s]
+    allowedContentTypes: [image/png]
+`, api, photos)
+	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin, "serve", "../../cmd/api-gateway/openapi.yaml",
+		"--config", configPath, "--lax")
+	var stderr syncBuffer
+	cmd.Stderr = &stderr
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "raw-upload", Version: "v0"}, approving())
+	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: cmd, TerminateDuration: 5 * time.Second}, nil)
+	if err != nil {
+		t.Fatalf("connect: %v\nstderr:\n%s", err, stderr.String())
+	}
+	defer func() { _ = session.Close() }()
+
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "put_raw_upload",
+		Arguments: map[string]any{"body": map[string]any{"path": path}},
+	})
+	if err != nil {
+		t.Fatalf("tools/call: %v\nstderr:\n%s", err, stderr.String())
+	}
+	if res.IsError {
+		t.Fatalf("upload returned an error: %s\nstderr:\n%s", resultText(res), stderr.String())
+	}
+
+	digest := sha256.Sum256(png)
+	hash := hex.EncodeToString(digest[:])
+	if !mentions(resultText(res), hash) {
+		t.Errorf("the API did not receive the bytes on disk: %s", resultText(res))
+	}
+	// The record names the file and the hash of what was sent, and not the
+	// path. The log reaches this test through a pipe, so it is waited for
+	// rather than read once.
+	log := awaitLog(t, &stderr, "thumb.png", hash)
+	if mentions(log, path) {
+		t.Errorf("the audit record carries the full path:\n%s", log)
+	}
+}
+
 // TestAPathOutsideTheRootsIsRefusedWithoutACall proves the sandbox from the
 // client's side: the refusal names the code, the roots, and nothing else.
 func TestAPathOutsideTheRootsIsRefusedWithoutACall(t *testing.T) {
@@ -210,4 +276,30 @@ func mentions(haystack string, needles ...string) bool {
 		}
 	}
 	return false
+}
+
+// awaitLog waits for a subprocess's stderr to carry every needle, and returns
+// what it had. A pipe is copied by another goroutine, so "not there yet" and
+// "not there" look the same without a deadline.
+func awaitLog(t *testing.T, stderr *syncBuffer, needles ...string) string {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		log := stderr.String()
+		missing := ""
+		for _, needle := range needles {
+			if !mentions(log, needle) {
+				missing = needle
+				break
+			}
+		}
+		if missing == "" {
+			return log
+		}
+		if time.Now().After(deadline) {
+			t.Errorf("the log never mentioned %q:\n%s", missing, log)
+			return log
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
