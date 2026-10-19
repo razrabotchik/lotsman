@@ -79,10 +79,7 @@ func TestMetricsReflectWhatHappened(t *testing.T) {
 
 	// And the log carries the matching records, so a metric and a log line
 	// cannot disagree about what happened.
-	if !strings.Contains(stderr.String(), "decision=executed") ||
-		!strings.Contains(stderr.String(), "decision=refused") {
-		t.Errorf("the audit log does not match the counters:\n%s", stderr.String())
-	}
+	awaitLog(t, stderr, "decision=executed", "decision=refused")
 }
 
 // TestMetricsAreBehindInboundAuth: which operations an agent has been calling
@@ -122,8 +119,7 @@ func TestAuditRecordsAreWrittenOverStdioToo(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("get_pet: %v\nstderr:\n%s", err, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "msg=audit") ||
-		!strings.Contains(stderr.String(), "decision=executed") {
-		t.Errorf("no audit record was written over stdio:\n%s", stderr.String())
-	}
+	// The log reaches this test through a pipe another goroutine copies, so
+	// the record is waited for rather than read the instant the call returns.
+	awaitLog(t, stderr, "msg=audit", "decision=executed")
 }

@@ -204,7 +204,7 @@ func TestTheAuditRecordNamesTheCaller(t *testing.T) {
 		t.Fatalf("tools/call: %v\nstderr:\n%s", err, stderr.String())
 	}
 
-	record := findAudit(stderr.String())
+	record := findAudit(awaitLog(t, stderr, "msg=audit"))
 	if record == "" {
 		t.Fatalf("no audit record was written\nstderr:\n%s", stderr.String())
 	}

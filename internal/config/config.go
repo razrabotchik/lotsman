@@ -814,10 +814,10 @@ func validateFileInputs(files *FileInputs) error {
 				"config: execution.fileInputs.allowedContentTypes %q carries parameters; name the "+
 					"type alone (%q)", name, parsed)
 		}
-		if strings.Contains(parsed, "*") {
+		if strings.Contains(parsed, "*") || !strings.Contains(parsed, "/") {
 			return errs.Errorf(errs.ClassUsage,
-				"config: execution.fileInputs.allowedContentTypes %q is a range; a detected type is "+
-					"always concrete, so name the types you allow", name)
+				"config: execution.fileInputs.allowedContentTypes %q is not a concrete type/subtype; "+
+					"a type detected from a file's content always has both", name)
 		}
 	}
 	for _, limit := range []struct {

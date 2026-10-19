@@ -171,6 +171,25 @@ func buildMultipartBody(rb *v3.RequestBody, content *v3.MediaType, mediaType, bo
 		return out
 	}
 
+	// An empty property schema is the OAS 3.1 spelling of "this part is
+	// whatever `encoding.contentType` says", and normalization refuses it
+	// before this code could see it -- a schema that constrains nothing
+	// cannot validate an argument (FR-23). Named here rather than left to the
+	// generic refusal, because the remedy is one line of the document.
+	for name, proxy := range document.Properties.FromOldest() {
+		if proxy == nil {
+			continue
+		}
+		encoding := encodingOf(content, name)
+		if isEmptySchema(proxy.Schema()) && len(encodingContentTypes(encoding)) > 0 {
+			out.reject(domain.ReasonUnsupportedBodySchema, bodyPointer, fmt.Sprintf(
+				"part %q has no schema and says what it is in encoding.contentType only; "+
+					"lotsman needs the part's own schema to declare it (`type: string, format: binary` "+
+					"in OAS 3.0, `contentMediaType` in 3.1)", name))
+			return out
+		}
+	}
+
 	converted, convertReason := defs.normalizeProxy(content.Schema, bodyTarget, 0, map[*base.Schema]bool{})
 	if convertReason != "" {
 		out.reject(convertReason, bodyPointer, bodyReasonText(convertReason))
@@ -218,9 +237,7 @@ func buildMultipartBody(rb *v3.RequestBody, content *v3.MediaType, mediaType, bo
 		}
 		contentTypes := encodingContentTypes(encoding)
 
-		binary := isBinarySchema(property) ||
-			(isEmptySchema(property) && len(contentTypes) > 0 && !onlyTextTypes(contentTypes))
-		if binary {
+		if isBinarySchema(property) {
 			if fileField != "" {
 				out.reject(domain.ReasonUnsupportedBodySchema, bodyPointer, fmt.Sprintf(
 					"parts %q and %q are both files; lotsman sends one file per call in this release",
@@ -305,17 +322,6 @@ func primitivePartRefusal(published any) string {
 	default:
 		return "without a single declared type"
 	}
-}
-
-// onlyTextTypes reports whether every type in the set is text, which makes an
-// empty-schema part a text part rather than a file.
-func onlyTextTypes(types []string) bool {
-	for _, name := range types {
-		if !strings.HasPrefix(name, "text/") && name != jsonMediaType {
-			return false
-		}
-	}
-	return len(types) > 0
 }
 
 // selectMediaType picks the request media type deterministically (FR-29):

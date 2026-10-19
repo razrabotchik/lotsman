@@ -81,9 +81,12 @@ func isBinarySchema(schema *base.Schema) bool {
 	return schema.ContentMediaType != "" && schema.ContentEncoding == ""
 }
 
-// isEmptySchema reports the third spelling of a file part: no schema at all,
-// or one that says nothing, with `encoding.contentType` beside it carrying the
-// whole statement (OAS 3.1 §4.8.14).
+// isEmptySchema reports a schema that says nothing. For a single-file body
+// that is fine -- the media type already says the body is bytes. For a
+// multipart part it is the OAS 3.1 spelling that puts the whole statement in
+// `encoding.contentType`, which lotsman refuses by name: a schema that
+// constrains nothing cannot validate an argument (FR-23), and the remedy is
+// one line of the document.
 func isEmptySchema(schema *base.Schema) bool {
 	if schema == nil {
 		return true

@@ -102,6 +102,12 @@ func New(limits Limits) (*Resolver, error) {
 		if len(params) > 0 {
 			return nil, fmt.Errorf("allowed content type %q carries parameters; name the type alone", raw)
 		}
+		// ParseMediaType is lenient about a missing subtype; a detected type
+		// always has one, so a bare "image" would match nothing and silently
+		// refuse every file.
+		if !strings.Contains(parsed, "/") || strings.Contains(parsed, "*") {
+			return nil, fmt.Errorf("allowed content type %q is not a concrete type/subtype", raw)
+		}
 		r.allowed[parsed] = true
 	}
 	return r, nil
@@ -191,6 +197,14 @@ func (s *Session) Open(req Request) (*File, error) {
 	path, err := checkPath(req.Path)
 	if err != nil {
 		return nil, err
+	}
+	// The filename is checked here, with the path: both are pure argument
+	// checks, and an argument that is malformed should be answered the same
+	// way whatever the operator's limits happen to be.
+	if req.Filename != "" {
+		if _, nameErr := partFilename(req, path); nameErr != nil {
+			return nil, nameErr
+		}
 	}
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
@@ -291,13 +305,6 @@ func (s *Session) Files() []*File {
 	out := make([]*File, len(s.files))
 	copy(out, s.files)
 	return out
-}
-
-// Total is how many bytes this call has opened.
-func (s *Session) Total() int64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.total
 }
 
 // Close closes every descriptor the call opened. It is idempotent, so the

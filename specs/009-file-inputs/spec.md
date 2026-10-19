@@ -88,8 +88,11 @@ A property is binary when, after normalization to JSON Schema 2020-12:
 - OAS 3.0: `type: string` with `format: binary`. `format: byte` is **not** binary — it stays a
   base64 string the model may legitimately write for small values.
 - OAS 3.1: `contentMediaType` present and `contentEncoding` absent.
-- The schema is empty (`{}` or absent) **and** `encoding[name].contentType` names a non-text type:
-  the 3.1 spelling of "this part is a file".
+- The schema is empty (`{}` or absent) **and** `encoding[name].contentType` names the type: refused
+  by name. *Decided during implementation (2026-10-19):* a schema that constrains nothing cannot
+  validate an argument (FR-23), and normalization refuses it before a part list could be built. The
+  refusal says which line of the document would fix it, and the spelling is in
+  docs/improvements.md.
 - `application/octet-stream`, or a single `image/*`, `audio/*`, `video/*`, `application/pdf`-style
   concrete type declared as the only media type of the body: the whole body is one file, whatever
   the schema says.

@@ -218,5 +218,6 @@ else's uncommitted changes, stop and ask the maintainer.
   digest unchanged for a document without binary bodies.
 - [x] **Step 5**: `unsupported_body_schema` table for every deferred shape; `explain-call` output per
   refusal class; the approval prompt's fields; fuzz over the path argument (NFR-6).
-- [x] **Step 6**: `make check` and `make cover`; update docs/benchmarks.md if a number moved.
-  Commit.
+- [x] **Step 6**: `make check` and `make cover` (87.9% total, merged); no benchmark number moved.
+  Two pre-existing races in the e2e audit assertions (stderr read the instant a call returned) were
+  fixed with `awaitLog` while they were in the way. Commit.
