@@ -1,6 +1,7 @@
 package fileinput_test
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
@@ -59,7 +60,7 @@ func TestAFileInsideARootIsStreamedAndHashed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reader: %v", err)
 	}
-	if string(sent) != string(pngBytes) {
+	if !bytes.Equal(sent, pngBytes) {
 		t.Fatal("the bytes streamed are not the bytes on disk")
 	}
 	want := sha256.Sum256(pngBytes)

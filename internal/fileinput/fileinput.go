@@ -396,7 +396,7 @@ func detectContentType(file *os.File, argument string) (string, error) {
 		return "", refuse(domain.ReasonFileInputUnreadable, argument, errs.ClassUsage,
 			"the file could not be read")
 	}
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
+	if _, seekErr := file.Seek(0, io.SeekStart); seekErr != nil {
 		return "", refuse(domain.ReasonFileInputUnreadable, argument, errs.ClassUsage,
 			"the file could not be rewound after sniffing its type")
 	}
